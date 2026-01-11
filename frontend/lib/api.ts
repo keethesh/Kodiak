@@ -71,3 +71,23 @@ export async function resolveApproval(taskId: string, action: 'approve' | 'deny'
     if (!res.ok) throw new Error('Failed to resolve approval');
     return res.json();
 }
+
+export async function updateNode(nodeId: string, updates: { label?: string, properties?: any }) {
+    const res = await fetch(`${API_BASE}/graph/nodes/${nodeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+    });
+    if (!res.ok) throw new Error('Failed to update node');
+    return res.json();
+}
+
+export async function assignTaskToNode(nodeId: string, role: string, goal: string) {
+    const res = await fetch(`${API_BASE}/graph/nodes/${nodeId}/task`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, goal })
+    });
+    if (!res.ok) throw new Error('Failed to assign task');
+    return res.json();
+}

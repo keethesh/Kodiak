@@ -23,9 +23,10 @@ interface GraphLink {
 interface HiveGraphProps {
     nodes: GraphNode[];
     links: GraphLink[];
+    onNodeContext?: (nodeId: string, x: number, y: number) => void;
 }
 
-export default function HiveGraph({ nodes, links }: HiveGraphProps) {
+export default function HiveGraph({ nodes, links, onNodeContext }: HiveGraphProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const networkRef = useRef<Network | null>(null);
 
@@ -96,13 +97,25 @@ export default function HiveGraph({ nodes, links }: HiveGraphProps) {
         // @ts-ignore
         networkRef.current = new Network(containerRef.current, networkData, options);
 
+        // Event Listeners
+        if (onNodeContext) {
+            networkRef.current.on("oncontext", (params: any) => {
+                params.event.preventDefault();
+                // params.pointer.DOM gives X/Y relative to canvas
+                const nId = networkRef.current?.getNodeAt(params.pointer.DOM);
+                if (nId) {
+                    onNodeContext(nId as string, params.event.clientX, params.event.clientY);
+                }
+            });
+        }
+
         return () => {
             if (networkRef.current) {
                 networkRef.current.destroy();
                 networkRef.current = null;
             }
         };
-    }, [nodes, links]); // Re-render when data changes
+    }, [nodes, links, onNodeContext]); // Re-render when data changes
 
     return (
         <div className="w-full h-full bg-[#050505] relative border-t border-[#1a1a1a]">

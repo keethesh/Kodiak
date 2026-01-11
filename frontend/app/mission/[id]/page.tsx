@@ -6,9 +6,9 @@ import { Terminal } from '@/components/Terminal';
 import AgentTree from '@/components/AgentTree';
 import HiveGraph from '@/components/HiveGraph';
 import { useWebSocket } from '@/lib/useWebSocket';
-import { getGraph, getProjects, createScan, startScan } from '@/lib/api';
+import { getGraph, getProjects, createScan, startScan, updateNode, assignTaskToNode } from '@/lib/api';
 import { LogMessage } from '@/types';
-import { Activity, Shield, Cpu, Network, MessageSquare, ArrowLeft, Target, FileText, Play } from 'lucide-react';
+import { Activity, Shield, Cpu, Network, MessageSquare, ArrowLeft, Target, FileText, Play, Zap, EyeOff, Bot } from 'lucide-react';
 
 export default function MissionHUD() {
     const params = useParams();
@@ -28,6 +28,11 @@ export default function MissionHUD() {
     // Scan State
     const [scanId, setScanId] = useState<string | null>(null);
     const [isConfigured, setIsConfigured] = useState(false);
+
+    // Context Menu State
+    const [contextMenu, setContextMenu] = useState<{ visible: boolean, x: number, y: number, nodeId: string | null }>({
+        visible: false, x: 0, y: 0, nodeId: null
+    });
 
     // Configuration Form State
     const [target, setTarget] = useState("");
@@ -102,7 +107,8 @@ export default function MissionHUD() {
                 source: "SYSTEM",
                 level: "INFO",
                 message: `MISSION INITIALIZED. TARGET: ${target}`,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                scan_id: projectId // Add missing field
             }]);
         } catch (err) {
             console.error(err);
@@ -216,8 +222,59 @@ export default function MissionHUD() {
                             )}
 
                             {activeTab === 'hive' && (
-                                <div className="absolute inset-0 bg-[#050505]">
-                                    <HiveGraph nodes={graphData.nodes} links={graphData.links} />
+                                <div className="absolute inset-0 bg-[#050505]" onClick={() => setContextMenu({ ...contextMenu, visible: false })}>
+                                    <HiveGraph
+                                        nodes={graphData.nodes}
+                                        links={graphData.links}
+                                        onNodeContext={(nodeId, x, y) => {
+                                            setContextMenu({ visible: true, x, y, nodeId });
+                                        }}
+                                    />
+
+                                    {/* Context Menu */}
+                                    {contextMenu.visible && (
+                                        <div
+                                            className="fixed z-50 bg-[#0a0a0a] border border-[#333] rounded shadow-2xl w-48 py-1"
+                                            style={{ left: contextMenu.x, top: contextMenu.y }}
+                                        >
+                                            <div className="px-3 py-2 border-b border-[#222] text-[10px] text-gray-500 font-bold flex justify-between">
+                                                <span>NODE_OPS</span>
+                                                <span>{contextMenu.nodeId?.substring(0, 6)}...</span>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!contextMenu.nodeId) return;
+                                                    await updateNode(contextMenu.nodeId, { properties: { priority: 'high' } });
+                                                    setContextMenu({ ...contextMenu, visible: false });
+                                                    alert("Prioritizing Node...");
+                                                }}
+                                                className="w-full text-left px-3 py-2 text-xs hover:bg-[#1a1a1a] text-red-400 flex items-center gap-2"
+                                            >
+                                                <Zap size={12} /> PRIORITIZE
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!contextMenu.nodeId) return;
+                                                    await assignTaskToNode(contextMenu.nodeId, "scout", "Investigate this node specifically.");
+                                                    setContextMenu({ ...contextMenu, visible: false });
+                                                    alert("Scout Dispatched.");
+                                                }}
+                                                className="w-full text-left px-3 py-2 text-xs hover:bg-[#1a1a1a] text-blue-400 flex items-center gap-2"
+                                            >
+                                                <Bot size={12} /> ASSIGN SCOUT
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!contextMenu.nodeId) return;
+                                                    await updateNode(contextMenu.nodeId, { properties: { ignore: true } });
+                                                    setContextMenu({ ...contextMenu, visible: false });
+                                                }}
+                                                className="w-full text-left px-3 py-2 text-xs hover:bg-[#1a1a1a] text-gray-500 flex items-center gap-2"
+                                            >
+                                                <EyeOff size={12} /> IGNORE
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </>

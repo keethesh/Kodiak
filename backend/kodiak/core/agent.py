@@ -1,4 +1,5 @@
 from typing import Any, Dict, List
+import json
 from kodiak.core.config import settings
 
 class KodiakAgent:
@@ -6,10 +7,18 @@ class KodiakAgent:
     The Brain. 
     Decoupled from the loop. It just takes state in, and outputs actions.
     """
-    def __init__(self, agent_id: str, model_name: str = settings.KODIAK_MODEL, session: Any = None):
+    def __init__(self, agent_id: str, model_name: str = settings.KODIAK_MODEL, session: Any = None, role: str = "generalist"):
         self.agent_id = agent_id
         self.model_name = model_name
         self.session = session
+        self.role = role
+        self.inbox: List[Dict[str, Any]] = [] # Priority Message Queue
+
+    def receive_message(self, content: str, sender: str = "Commander"):
+        """
+        Push a priority message to the inbox.
+        """
+        self.inbox.append({"sender": sender, "content": content, "timestamp": "now"})
         
     async def think(self, history: List[Dict[str, Any]], allowed_tools: List[str] = None, system_prompt: str = None) -> Any:
         """
@@ -32,27 +41,59 @@ class KodiakAgent:
              # Act ually, orchestrator passes session to _run_agent_for_task, which passes it to Agent ctor
              pass
 
+        # 0. SOFT INTERRUPT CHECK
+        if self.inbox:
+            # If we have priority messages, we override the normal flow.
+            # We inject the message as a "System Override" to force attention.
+            priority_msg = self.inbox.pop(0) # Process FIFO
+            history.append({
+                "role": "user", 
+                "content": f"[PRIORITY INTERRUPT FROM {priority_msg['sender']}]: {priority_msg['content']}\n"
+                           f"DROP CURRENT PLAN AND ADDRESS THIS IMMEDIATELY."
+            })
+            # We don't return early, we just modify history so the LLM sees it as the latest input.
+
         # 1. Dynamic Prompts: Load only requested skills
         tools = self._load_skills(inventory, allowed_tools)
         
         # 2. Rolling Summaries: Compress history if too long
         optimized_history = await self._summarize_history(history)
         
-        # System Prompt
-        content = system_prompt or (
-            "You are KODIAK, an advanced autonomous penetration testing agent. "
-            "Your goal is to scan, enumerate, and identify vulnerabilities in the target scope. "
-            "Efficiency Rule: OUTPUT COMPACT JSON. Do not be verbose. "
+        # System Prompt Selection based on Role
+        base_prompt = system_prompt
+        if not base_prompt:
+            if self.role == "scout":
+                base_prompt = (
+                    "You are a SCOUT AGENT. Your primary directive is OBSERVATION and ENUMERATION. "
+                    "You are curious but cautious. You verify paths but do not actively exploit without confirmation. "
+                    "Voice: Tactical, observant, concise. Report what you see."
+                )
+            elif self.role == "attacker":
+                base_prompt = (
+                    "You are an ATTACKER AGENT. Your directive is PENETRATION and EXPLOITATION. "
+                    "You are aggressive and precise. When you see a vulnerability, you verify it. "
+                    "Voice: Aggressive, technical, confident. 'Target acquired', 'Exploit launching'."
+                )
+            elif self.role == "manager":
+                base_prompt = (
+                    "You are the MISSION MANAGER. Your directive is STRATEGY and COORDINATION. "
+                    "You assign tasks to sub-agents (Scouts, Attackers). You view the whole Graph. "
+                    "Voice: Commanding, strategic, high-level. 'Directing assets', 'Analyzing topology'."
+                )
+            else:
+                 base_prompt = (
+                    "You are KODIAK, an advanced autonomous penetration testing agent. "
+                    "Your goal is to scan, enumerate, and identify vulnerabilities in the target scope. "
+                )
+
+        content = base_prompt + (
+            " Efficiency Rule: OUTPUT COMPACT JSON. Do not be verbose. "
             "Result format: Always call a tool or provide a final summary."
         )
         
         # Injection
         if self.session and history and isinstance(history[0]["content"], str) and "MISSION:" in history[0]["content"]:
-             # This is likely the first turn "Context Refresher"
-             # Or we inject it into the System Prompt
-             # Let's inspect session project_id from somewhere?
-             # Current simplification: Agent doesn't know project_id in Ctor.
-             # Orchestrator should probably pass context_str in system_prompt
+             # Context loading logic (placeholder)
              pass
              
         system_msg = {

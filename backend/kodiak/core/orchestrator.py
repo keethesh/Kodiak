@@ -162,8 +162,8 @@ class Orchestrator:
             role = directive.get("role", "specialist")
             goal = directive.get("goal", "Execute assigned task.")
             
-            # Instantiate Agent
-            agent = KodiakAgent(agent_id=task.assigned_agent_id, session=session) # Pass session? usually per tool
+            # Instantiate Agent with Role
+            agent = KodiakAgent(agent_id=task.assigned_agent_id, session=session, role=role) 
             
             # Initial Memory
             history = [{"role": "user", "content": f"MISSION: {goal}"}]
@@ -172,14 +172,8 @@ class Orchestrator:
             # For now, broad access, safety middleware restricts
             tools = ["spawn_agent", "terminal_execute", "browser_navigate", "search_web"]
             
-            system_prompt = (
-                f"You are a specialized agent: {role.upper()}.\n"
-                f"Your Goal: {goal}\n"
-                "You are part of a Hive Mind. You DO NOT need to report back extensively."
-                "Just execute the work and save findings to the Blackboard."
-                "If you need help, use 'spawn_agent' to create a sub-worker."
-                "When finished, simply output 'TASK_COMPLETE'."
-            )
+            # We allow the Agent to select its own System Prompt based on role now
+            system_prompt = None
             
             # THINK LOOP
             for _ in range(20): # Safety limit

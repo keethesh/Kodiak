@@ -1,5 +1,6 @@
 from typing import List, Dict, Any
-from uuid import UUID
+from uuid import UUID, uuid4
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
@@ -7,7 +8,66 @@ from sqlmodel import select
 from kodiak.database import get_session
 from kodiak.database.models import Node, Edge, Finding
 
+from pydantic import BaseModel
+
 router = APIRouter()
+
+class NodeUpdate(BaseModel):
+    label: str = None
+    properties: Dict[str, Any] = None    
+
+class ManualTask(BaseModel):
+    role: str
+    goal: str
+
+@router.patch("/nodes/{node_id}", response_model=Node)
+async def update_node(node_id: UUID, update: NodeUpdate, session: AsyncSession = Depends(get_session)):
+    """
+    Update a Node's metadata (e.g. setting priority, ignoring).
+    """
+    node = await session.get(Node, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+        
+    if update.label:
+        node.label = update.label
+    if update.properties:
+        # Merge properties instead of overwrite? 
+        # For now, simplistic merge
+        node.properties = {**node.properties, **update.properties}
+        
+    session.add(node)
+    await session.commit()
+    await session.refresh(node)
+    return node
+
+@router.post("/nodes/{node_id}/task", response_model=Dict[str, Any])
+async def create_node_task(node_id: UUID, task_req: ManualTask, session: AsyncSession = Depends(get_session)):
+    """
+    Commander Override: Manually assign a task to a node.
+    (Drag and Drop Agent onto Node).
+    """
+    from kodiak.database.models import Task
+    node = await session.get(Node, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+        
+    # Create Task
+    task = Task(
+        project_id=node.project_id,
+        name=f"Manual: {task_req.role} -> {node.name}",
+        status="pending",
+        assigned_agent_id=f"{task_req.role}-manual-{str(uuid4())[:4]}",
+        directive=json.dumps({
+            "goal": task_req.goal,
+            "target": node.name,
+            "role": task_req.role
+        })
+    )
+    session.add(task)
+    await session.commit()
+    
+    return {"success": True, "task_id": str(task.id)}
 
 @router.get("/{project_id}", response_model=Dict[str, Any])
 async def get_project_knowledge_graph(project_id: UUID, session: AsyncSession = Depends(get_session)):
