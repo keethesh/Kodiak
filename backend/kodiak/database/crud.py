@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
 
-from kodiak.database.models import Project, ScanJob, Node, Finding, ScanStatus
+from kodiak.database.models import Project, ScanJob, Node, Finding, ScanStatus, Attempt
 from kodiak.core.error_handling import (
     ErrorHandler, DatabaseError, handle_errors, ErrorCategory
 )
@@ -211,6 +211,114 @@ class CRUDNode:
             })
 
 
+class CRUDAttempt:
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def create(self, session: AsyncSession, attempt: Attempt) -> Attempt:
+        """Create a new attempt record"""
+        try:
+            session.add(attempt)
+            await session.commit()
+            await session.refresh(attempt)
+            return attempt
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("create_attempt", e, {
+                "tool": getattr(attempt, 'tool', 'unknown'),
+                "target": getattr(attempt, 'target', 'unknown'),
+                "project_id": str(getattr(attempt, 'project_id', 'unknown'))
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_by_tool_and_target(self, session: AsyncSession, project_id: UUID, tool: str, target: str) -> Optional[Attempt]:
+        """Get an attempt by tool and target within a project"""
+        try:
+            statement = select(Attempt).where(
+                Attempt.project_id == project_id,
+                Attempt.tool == tool,
+                Attempt.target == target
+            ).order_by(Attempt.timestamp.desc())
+            result = await session.execute(statement)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_attempt_by_tool_and_target", e, {
+                "project_id": str(project_id),
+                "tool": tool,
+                "target": target
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_attempts_by_project(self, session: AsyncSession, project_id: UUID, limit: int = 50) -> List[Attempt]:
+        """Get recent attempts for a project"""
+        try:
+            statement = select(Attempt).where(
+                Attempt.project_id == project_id
+            ).order_by(Attempt.timestamp.desc()).limit(limit)
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_attempts_by_project", e, {
+                "project_id": str(project_id),
+                "limit": limit
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_attempts_by_tool(self, session: AsyncSession, project_id: UUID, tool: str, limit: int = 20) -> List[Attempt]:
+        """Get recent attempts for a specific tool within a project"""
+        try:
+            statement = select(Attempt).where(
+                Attempt.project_id == project_id,
+                Attempt.tool == tool
+            ).order_by(Attempt.timestamp.desc()).limit(limit)
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_attempts_by_tool", e, {
+                "project_id": str(project_id),
+                "tool": tool,
+                "limit": limit
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def check_duplicate_attempt(self, session: AsyncSession, project_id: UUID, tool: str, target: str) -> bool:
+        """Check if a successful attempt already exists for this tool and target"""
+        try:
+            statement = select(Attempt).where(
+                Attempt.project_id == project_id,
+                Attempt.tool == tool,
+                Attempt.target == target,
+                Attempt.status == "success"
+            )
+            result = await session.execute(statement)
+            return result.scalar_one_or_none() is not None
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("check_duplicate_attempt", e, {
+                "project_id": str(project_id),
+                "tool": tool,
+                "target": target
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def count_failed_attempts(self, session: AsyncSession, project_id: UUID, tool: str, target: str) -> int:
+        """Count failed attempts for a specific tool and target"""
+        try:
+            from sqlalchemy import func
+            statement = select(func.count(Attempt.id)).where(
+                Attempt.project_id == project_id,
+                Attempt.tool == tool,
+                Attempt.target == target,
+                Attempt.status == "failure"
+            )
+            result = await session.execute(statement)
+            return result.scalar() or 0
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("count_failed_attempts", e, {
+                "project_id": str(project_id),
+                "tool": tool,
+                "target": target
+            })
+
+
 project = CRUDProject()
 scan_job = CRUDScanJob()
 node = CRUDNode()
+attempt = CRUDAttempt()

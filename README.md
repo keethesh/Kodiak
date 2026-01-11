@@ -106,6 +106,11 @@ Kodiak includes 20+ integrated security tools:
 - 8+ pre-built skills for different vulnerability classes
 - Framework-specific testing capabilities (Django, Node.js, etc.)
 
+### Security Model
+- No authentication required - designed as a security tool
+- Configurable access controls for production deployments
+- Secure credential storage for LLM API keys and target credentials
+
 ## 📚 Documentation
 
 - [Architecture Overview](docs/ARCHITECTURE.md)

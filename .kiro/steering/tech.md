@@ -167,6 +167,5 @@ curl http://localhost:8000/api/v1/skills/sql_injection
 - **Database Schema**: ✅ Complete (Full graph-based persistence)
 - **API Endpoints**: ✅ Complete (REST + WebSocket + Skills management)
 - **Frontend Dashboard**: ✅ Core features (Mission HUD, graph visualization)
-- **Authentication**: ⚠️ Planned (Framework ready)
 - **Database Migrations**: ⚠️ Needed (Alembic setup required)
 - **Production Deployment**: ⚠️ Basic (Docker Compose ready, needs hardening)

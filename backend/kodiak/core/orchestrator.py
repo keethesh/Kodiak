@@ -1,5 +1,5 @@
 import asyncio
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from uuid import UUID
 import json
 
@@ -8,8 +8,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from kodiak.database import get_session
 from kodiak.database.crud import scan_job as crud_scan, project as crud_project
-from kodiak.database.models import ScanJob, ScanStatus
+from kodiak.database.models import ScanJob, ScanStatus, Task
 from kodiak.core.tools.inventory import inventory
+from sqlmodel import select
 
 class Orchestrator:
     """
@@ -35,6 +36,60 @@ class Orchestrator:
     def validate_tool_exists(self, tool_name: str) -> bool:
         """Validate that a tool exists in the inventory"""
         return tool_name in self._available_tools
+    
+    def _parse_task_directive(self, directive_str: str) -> Dict[str, Any]:
+        """
+        Parse and validate task directive JSON string.
+        
+        Args:
+            directive_str: JSON string containing task directive
+            
+        Returns:
+            Dict containing parsed directive, or empty dict if invalid
+        """
+        if not directive_str:
+            logger.warning("Empty directive string provided")
+            return {}
+            
+        try:
+            directive = json.loads(directive_str)
+            
+            # Validate directive structure
+            if not isinstance(directive, dict):
+                logger.error(f"Directive must be a JSON object, got: {type(directive)}")
+                return {}
+            
+            # Validate required fields
+            required_fields = ["goal", "role"]
+            missing_fields = [field for field in required_fields if field not in directive]
+            if missing_fields:
+                logger.warning(f"Directive missing required fields: {missing_fields}")
+                # Set defaults for missing fields
+                if "goal" not in directive:
+                    directive["goal"] = "Execute assigned task."
+                if "role" not in directive:
+                    directive["role"] = "specialist"
+            
+            # Validate role is a valid string
+            if not isinstance(directive.get("role"), str):
+                logger.warning(f"Invalid role type: {type(directive.get('role'))}, defaulting to 'specialist'")
+                directive["role"] = "specialist"
+            
+            # Validate goal is a valid string
+            if not isinstance(directive.get("goal"), str):
+                logger.warning(f"Invalid goal type: {type(directive.get('goal'))}, setting default")
+                directive["goal"] = "Execute assigned task."
+            
+            logger.debug(f"Successfully parsed directive: {directive}")
+            return directive
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse directive JSON: {e}")
+            logger.error(f"Invalid directive string: {directive_str}")
+            return {}
+        except Exception as e:
+            logger.error(f"Unexpected error parsing directive: {e}")
+            return {}
     
     def get_tools_for_role(self, role: str) -> List[str]:
         """Get appropriate tools for a specific agent role"""
@@ -78,20 +133,35 @@ class Orchestrator:
         """
         Start the global scheduler loop.
         """
-        if self._running: return
+        if self._running: 
+            logger.warning("Orchestrator is already running")
+            return
         self._running = True
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
-        logger.info("Orchestrator Scheduler started.")
+        logger.info("Orchestrator Scheduler started and polling for tasks every 2 seconds")
 
     async def stop(self):
+        """
+        Stop the orchestrator and clean up all workers.
+        """
+        logger.info("Stopping orchestrator...")
         self._running = False
+        
         if self._scheduler_task:
             self._scheduler_task.cancel()
+            try:
+                await self._scheduler_task
+            except asyncio.CancelledError:
+                pass
         
         # Cancel all workers
+        cancelled_count = len(self._active_workers)
         for task_id, worker in self._active_workers.items():
+            logger.debug(f"Cancelling worker for task {task_id}")
             worker.cancel()
+        
         self._active_workers.clear()
+        logger.info(f"Orchestrator stopped, cancelled {cancelled_count} workers")
 
     async def start_scan(self, scan_id: UUID):
         """
@@ -99,16 +169,41 @@ class Orchestrator:
         """
         async for session in get_session():
             scan = await crud_scan.get(session, scan_id)
-            if not scan: return
+            if not scan: 
+                logger.error(f"Cannot start scan {scan_id}: scan not found")
+                return
             
-            # Create Root Task if not exists
-            # We check if there's already a root task for this project?
-            # For now, simplistic: Create a "Mission" task
-            from kodiak.database.models import Task
+            # Validate scan configuration
+            if not scan.config.get("target"):
+                logger.error(f"Cannot start scan {scan_id}: missing target in configuration")
+                await crud_scan.update_status(session, scan_id, ScanStatus.FAILED)
+                await session.commit()
+                return
+            
+            # Check if scan is already running
+            if scan.status == ScanStatus.RUNNING:
+                logger.warning(f"Scan {scan_id} is already running")
+                return
+            
+            # Check if there's already a root task for this scan
+            existing_task_stmt = select(Task).where(
+                Task.project_id == scan.project_id,
+                Task.name == "Mission Manager"
+            )
+            existing_task_result = await session.execute(existing_task_stmt)
+            existing_task = existing_task_result.scalar_one_or_none()
+            
+            if existing_task and existing_task.status in ["pending", "running"]:
+                logger.info(f"Root task already exists for scan {scan_id}, updating scan status")
+                await crud_scan.update_status(session, scan_id, ScanStatus.RUNNING)
+                await session.commit()
+                return
             
             # The Goal comes from the user config
             user_goal = scan.config.get("instructions", "Conduct a full penetration test.")
+            target = scan.config.get("target")
             
+            # Create root task
             root_task = Task(
                 project_id=scan.project_id,
                 name="Mission Manager",
@@ -116,23 +211,84 @@ class Orchestrator:
                 assigned_agent_id=f"manager-{scan_id}",
                 directive=json.dumps({
                     "goal": user_goal,
-                    "target": scan.config.get("target"),
-                    "role": "manager"
+                    "target": target,
+                    "role": "manager",
+                    "scan_id": str(scan_id)
                 })
             )
-            session.add(root_task)
-            await crud_scan.update_status(session, scan_id, ScanStatus.RUNNING)
-            await session.commit()
-            logger.info(f"Bootstrapped Root Task {root_task.id} for Scan {scan_id}")
-            # The scheduler loop will pick this up automatically!
+            
+            try:
+                session.add(root_task)
+                await crud_scan.update_status(session, scan_id, ScanStatus.RUNNING)
+                await session.commit()
+                logger.info(f"Bootstrapped Root Task {root_task.id} for Scan {scan_id}")
+                logger.info(f"Target: {target}, Goal: {user_goal}")
+                # The scheduler loop will pick this up automatically!
+            except Exception as e:
+                logger.error(f"Failed to create root task for scan {scan_id}: {e}")
+                await session.rollback()
+                await crud_scan.update_status(session, scan_id, ScanStatus.FAILED)
+                await session.commit()
+                raise
+
+    async def stop_scan(self, scan_id: UUID):
+        """
+        Stop a scan by cancelling associated workers and updating scan status.
+        """
+        async for session in get_session():
+            scan = await crud_scan.get(session, scan_id)
+            if not scan:
+                logger.warning(f"Scan {scan_id} not found for stopping")
+                return 0
+            
+            # Check if scan can be stopped
+            if scan.status not in [ScanStatus.RUNNING, ScanStatus.PENDING]:
+                logger.warning(f"Cannot stop scan {scan_id} with status {scan.status}")
+                return 0
+            
+            # Find and cancel workers for tasks associated with this scan's project
+            try:
+                # Get all tasks for this project
+                statement = select(Task).where(Task.project_id == scan.project_id)
+                results = await session.execute(statement)
+                project_tasks = results.scalars().all()
+                
+                # Cancel active workers for these tasks
+                cancelled_workers = []
+                for task in project_tasks:
+                    if task.id in self._active_workers:
+                        worker = self._active_workers[task.id]
+                        worker.cancel()
+                        del self._active_workers[task.id]
+                        cancelled_workers.append(task.id)
+                        
+                        # Update task status to cancelled
+                        task.status = "cancelled"
+                        task.result = "Scan stopped by user"
+                        session.add(task)
+                
+                # Update scan status
+                await crud_scan.update_status(session, scan_id, ScanStatus.PAUSED)
+                await session.commit()
+                
+                logger.info(f"Stopped scan {scan_id}, cancelled {len(cancelled_workers)} workers: {cancelled_workers}")
+                return len(cancelled_workers)
+                
+            except Exception as e:
+                logger.error(f"Error stopping scan {scan_id}: {e}")
+                await session.rollback()
+                # Try to update scan status to failed
+                try:
+                    await crud_scan.update_status(session, scan_id, ScanStatus.FAILED)
+                    await session.commit()
+                except Exception as status_error:
+                    logger.error(f"Failed to update scan status after stop error: {status_error}")
+                raise
 
     async def _scheduler_loop(self):
         """
         The Heartbeat. Polls for pending tasks and spawns workers.
         """
-        from kodiak.database.models import Task
-        from sqlmodel import select
-        
         while self._running:
             try:
                 async for session in get_session():
@@ -166,7 +322,7 @@ class Orchestrator:
         """
         Wrapper to handle worker lifecycle and update Task status on completion.
         """
-        from kodiak.database.models import Task
+        from kodiak.api.events import event_manager
         
         try:
             await self._run_agent_for_task(task_id, project_id)
@@ -190,6 +346,55 @@ class Orchestrator:
                     task.result = result
                     session.add(task)
                     await session.commit()
+                    
+                    # Check if this was a root task (Mission Manager) and emit scan completion events
+                    if task.name == "Mission Manager":
+                        # Find the associated scan
+                        scan_stmt = select(ScanJob).where(ScanJob.project_id == project_id)
+                        scan_result = await session.execute(scan_stmt)
+                        scan = scan_result.scalar_one_or_none()
+                        
+                        if scan and event_manager:
+                            if status == "completed":
+                                # Get task summary for the scan
+                                task_stmt = select(Task).where(Task.project_id == project_id)
+                                task_result = await session.execute(task_stmt)
+                                all_tasks = task_result.scalars().all()
+                                
+                                task_summary = {}
+                                for t in all_tasks:
+                                    task_summary[t.status] = task_summary.get(t.status, 0) + 1
+                                
+                                await event_manager.emit_scan_completed(
+                                    scan_id=str(scan.id),
+                                    scan_name=scan.name,
+                                    status="completed",
+                                    summary={
+                                        "total_tasks": len(all_tasks),
+                                        "task_breakdown": task_summary,
+                                        "target": scan.config.get("target"),
+                                        "completion_reason": "Mission completed successfully"
+                                    }
+                                )
+                            else:
+                                await event_manager.emit_scan_failed(
+                                    scan_id=str(scan.id),
+                                    scan_name=scan.name,
+                                    error=result,
+                                    details={
+                                        "task_id": str(task_id),
+                                        "agent_id": task.assigned_agent_id,
+                                        "target": scan.config.get("target"),
+                                        "failure_reason": "Root task failed"
+                                    }
+                                )
+                            
+                            # Update scan status
+                            from kodiak.database.crud import scan_job as crud_scan
+                            final_status = "completed" if status == "completed" else "failed"
+                            await crud_scan.update_status(session, scan.id, final_status)
+                            await session.commit()
+                            
         except Exception as db_e:
             logger.error(f"Failed to update task status {task_id}: {db_e}")
 
@@ -199,98 +404,175 @@ class Orchestrator:
         Instantiates an Agent with the specific Task Context.
         """
         from kodiak.core.agent import KodiakAgent
-        from kodiak.database.models import Task
         from kodiak.api.events import event_manager
         
         async for session in get_session():
             task = await session.get(Task, task_id)
-            if not task: return
+            if not task: 
+                logger.error(f"Task {task_id} not found")
+                return
             
-            # Extract Directive
-            try:
-                directive = json.loads(task.properties.get("directive", "{}")) if hasattr(task, "properties") else json.loads(getattr(task, "directive", "{}"))
-            except:
-                directive = {}
+            # Extract and validate directive
+            directive = self._parse_task_directive(task.directive)
+            if not directive:
+                logger.error(f"Invalid directive for task {task_id}: {task.directive}")
+                return
                 
             role = directive.get("role", "specialist")
             goal = directive.get("goal", "Execute assigned task.")
+            target = directive.get("target", "unknown")
             
-            # Instantiate Agent with proper dependencies
-            agent = KodiakAgent(
-                agent_id=task.assigned_agent_id, 
-                tool_inventory=self.tool_inventory,
-                event_manager=event_manager,
-                session=session, 
-                role=role, 
-                project_id=project_id
-            ) 
+            logger.info(f"Starting agent {task.assigned_agent_id} for task {task_id}")
+            logger.info(f"Role: {role}, Goal: {goal}, Target: {target}")
             
-            # Initial Memory
-            history = [{"role": "user", "content": f"MISSION: {goal}"}]
-            
-            # Get appropriate tools for the agent's role with validation
-            tools = self.get_tools_for_role(role)
-            
-            # Validate all tools exist in inventory
-            validated_tools = []
-            for tool_name in tools:
-                if self.validate_tool_exists(tool_name):
-                    validated_tools.append(tool_name)
-                else:
-                    logger.warning(f"Tool '{tool_name}' not found in inventory, skipping")
-            
-            if not validated_tools:
-                logger.error(f"No valid tools available for role '{role}', using all available tools")
-                validated_tools = self.get_available_tools()
-            
-            logger.info(f"Agent {agent.agent_id} assigned tools: {validated_tools}")
-            
-            # We allow the Agent to select its own System Prompt based on role now
-            system_prompt = None
-            
-            # THINK LOOP
-            for _ in range(20): # Safety limit
-                # Check if task was cancelled externally?
-                await session.refresh(task)
-                if task.status == "cancelled":
-                    return
-
-                response = await agent.think(history, allowed_tools=validated_tools, system_prompt=system_prompt)
+            try:
+                # Instantiate Agent with proper dependencies
+                agent = KodiakAgent(
+                    agent_id=task.assigned_agent_id, 
+                    tool_inventory=self.tool_inventory,
+                    event_manager=event_manager,
+                    session=session, 
+                    role=role, 
+                    project_id=project_id
+                )
                 
-                if "TASK_COMPLETE" in str(response.content):
-                    logger.info(f"Agent {agent.agent_id} completed task.")
-                    return
-
-                if response.tool_calls:
-                    for tool_call in response.tool_calls:
-                        fn_name = tool_call.function.name
-                        fn_args = json.loads(tool_call.function.arguments)
+                # Register agent with hive mind for coordination
+                await agent.register_with_hive_mind()
+                
+                # Initial Memory
+                history = [{"role": "user", "content": f"MISSION: {goal}"}]
+                
+                # Get appropriate tools for the agent's role with validation
+                tools = self.get_tools_for_role(role)
+                
+                # Validate all tools exist in inventory
+                validated_tools = []
+                for tool_name in tools:
+                    if self.validate_tool_exists(tool_name):
+                        validated_tools.append(tool_name)
+                    else:
+                        logger.warning(f"Tool '{tool_name}' not found in inventory, skipping")
+                
+                if not validated_tools:
+                    logger.error(f"No valid tools available for role '{role}', using all available tools")
+                    validated_tools = self.get_available_tools()
+                
+                logger.info(f"Agent {agent.agent_id} assigned tools: {validated_tools}")
+                
+                # THINK-ACT LOOP with proper error handling
+                max_iterations = 20
+                iteration_count = 0
+                
+                for iteration in range(max_iterations):
+                    iteration_count = iteration + 1
+                    
+                    # Check if task was cancelled externally
+                    await session.refresh(task)
+                    if task.status == "cancelled":
+                        logger.info(f"Task {task_id} was cancelled, stopping agent")
+                        return
+                    
+                    try:
+                        # Agent thinks about next action
+                        logger.debug(f"Agent {agent.agent_id} thinking (iteration {iteration_count}/{max_iterations})")
                         
-                        logger.info(f"[{agent.agent_id}] Tool: {fn_name}")
+                        # Emit agent thinking event
+                        await event_manager.emit_agent_thinking(
+                            agent_id=agent.agent_id,
+                            message=f"Analyzing situation and planning next action (iteration {iteration_count})",
+                            scan_id=str(project_id)
+                        )
                         
-                        # Validate tool exists before execution
-                        if not self.validate_tool_exists(fn_name):
-                            error_msg = f"Tool '{fn_name}' not found in inventory"
-                            logger.error(error_msg)
+                        response = await agent.think(history, allowed_tools=validated_tools)
+                        
+                        # Check for task completion
+                        if response.content and ("TASK_COMPLETE" in str(response.content) or "MISSION COMPLETE" in str(response.content)):
+                            logger.info(f"Agent {agent.agent_id} completed task after {iteration_count} iterations")
+                            return
+                        
+                        # Process tool calls
+                        if response.tool_calls:
+                            for tool_call in response.tool_calls:
+                                fn_name = tool_call.function.name
+                                try:
+                                    fn_args = json.loads(tool_call.function.arguments)
+                                except json.JSONDecodeError as e:
+                                    logger.error(f"Invalid tool arguments for {fn_name}: {e}")
+                                    history.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "content": json.dumps({"error": f"Invalid arguments: {str(e)}"})
+                                    })
+                                    continue
+                                
+                                logger.info(f"[{agent.agent_id}] Executing tool: {fn_name}")
+                                
+                                # Validate tool exists before execution
+                                if not self.validate_tool_exists(fn_name):
+                                    error_msg = f"Tool '{fn_name}' not found in inventory"
+                                    logger.error(error_msg)
+                                    history.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "content": json.dumps({"error": error_msg})
+                                    })
+                                    continue
+                                
+                                # Execute tool through agent
+                                try:
+                                    result = await agent.act(fn_name, fn_args, session=session, project_id=project_id, task_id=task_id)
+                                    
+                                    # Add result to conversation history
+                                    history.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "content": json.dumps(result)
+                                    })
+                                    
+                                    logger.debug(f"Tool {fn_name} executed successfully")
+                                    
+                                except Exception as tool_error:
+                                    logger.error(f"Tool execution failed for {fn_name}: {tool_error}")
+                                    history.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "content": json.dumps({"error": f"Tool execution failed: {str(tool_error)}"})
+                                    })
+                        else:
+                            # No tool calls, add agent response to history
                             history.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": json.dumps({"error": error_msg})
+                                "role": "assistant",
+                                "content": response.content or "No response content"
                             })
-                            continue
                         
-                        # Execute tool through agent
-                        result = await agent.act(fn_name, fn_args, session=session, project_id=project_id, task_id=task_id)
+                        # Brief pause between iterations
+                        await asyncio.sleep(1)
                         
+                    except Exception as think_error:
+                        logger.error(f"Agent thinking failed on iteration {iteration_count}: {think_error}")
+                        
+                        # Add error to history and continue
                         history.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": json.dumps(result)
+                            "role": "user",
+                            "content": f"Error occurred: {str(think_error)}. Please continue with your mission."
                         })
-                else:
-                    history.append(response.dict() if hasattr(response, 'dict') else dict(response))
+                        
+                        # Wait a bit longer on errors
+                        await asyncio.sleep(2)
                 
-                await asyncio.sleep(1) # Breathe
+                # If we reach here, agent hit max iterations
+                logger.warning(f"Agent {agent.agent_id} reached maximum iterations ({max_iterations}) without completing task")
+                
+            except Exception as agent_error:
+                logger.error(f"Agent initialization or execution failed: {agent_error}")
+                raise
+            
+            finally:
+                # Unregister agent from hive mind
+                try:
+                    await agent.unregister_from_hive_mind()
+                except Exception as e:
+                    logger.warning(f"Failed to unregister agent from hive mind: {e}")
 
 
 orchestrator = Orchestrator(tool_inventory=inventory)

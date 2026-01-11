@@ -41,12 +41,17 @@ async def lifespan(app: FastAPI):
     await init_db()
     
     # Initialize EventManager and ToolInventory
-    await initialize_core_components()
+    event_manager, tool_inventory, orchestrator = await initialize_core_components()
+    
+    # Store instances in app state for access by endpoints
+    app.state.event_manager = event_manager
+    app.state.tool_inventory = tool_inventory
+    app.state.orchestrator = orchestrator
     
     yield
     # Shutdown
     logger.info("Shutting down Kodiak Backend...")
-    await shutdown_core_components()
+    await shutdown_core_components(app)
 
 async def initialize_core_components():
     """Initialize EventManager, ToolInventory, and other core components"""
@@ -74,15 +79,26 @@ async def initialize_core_components():
     hive_mind.set_event_manager(event_manager)
     logger.info("Hive Mind configured with EventManager")
     
-    # Store instances in app state for access by endpoints
-    app.state.event_manager = event_manager
-    app.state.tool_inventory = tool_inventory
+    # Initialize and start Orchestrator
+    from kodiak.core.orchestrator import Orchestrator
+    orchestrator = Orchestrator(tool_inventory)
+    await orchestrator.start()
+    logger.info("Orchestrator started and scheduler loop running")
+    
+    # Return instances to be stored in app state
+    return event_manager, tool_inventory, orchestrator
 
-async def shutdown_core_components():
+async def shutdown_core_components(app: FastAPI):
     """Cleanup core components during shutdown"""
     global event_manager, tool_inventory
     
     logger.info("Shutting down core components...")
+    
+    # Stop orchestrator gracefully
+    if hasattr(app.state, 'orchestrator'):
+        logger.info("Stopping orchestrator...")
+        await app.state.orchestrator.stop()
+        logger.info("Orchestrator stopped")
     
     # Clean up any resources if needed
     if tool_inventory:
@@ -100,6 +116,10 @@ def get_event_manager():
 def get_tool_inventory():
     """Get the global ToolInventory instance"""
     return tool_inventory
+
+def get_orchestrator():
+    """Get the global Orchestrator instance"""
+    return getattr(app.state, 'orchestrator', None)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

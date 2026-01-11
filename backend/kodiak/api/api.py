@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from kodiak.api.endpoints import scans, ws, graph, approvals, projects, skills, system
+from kodiak.api.endpoints import scans, ws, graph, approvals, projects, skills, system, attempts
 
 api_router = APIRouter()
 api_router.include_router(scans.router, prefix="/scans", tags=["scans"])
@@ -9,3 +9,4 @@ api_router.include_router(approvals.router, prefix="/approvals", tags=["approval
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
 api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
 api_router.include_router(system.router, prefix="/system", tags=["system"])
+api_router.include_router(attempts.router, prefix="/attempts", tags=["attempts"])

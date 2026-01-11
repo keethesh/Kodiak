@@ -1,5 +1,9 @@
 from typing import Any, Dict, List, Optional
 import json
+import asyncio
+import time
+from uuid import uuid4
+from loguru import logger
 from kodiak.core.config import settings
 
 class KodiakAgent:
@@ -105,53 +109,99 @@ class KodiakAgent:
         :param system_prompt: Custom system prompt for the current phase.
         """
         from litellm import acompletion
-        import os
+        from kodiak.core.config import settings
+        
+        try:
+            # 0. SOFT INTERRUPT CHECK
+            if self.inbox:
+                # If we have priority messages, we override the normal flow.
+                # We inject the message as a "System Override" to force attention.
+                priority_msg = self.inbox.pop(0) # Process FIFO
+                history.append({
+                    "role": "user", 
+                    "content": f"[PRIORITY INTERRUPT FROM {priority_msg['sender']}]: {priority_msg['content']}\n"
+                               f"DROP CURRENT PLAN AND ADDRESS THIS IMMEDIATELY."
+                })
 
-        # 0. SOFT INTERRUPT CHECK
-        if self.inbox:
-            # If we have priority messages, we override the normal flow.
-            # We inject the message as a "System Override" to force attention.
-            priority_msg = self.inbox.pop(0) # Process FIFO
-            history.append({
-                "role": "user", 
-                "content": f"[PRIORITY INTERRUPT FROM {priority_msg['sender']}]: {priority_msg['content']}\n"
-                           f"DROP CURRENT PLAN AND ADDRESS THIS IMMEDIATELY."
-            })
+            # 1. Load available tools from inventory
+            tools = self._prepare_tools(allowed_tools)
+            
+            # 2. Rolling Summaries: Compress history if too long
+            optimized_history = await self._summarize_history(history)
+            
+            # 3. Context Injection (The Blackboard)
+            context_str = ""
+            if self.session and self.project_id:
+                context_str = await self._load_context(self.session, self.project_id)
 
-        # 1. Load available tools from inventory
-        tools = self._prepare_tools(allowed_tools)
-        
-        # 2. Rolling Summaries: Compress history if too long
-        optimized_history = await self._summarize_history(history)
-        
-        # 3. Context Injection (The Blackboard)
-        context_str = ""
-        if self.session and self.project_id:
-            context_str = await self._load_context(self.session, self.project_id)
-
-        # 4. Build comprehensive system prompt
-        system_content = self._build_system_prompt(system_prompt, context_str)
-        
-        system_msg = {
-            "role": "system",
-            "content": system_content
-        }
-        
-        # Prepare messages
-        messages = [system_msg] + optimized_history
-        
-        # Call LLM
-        model = self.model_name or "gpt-3.5-turbo" 
-        
-        # Using OpenAI-compatible tool calling
-        response = await acompletion(
-            model=model,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-        )
-        
-        return response.choices[0].message
+            # 4. Build comprehensive system prompt
+            system_content = self._build_system_prompt(system_prompt, context_str)
+            
+            system_msg = {
+                "role": "system",
+                "content": system_content
+            }
+            
+            # Prepare messages
+            messages = [system_msg] + optimized_history
+            
+            # Get LLM configuration
+            llm_config = settings.get_llm_config()
+            model = self.model_name or settings.llm_model
+            
+            # Prepare completion parameters
+            completion_params = {
+                "model": model,
+                "messages": messages,
+                "temperature": settings.llm_temperature,
+                "max_tokens": settings.llm_max_tokens,
+                "tools": tools if tools else None,
+                "tool_choice": "auto" if tools else None,
+            }
+            
+            # Add API key if available
+            if llm_config.get("api_key"):
+                completion_params["api_key"] = llm_config["api_key"]
+            
+            if llm_config.get("api_base"):
+                completion_params["api_base"] = llm_config["api_base"]
+            
+            # Emit thinking event
+            if self.event_manager:
+                await self.event_manager.emit_agent_thinking(
+                    agent_id=self.agent_id,
+                    message="Processing information and planning next action",
+                    scan_id=str(self.project_id) if self.project_id else None
+                )
+            
+            # Call LLM with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = await acompletion(**completion_params)
+                    return response.choices[0].message
+                    
+                except Exception as llm_error:
+                    if attempt < max_retries - 1:
+                        # Wait before retry with exponential backoff
+                        wait_time = 2 ** attempt
+                        logger.warning(f"LLM call failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {llm_error}")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        # Final attempt failed
+                        logger.error(f"LLM call failed after {max_retries} attempts: {llm_error}")
+                        raise
+            
+        except Exception as e:
+            logger.error(f"Agent thinking failed: {e}")
+            
+            # Return a fallback response that indicates the error
+            class FallbackResponse:
+                def __init__(self, error_msg):
+                    self.content = f"Error in agent thinking: {error_msg}. Continuing with mission."
+                    self.tool_calls = None
+            
+            return FallbackResponse(str(e))
 
     def _build_system_prompt(self, custom_prompt: str = None, context_str: str = "") -> str:
         """Build comprehensive system prompt including skills and context"""
@@ -248,6 +298,7 @@ class KodiakAgent:
         - Recent Attempts (Tool Executions)
         """
         from kodiak.database.models import Node, Finding, Attempt
+        from kodiak.core.deduplication import deduplication_service
         from sqlmodel import select
         
         if not session or not project_id:
@@ -278,16 +329,26 @@ class KodiakAgent:
                     context_str += f"  - [{finding.severity}] {finding.title}\n"
                 context_str += "\n"
             
-            # 3. Fetch Recent Attempts (to avoid duplication)
-            stmt_attempts = select(Attempt).where(Attempt.project_id == project_id).limit(10)
-            result = await session.execute(stmt_attempts)
-            attempts = result.scalars().all()
+            # 3. Fetch Recent Attempts (to avoid duplication and provide context)
+            attempts = await deduplication_service.get_attempt_history(session, project_id, limit=15)
             
             if attempts:
                 context_str += "RECENT TOOL EXECUTIONS:\n"
                 for attempt in attempts:
-                    context_str += f"  - {attempt.tool} on {attempt.target}: {attempt.status}\n"
+                    status_icon = "✓" if attempt.status == "success" else "✗" if attempt.status == "failure" else "⊘"
+                    context_str += f"  {status_icon} {attempt.tool} on {attempt.target}: {attempt.status}"
+                    if attempt.reason:
+                        context_str += f" ({attempt.reason})"
+                    context_str += "\n"
                 context_str += "\n"
+            
+            # 4. Add deduplication guidance
+            context_str += (
+                "DEDUPLICATION GUIDANCE:\n"
+                "- Avoid repeating successful tool executions on the same targets\n"
+                "- Consider alternative approaches if tools have failed multiple times\n"
+                "- Focus on unexplored targets and new attack vectors\n\n"
+            )
                 
         except Exception as e:
             context_str += f"Error loading context: {str(e)}\n"
@@ -313,55 +374,140 @@ class KodiakAgent:
 
     async def act(self, tool_name: str, args: Dict[str, Any], session: Any = None, project_id: Any = None, task_id: Any = None) -> Any:
         """
-        Execute a tool action through the inventory system with proper error handling.
+        Execute a tool action through the inventory system with proper error handling and attempt tracking.
         """
+        from kodiak.core.deduplication import deduplication_service
+        
         tool = self.tool_inventory.get(tool_name)
         if not tool:
-            return {"error": f"Tool '{tool_name}' not found in inventory"}
+            error_msg = f"Tool '{tool_name}' not found in inventory"
+            logger.error(error_msg)
+            return {"error": error_msg, "success": False}
+        
+        # Extract target from args for attempt tracking
+        target = args.get('target', args.get('url', args.get('command', args.get('host', 'unknown'))))
         
         try:
-            # Emit tool start event
-            await self.event_manager.emit_tool_start(
-                tool_name=tool_name,
-                target=args.get('target', 'unknown'),
-                agent_id=self.agent_id,
-                scan_id=project_id
-            )
+            # Check if we should skip this attempt due to deduplication
+            if session and project_id:
+                should_skip, skip_reason = await deduplication_service.should_skip_attempt(
+                    session, project_id, tool_name, target, args
+                )
+                
+                if should_skip:
+                    logger.info(f"Skipping {tool_name} on {target}: {skip_reason}")
+                    
+                    # Record the skipped attempt
+                    await deduplication_service.record_attempt(
+                        session, project_id, tool_name, target, "skipped", skip_reason
+                    )
+                    
+                    return {
+                        "success": False,
+                        "output": f"Skipped: {skip_reason}",
+                        "data": None,
+                        "error": None,
+                        "skipped": True,
+                        "skip_reason": skip_reason
+                    }
             
-            # Execute the tool
-            result = await tool.run(args, context={
+            # Emit tool start event
+            if self.event_manager:
+                await self.event_manager.emit_tool_start(
+                    tool_name=tool_name,
+                    target=target,
+                    agent_id=self.agent_id,
+                    scan_id=str(project_id) if project_id else None
+                )
+            
+            # Execute the tool with proper context
+            context = {
                 "agent_id": self.agent_id,
                 "session": session,
                 "project_id": project_id,
-                "task_id": task_id
-            })
+                "task_id": task_id,
+                "role": self.role
+            }
+            
+            logger.debug(f"Executing tool {tool_name} with args: {args}")
+            result = await tool.run(args, context=context)
+            
+            # Ensure result has proper structure
+            if hasattr(result, 'dict'):
+                result_dict = result.dict()
+            elif isinstance(result, dict):
+                result_dict = result
+            else:
+                result_dict = {
+                    "success": True,
+                    "output": str(result),
+                    "data": None,
+                    "error": None
+                }
+            
+            # Record the attempt in the database
+            if session and project_id:
+                attempt_status = "success" if result_dict.get('success', True) else "failure"
+                attempt_reason = result_dict.get('error') if attempt_status == "failure" else None
+                
+                await deduplication_service.record_attempt(
+                    session, project_id, tool_name, target, attempt_status, attempt_reason
+                )
             
             # Emit tool completion event
-            await self.event_manager.emit_tool_complete(
-                tool_name=tool_name,
-                result=result,
-                scan_id=project_id
-            )
+            if self.event_manager:
+                # Create a result object for event emission
+                event_result = type('ToolResult', (), {
+                    'success': result_dict.get('success', True),
+                    'error': result_dict.get('error'),
+                    'output': result_dict.get('output'),
+                    'data': result_dict.get('data')
+                })()
+                
+                await self.event_manager.emit_tool_complete(
+                    tool_name=tool_name,
+                    result=event_result,
+                    scan_id=str(project_id) if project_id else None
+                )
             
-            return result.dict() if hasattr(result, 'dict') else result
+            logger.debug(f"Tool {tool_name} completed successfully")
+            return result_dict
             
         except Exception as e:
+            error_msg = f"Tool execution failed: {str(e)}"
+            logger.error(f"Tool {tool_name} execution error: {e}")
+            
+            # Record the failed attempt
+            if session and project_id:
+                try:
+                    await deduplication_service.record_attempt(
+                        session, project_id, tool_name, target, "failure", str(e)
+                    )
+                except Exception as record_error:
+                    logger.error(f"Failed to record attempt: {record_error}")
+            
             # Create error result for event emission
-            error_result = type('ErrorResult', (), {
-                'success': False,
-                'error': str(e),
-                'output': None,
-                'data': None
-            })()
+            if self.event_manager:
+                error_result = type('ErrorResult', (), {
+                    'success': False,
+                    'error': str(e),
+                    'output': None,
+                    'data': None
+                })()
+                
+                # Emit tool completion event with error
+                await self.event_manager.emit_tool_complete(
+                    tool_name=tool_name,
+                    result=error_result,
+                    scan_id=str(project_id) if project_id else None
+                )
             
-            # Emit tool completion event with error
-            await self.event_manager.emit_tool_complete(
-                tool_name=tool_name,
-                result=error_result,
-                scan_id=project_id
-            )
-            
-            return {"error": f"Tool execution failed: {str(e)}"}
+            return {
+                "error": error_msg,
+                "success": False,
+                "output": None,
+                "data": None
+            }
 
     async def execute_tool(self, tool_name: str, **kwargs) -> Any:
         """
@@ -377,6 +523,50 @@ class KodiakAgent:
             session=self.session,
             project_id=self.project_id
         )
+
+    async def report_finding(self, finding: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Report a security finding and emit the appropriate events.
+        
+        Args:
+            finding: Dictionary containing finding details (title, severity, description, etc.)
+            
+        Returns:
+            The finding dictionary with additional metadata
+        """
+        try:
+            # Add metadata to finding
+            enhanced_finding = {
+                **finding,
+                "agent_id": self.agent_id,
+                "project_id": str(self.project_id) if self.project_id else None,
+                "discovered_at": time.time(),
+                "id": finding.get("id", str(uuid4()))
+            }
+            
+            # Emit finding discovered event
+            if self.event_manager and self.project_id:
+                await self.event_manager.emit_finding_discovered(
+                    scan_id=str(self.project_id),
+                    finding=enhanced_finding,
+                    agent_id=self.agent_id
+                )
+            
+            # Share with hive mind if available
+            if self._hive_mind and self.project_id:
+                await self._hive_mind.share_discovery(
+                    agent_id=self.agent_id,
+                    project_id=str(self.project_id),
+                    discovery=enhanced_finding,
+                    scan_id=str(self.project_id)
+                )
+            
+            logger.info(f"Agent {self.agent_id} reported finding: {finding.get('title', 'Unknown')}")
+            return enhanced_finding
+            
+        except Exception as e:
+            logger.error(f"Failed to report finding: {e}")
+            return finding
 
     def get_skill_recommendations(self, target_info: Dict[str, Any]) -> List[str]:
         """Get skill recommendations based on target information"""

@@ -1,8 +1,11 @@
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlmodel import Field, SQLModel, Relationship, Column, JSON
+
+if TYPE_CHECKING:
+    from sqlalchemy.sql.schema import ForeignKey
 
 
 # --- Enums & Helpers ---
@@ -32,8 +35,9 @@ class Project(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     scans: List["ScanJob"] = Relationship(back_populates="project")
-    scans: List["ScanJob"] = Relationship(back_populates="project")
     nodes: List["Node"] = Relationship(back_populates="project")
+    tasks: List["Task"] = Relationship(back_populates="project")
+    attempts: List["Attempt"] = Relationship(back_populates="project")
 
 
 class ScanJob(SQLModel, table=True):
@@ -110,6 +114,9 @@ class Attempt(SQLModel, table=True):
     reason: Optional[str] = None # "Connection timeout"
     
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Relationships
+    project: "Project" = Relationship(back_populates="attempts")
 
 
 class Task(SQLModel, table=True):
@@ -125,8 +132,16 @@ class Task(SQLModel, table=True):
     assigned_agent_id: str # "Scout_1"
     parent_task_id: Optional[UUID] = Field(foreign_key="task.id", default=None)
     
+    # Task directive as JSON string containing goal, target, role, etc.
+    directive: str = Field(default="{}")
+    
     result: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Relationships
+    project: "Project" = Relationship(back_populates="tasks")
+    parent_task: Optional["Task"] = Relationship(back_populates="child_tasks", sa_relationship_kwargs={"remote_side": "Task.id"})
+    child_tasks: List["Task"] = Relationship(back_populates="parent_task")
 
 
 class Finding(SQLModel, table=True):

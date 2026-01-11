@@ -6,6 +6,7 @@ Feature: core-integration-fixes, Property 1: Tool execution returns structured r
 
 import pytest
 import asyncio
+from typing import Dict, Any
 from unittest.mock import AsyncMock, MagicMock
 
 from kodiak.core.tools.base import BaseTool, ToolResult
@@ -23,13 +24,13 @@ class MockTool(BaseTool):
     def description(self) -> str:
         return "A mock tool for testing"
     
-    async def _execute(self, **kwargs) -> ToolResult:
+    async def _execute(self, args: Dict[str, Any]) -> ToolResult:
         """Mock implementation that returns a ToolResult."""
-        target = kwargs.get('target', 'unknown')
+        target = args.get('target', 'unknown')
         return ToolResult(
             success=True,
             output=f"Mock tool executed on {target}",
-            data={"target": target, "kwargs": kwargs}
+            data={"target": target, "args": args}
         )
 
 
@@ -44,7 +45,7 @@ class MockFailingTool(BaseTool):
     def description(self) -> str:
         return "A mock tool that always fails"
     
-    async def _execute(self, **kwargs) -> ToolResult:
+    async def _execute(self, args: Dict[str, Any]) -> ToolResult:
         """Mock implementation that raises an exception."""
         raise Exception("Mock tool failure")
 
@@ -60,9 +61,9 @@ class MockDictTool(BaseTool):
     def description(self) -> str:
         return "A mock tool that returns a dict"
     
-    async def _execute(self, **kwargs) -> dict:
+    async def _execute(self, args: Dict[str, Any]) -> dict:
         """Mock implementation that returns a dict."""
-        return {"output": "dict result", "data": kwargs}
+        return {"output": "dict result", "data": args}
 
 
 class TestToolExecutionProperties:
@@ -176,7 +177,8 @@ class TestToolExecutionProperties:
         assert isinstance(result, ToolResult)
         assert result.success == True
         assert result.output == "dict result"
-        assert result.data == {"output": "dict result", "data": kwargs}
+        # The data should contain the converted dict result
+        assert result.data == {"output": "dict result", "data": {'target': 'test.com'}}
         assert result.error is None
 
     @pytest.mark.asyncio
@@ -205,7 +207,7 @@ class TestToolExecutionProperties:
         # Verify error result structure
         assert isinstance(result, ToolResult)
         assert result.success == False
-        assert result.output == ""
+        assert "Mock tool failure" in result.output  # Error message should be in output
         assert result.error == "Mock tool failure"
         
         # Verify error events were emitted

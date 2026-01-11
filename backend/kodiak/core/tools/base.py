@@ -1,3 +1,4 @@
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Type, Optional
 
@@ -60,12 +61,36 @@ class BaseTool(ABC):
         scan_id = kwargs.get('scan_id')
         
         try:
+            # Validate required parameters if args_schema is defined
+            if self.args_schema:
+                try:
+                    # Validate arguments against schema
+                    validated_args = self.args_schema(**kwargs)
+                    # Update kwargs with validated data
+                    kwargs.update(validated_args.dict())
+                except Exception as validation_error:
+                    return ToolResult(
+                        success=False,
+                        output=f"Parameter validation failed: {str(validation_error)}",
+                        error=f"Invalid parameters: {str(validation_error)}"
+                    )
+            
             # Emit tool start event
             if self.event_manager and scan_id:
                 await self.event_manager.emit_tool_start(self.name, target, agent_id, scan_id)
             
-            # Execute the actual tool logic
-            result = await self._execute(**kwargs)
+            # Execute the actual tool logic with timeout
+            try:
+                # Convert kwargs to args dict for tool execution
+                # Only exclude internal framework parameters, keep tool parameters
+                args_dict = {k: v for k, v in kwargs.items() if k not in ['agent_id', 'scan_id']}
+                result = await asyncio.wait_for(self._execute(args_dict), timeout=300)  # 5 minute timeout
+            except asyncio.TimeoutError:
+                return ToolResult(
+                    success=False,
+                    output=f"Tool execution timed out after 300 seconds",
+                    error="Tool execution timeout"
+                )
             
             # Ensure we have a ToolResult
             if not isinstance(result, ToolResult):
@@ -83,6 +108,14 @@ class BaseTool(ABC):
                         data={'raw': result}
                     )
             
+            # Validate ToolResult structure
+            if not hasattr(result, 'success') or not hasattr(result, 'output'):
+                result = ToolResult(
+                    success=False,
+                    output="Tool returned invalid result structure",
+                    error="Invalid ToolResult structure"
+                )
+            
             # Emit tool complete event
             if self.event_manager and scan_id:
                 await self.event_manager.emit_tool_complete(self.name, result, scan_id)
@@ -90,7 +123,11 @@ class BaseTool(ABC):
             return result
             
         except Exception as e:
-            error_result = ToolResult(success=False, output="", error=str(e))
+            error_result = ToolResult(
+                success=False, 
+                output=f"Tool execution failed: {str(e)}", 
+                error=str(e)
+            )
             
             # Emit tool complete event with error
             if self.event_manager and scan_id:
@@ -300,10 +337,16 @@ class BaseTool(ABC):
             return error_result
 
     @abstractmethod
-    async def _execute(self, **kwargs) -> ToolResult:
+    async def _execute(self, args: Dict[str, Any]) -> ToolResult:
         """
         Override this in concrete tools.
         This method should contain the actual tool implementation.
+        
+        Args:
+            args: Dictionary containing tool arguments
+            
+        Returns:
+            ToolResult with success status, output, and optional data/error
         """
         pass
 

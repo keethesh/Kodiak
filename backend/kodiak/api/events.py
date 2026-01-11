@@ -165,24 +165,121 @@ class EventManager:
             )
     
     @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
-    async def emit_discovery(self, discovery: Dict[str, Any], scan_id: str = None):
-        """Broadcast asset discovery event"""
+    async def emit_scan_started(self, scan_id: str, scan_name: str, target: str, agent_id: str = None):
+        """Broadcast scan started event"""
         try:
-            logger.info(f"New discovery: {discovery}")
+            logger.info(f"Scan {scan_id} started: {scan_name} targeting {target}")
             
-            if scan_id:
-                await self.websocket_manager.send_finding_update(
-                    scan_id=scan_id,
-                    finding=discovery
-                )
-                
+            await self.websocket_manager.broadcast(scan_id, {
+                "type": "scan_started",
+                "timestamp": time.time(),
+                "scan_id": scan_id,
+                "scan_name": scan_name,
+                "target": target,
+                "agent_id": agent_id,
+                "status": "running"
+            })
+            
         except Exception as e:
             raise EventBroadcastingError(
-                message="Failed to emit discovery event",
-                event_type="discovery",
+                message=f"Failed to emit scan started event for scan {scan_id}",
+                event_type="scan_started",
                 details={
-                    "discovery": discovery,
                     "scan_id": scan_id,
+                    "scan_name": scan_name,
+                    "target": target,
+                    "agent_id": agent_id,
+                    "original_error": str(e)
+                }
+            )
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_scan_completed(self, scan_id: str, scan_name: str, status: str, summary: Dict[str, Any] = None):
+        """Broadcast scan completed event"""
+        try:
+            logger.info(f"Scan {scan_id} completed with status: {status}")
+            
+            await self.websocket_manager.broadcast(scan_id, {
+                "type": "scan_completed",
+                "timestamp": time.time(),
+                "scan_id": scan_id,
+                "scan_name": scan_name,
+                "status": status,
+                "summary": summary or {},
+                "completed_at": time.time()
+            })
+            
+        except Exception as e:
+            raise EventBroadcastingError(
+                message=f"Failed to emit scan completed event for scan {scan_id}",
+                event_type="scan_completed",
+                details={
+                    "scan_id": scan_id,
+                    "scan_name": scan_name,
+                    "status": status,
+                    "original_error": str(e)
+                }
+            )
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_scan_failed(self, scan_id: str, scan_name: str, error: str, details: Dict[str, Any] = None):
+        """Broadcast scan failed event"""
+        try:
+            logger.error(f"Scan {scan_id} failed: {error}")
+            
+            await self.websocket_manager.broadcast(scan_id, {
+                "type": "scan_failed",
+                "timestamp": time.time(),
+                "scan_id": scan_id,
+                "scan_name": scan_name,
+                "status": "failed",
+                "error": error,
+                "details": details or {},
+                "failed_at": time.time()
+            })
+            
+        except Exception as e:
+            raise EventBroadcastingError(
+                message=f"Failed to emit scan failed event for scan {scan_id}",
+                event_type="scan_failed",
+                details={
+                    "scan_id": scan_id,
+                    "scan_name": scan_name,
+                    "error": error,
+                    "original_error": str(e)
+                }
+            )
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_finding_discovered(self, scan_id: str, finding: Dict[str, Any], agent_id: str = None):
+        """Broadcast finding discovered event"""
+        try:
+            logger.info(f"New finding discovered in scan {scan_id}: {finding.get('title', 'Unknown')}")
+            
+            await self.websocket_manager.broadcast(scan_id, {
+                "type": "finding_discovered",
+                "timestamp": time.time(),
+                "scan_id": scan_id,
+                "agent_id": agent_id,
+                "finding": {
+                    "id": finding.get("id"),
+                    "title": finding.get("title", "Unknown Finding"),
+                    "severity": finding.get("severity", "info"),
+                    "description": finding.get("description", ""),
+                    "target": finding.get("target"),
+                    "evidence": finding.get("evidence", {}),
+                    "discovered_at": time.time()
+                }
+            })
+            
+        except Exception as e:
+            raise EventBroadcastingError(
+                message=f"Failed to emit finding discovered event for scan {scan_id}",
+                event_type="finding_discovered",
+                details={
+                    "scan_id": scan_id,
+                    "finding": finding,
+                    "agent_id": agent_id,
                     "original_error": str(e)
                 }
             )

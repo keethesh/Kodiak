@@ -231,13 +231,27 @@ def validate_startup_config():
         
         # Log successful configuration
         from loguru import logger
-        logger.info(f"Configuration loaded successfully")
-        logger.info(f"LLM Provider: {settings.llm_provider}")
-        logger.info(f"LLM Model: {settings.get_model_display_name()}")
-        logger.info(f"Database: {settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}")
-        logger.info(f"Debug Mode: {settings.debug}")
-        logger.info(f"Safety Checks: {settings.enable_safety_checks}")
-        logger.info(f"Hive Mind: {settings.enable_hive_mind}")
+        logger.info(f"✅ Configuration validation completed successfully")
+        logger.info(f"🤖 LLM Provider: {settings.llm_provider}")
+        logger.info(f"🧠 LLM Model: {settings.get_model_display_name()}")
+        logger.info(f"🗄️  Database: {settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}")
+        logger.info(f"🐛 Debug Mode: {settings.debug}")
+        logger.info(f"🛡️  Safety Checks: {settings.enable_safety_checks}")
+        logger.info(f"🐝 Hive Mind: {settings.enable_hive_mind}")
+        logger.info(f"⚙️  Tool Timeout: {settings.tool_timeout}s")
+        logger.info(f"👥 Max Agents: {settings.max_concurrent_agents}")
+        
+        # Log configuration source information
+        logger.info("📋 Configuration loaded from:")
+        logger.info(f"   - Environment variables")
+        logger.info(f"   - .env file (if present)")
+        logger.info(f"   - Default values")
+        
+        # Provide helpful setup information
+        if settings.debug:
+            logger.info("🔧 Debug mode is enabled - detailed logging active")
+        
+        logger.info("🚀 System ready to start with validated configuration")
         
     except ConfigurationError:
         # Re-raise configuration errors as-is
@@ -298,6 +312,133 @@ LLM_PRESETS = {
 def get_available_models() -> Dict[str, Dict[str, Any]]:
     """Get all available model presets"""
     return LLM_PRESETS
+
+
+def get_configuration_troubleshooting_guide() -> Dict[str, Any]:
+    """Get troubleshooting guide for common configuration issues"""
+    return {
+        "common_issues": {
+            "missing_api_key": {
+                "symptoms": ["ConfigurationError about missing API key", "LLM provider not configured"],
+                "solutions": [
+                    "Set the appropriate API key environment variable:",
+                    "  - For Gemini: GOOGLE_API_KEY=your_key",
+                    "  - For OpenAI: OPENAI_API_KEY=your_key", 
+                    "  - For Claude: ANTHROPIC_API_KEY=your_key",
+                    "  - Or use generic: KODIAK_LLM_API_KEY=your_key",
+                    "Create a .env file in the backend directory with your keys"
+                ]
+            },
+            "database_connection": {
+                "symptoms": ["Database connection failed", "PostgreSQL connection error"],
+                "solutions": [
+                    "Ensure PostgreSQL is running",
+                    "Check database configuration:",
+                    "  - POSTGRES_SERVER=localhost (or your server)",
+                    "  - POSTGRES_PORT=5432 (or your port)",
+                    "  - POSTGRES_USER=kodiak (or your user)",
+                    "  - POSTGRES_PASSWORD=your_password",
+                    "  - POSTGRES_DB=kodiak_db (or your database)",
+                    "Run: docker-compose up db (if using Docker)"
+                ]
+            },
+            "invalid_model": {
+                "symptoms": ["Model not found", "Invalid model configuration"],
+                "solutions": [
+                    "Use supported model formats:",
+                    "  - Gemini: gemini/gemini-1.5-pro",
+                    "  - OpenAI: openai/gpt-4",
+                    "  - Claude: claude-3-5-sonnet-20241022",
+                    "Check available models with get_available_models()"
+                ]
+            }
+        },
+        "configuration_examples": {
+            "gemini": {
+                "KODIAK_LLM_PROVIDER": "gemini",
+                "KODIAK_LLM_MODEL": "gemini/gemini-1.5-pro",
+                "GOOGLE_API_KEY": "your_google_api_key_here"
+            },
+            "openai": {
+                "KODIAK_LLM_PROVIDER": "openai", 
+                "KODIAK_LLM_MODEL": "openai/gpt-4",
+                "OPENAI_API_KEY": "your_openai_api_key_here"
+            },
+            "claude": {
+                "KODIAK_LLM_PROVIDER": "claude",
+                "KODIAK_LLM_MODEL": "claude-3-5-sonnet-20241022", 
+                "ANTHROPIC_API_KEY": "your_anthropic_api_key_here"
+            }
+        },
+        "setup_commands": [
+            "# 1. Copy example environment file",
+            "cp .env.example .env",
+            "",
+            "# 2. Edit .env file with your API keys",
+            "nano .env  # or your preferred editor",
+            "",
+            "# 3. Start database (if using Docker)",
+            "docker-compose up -d db",
+            "",
+            "# 4. Run configuration helper",
+            "python configure_llm.py",
+            "",
+            "# 5. Start the application",
+            "python main.py"
+        ]
+    }
+
+
+def diagnose_configuration_issues() -> Dict[str, Any]:
+    """Diagnose common configuration issues and provide solutions"""
+    issues = []
+    solutions = []
+    
+    try:
+        # Check LLM configuration
+        llm_config = settings.get_llm_config()
+        if not llm_config.get("api_key"):
+            issues.append(f"Missing API key for LLM provider: {settings.llm_provider}")
+            
+            provider_solutions = {
+                "gemini": "Set GOOGLE_API_KEY environment variable",
+                "openai": "Set OPENAI_API_KEY environment variable", 
+                "claude": "Set ANTHROPIC_API_KEY environment variable"
+            }
+            
+            solution = provider_solutions.get(settings.llm_provider, "Set KODIAK_LLM_API_KEY environment variable")
+            solutions.append(solution)
+    
+    except Exception as e:
+        issues.append(f"LLM configuration error: {str(e)}")
+        solutions.append("Check LLM provider and model configuration")
+    
+    # Check database configuration
+    missing_db_config = []
+    if not settings.postgres_server:
+        missing_db_config.append("POSTGRES_SERVER")
+    if not settings.postgres_user:
+        missing_db_config.append("POSTGRES_USER")
+    if not settings.postgres_password:
+        missing_db_config.append("POSTGRES_PASSWORD")
+    if not settings.postgres_db:
+        missing_db_config.append("POSTGRES_DB")
+    
+    if missing_db_config:
+        issues.append(f"Missing database configuration: {', '.join(missing_db_config)}")
+        solutions.append("Set all required database environment variables")
+    
+    # Check for common misconfigurations
+    if settings.llm_model and not settings.llm_model.startswith(settings.llm_provider):
+        issues.append(f"Model '{settings.llm_model}' may not match provider '{settings.llm_provider}'")
+        solutions.append("Ensure model format matches provider (e.g., 'gemini/gemini-1.5-pro' for Gemini)")
+    
+    return {
+        "has_issues": len(issues) > 0,
+        "issues": issues,
+        "solutions": solutions,
+        "troubleshooting_guide": get_configuration_troubleshooting_guide()
+    }
 
 
 def configure_for_gemini(api_key: str, model: str = "gemini/gemini-1.5-pro") -> Dict[str, str]:

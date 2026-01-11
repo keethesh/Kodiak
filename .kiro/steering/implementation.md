@@ -78,7 +78,6 @@ inclusion: manual
 
 #### Infrastructure
 - Database migrations with Alembic
-- Authentication and user management
 - Production deployment configuration
 - Monitoring and observability
 
@@ -123,7 +122,7 @@ inclusion: manual
 - **Database Isolation**: Project-based data segregation
 - **Audit Logging**: Complete trail of all operations
 - **Sensitive Data Handling**: Proper handling of credentials and secrets
-- **WebSocket Security**: Authentication and authorization for real-time connections
+- **API Security**: Configurable access controls for production deployments
 
 ## Performance Optimizations
 
@@ -261,15 +260,15 @@ ToolResult(
 
 ### Phase 1: Infrastructure (1-2 weeks)
 1. **Database Migrations**: Alembic setup and initial migrations
-2. **Authentication System**: JWT-based user authentication
-3. **Approval UI**: Complete safety workflow interface
+2. **Advanced Browser Automation**: Multi-tab session management
+3. **Production Deployment**: Comprehensive deployment configuration
 4. **Error Handling**: Comprehensive error handling and logging
 
 ### Phase 2: Advanced Features (2-3 weeks)
 1. **HTTP Proxy**: Request/response manipulation capabilities
-2. **Enhanced Browser Automation**: Multi-tab session management
-3. **Report Generation**: Comprehensive security reports
-4. **More Skills**: Cloud-specific and protocol-specific skills
+2. **Advanced Reporting**: Comprehensive security reports
+3. **More Skills**: Cloud-specific and protocol-specific skills
+4. **Performance Optimization**: Caching and scaling improvements
 
 ### Phase 3: Production Readiness (2-3 weeks)
 1. **Monitoring**: Performance and security monitoring

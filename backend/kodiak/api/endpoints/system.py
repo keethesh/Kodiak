@@ -9,6 +9,156 @@ from loguru import logger
 router = APIRouter()
 
 
+@router.get("/config-health")
+async def get_configuration_health() -> Dict[str, Any]:
+    """Get detailed configuration health status"""
+    try:
+        from kodiak.core.config import settings
+        from kodiak.database.engine import verify_database_connectivity
+        
+        health_status = {
+            "status": "healthy",
+            "checks": {},
+            "configuration": {},
+            "issues": []
+        }
+        
+        # Check LLM configuration
+        try:
+            llm_config = settings.get_llm_config()
+            has_api_key = bool(llm_config.get("api_key"))
+            
+            health_status["checks"]["llm_provider"] = {
+                "status": "healthy" if has_api_key else "unhealthy",
+                "provider": settings.llm_provider,
+                "model": settings.llm_model,
+                "has_api_key": has_api_key,
+                "display_name": settings.get_model_display_name()
+            }
+            
+            if not has_api_key:
+                health_status["issues"].append(f"Missing API key for LLM provider: {settings.llm_provider}")
+                health_status["status"] = "unhealthy"
+                
+        except Exception as e:
+            health_status["checks"]["llm_provider"] = {
+                "status": "error",
+                "error": str(e)
+            }
+            health_status["issues"].append(f"LLM configuration error: {str(e)}")
+            health_status["status"] = "unhealthy"
+        
+        # Check database configuration
+        try:
+            await verify_database_connectivity()
+            health_status["checks"]["database"] = {
+                "status": "healthy",
+                "server": settings.postgres_server,
+                "port": settings.postgres_port,
+                "database": settings.postgres_db,
+                "user": settings.postgres_user
+            }
+        except Exception as e:
+            health_status["checks"]["database"] = {
+                "status": "unhealthy",
+                "error": str(e),
+                "server": settings.postgres_server,
+                "port": settings.postgres_port,
+                "database": settings.postgres_db
+            }
+            health_status["issues"].append(f"Database connectivity error: {str(e)}")
+            health_status["status"] = "unhealthy"
+        
+        # Check required configuration values
+        missing_config = settings.validate_required_config()
+        if missing_config:
+            health_status["checks"]["required_config"] = {
+                "status": "unhealthy",
+                "missing": missing_config
+            }
+            health_status["issues"].extend([f"Missing required config: {key}" for key in missing_config])
+            health_status["status"] = "unhealthy"
+        else:
+            health_status["checks"]["required_config"] = {
+                "status": "healthy",
+                "all_present": True
+            }
+        
+        # Add general configuration info
+        health_status["configuration"] = {
+            "debug_mode": settings.debug,
+            "log_level": settings.log_level,
+            "safety_checks": settings.enable_safety_checks,
+            "max_agents": settings.max_concurrent_agents,
+            "tool_timeout": settings.tool_timeout,
+            "hive_mind_enabled": settings.enable_hive_mind
+        }
+        
+        return health_status
+        
+    except Exception as e:
+        logger.error(f"Error checking configuration health: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "checks": {},
+            "configuration": {},
+            "issues": [f"Health check failed: {str(e)}"]
+        }
+
+
+@router.get("/config-troubleshooting")
+async def get_configuration_troubleshooting() -> Dict[str, Any]:
+    """Get configuration troubleshooting guide and diagnosis"""
+    try:
+        from kodiak.core.config import diagnose_configuration_issues
+        
+        diagnosis = diagnose_configuration_issues()
+        
+        return {
+            "status": "success",
+            "diagnosis": diagnosis
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting configuration troubleshooting: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "diagnosis": {
+                "has_issues": True,
+                "issues": [f"Troubleshooting failed: {str(e)}"],
+                "solutions": ["Check system logs for more details"],
+                "troubleshooting_guide": {}
+            }
+        }
+
+
+@router.post("/validate-config")
+async def validate_configuration() -> Dict[str, Any]:
+    """Manually trigger configuration validation"""
+    try:
+        from kodiak.core.config import validate_startup_config
+        
+        # Run configuration validation
+        validate_startup_config()
+        
+        return {
+            "status": "success",
+            "message": "Configuration validation passed",
+            "timestamp": "now"
+        }
+        
+    except Exception as e:
+        logger.error(f"Configuration validation failed: {e}")
+        return {
+            "status": "failed",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": "now"
+        }
+
+
 @router.get("/status")
 async def get_system_status() -> Dict[str, Any]:
     """Get comprehensive system status including all integrations"""
