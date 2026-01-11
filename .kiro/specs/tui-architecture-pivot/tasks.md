@@ -71,7 +71,7 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - Update CMD to run TUI or provide shell access
     - _Requirements: 14.2_
 
-- [ ] 5. Checkpoint - Verify cleanup
+- [x] 5. Checkpoint - Verify cleanup
   - Ensure all tests pass after cleanup
   - Verify core imports work: `from kodiak.core import agent, orchestrator`
   - Verify database imports work: `from kodiak.database import models, crud`
