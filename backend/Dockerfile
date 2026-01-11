@@ -1,3 +1,9 @@
+# Builder stage for Go tools
+FROM golang:1.21-alpine AS go-builder
+RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+
 FROM python:3.11-slim
 
 # Set environment variables
@@ -17,18 +23,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Go Tools (Nuclei, Subfinder, Httpx) - Using binary releases for speed/stability
-RUN curl -L -o nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.1.8/nuclei_3.1.8_linux_amd64.zip \
-    && unzip nuclei.zip \
-    && mv nuclei /usr/local/bin/ \
-    && rm nuclei.zip \
-    && curl -L -o subfinder.zip https://github.com/projectdiscovery/subfinder/releases/download/v2.6.4/subfinder_2.6.4_linux_amd64.zip \
-    && unzip subfinder.zip \
-    && mv subfinder /usr/local/bin/ \
-    && rm subfinder.zip \
-    && curl -L -o httpx.zip https://github.com/projectdiscovery/httpx/releases/download/v1.3.9/httpx_1.3.9_linux_amd64.zip \
-    && unzip httpx.zip \
-    && mv httpx /usr/local/bin/ \
-    && rm httpx.zip
+# Copy Go binaries from builder
+COPY --from=go-builder /go/bin/nuclei /usr/local/bin/
+COPY --from=go-builder /go/bin/subfinder /usr/local/bin/
+COPY --from=go-builder /go/bin/httpx /usr/local/bin/
 
 # Install Poetry via pip (simpler path management in Docker)
 RUN pip install poetry==1.7.1
