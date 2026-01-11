@@ -48,17 +48,14 @@ docker-compose ps
 #### Check Logs
 Follow the logs to see the startup process:
 ```bash
-docker-compose logs -f backend
+docker-compose logs -f
 ```
-You should see: `Uvicorn running on http://0.0.0.0:8000`
 
-#### Test the API
-You can test the connectivity using `curl` from the VPS:
+#### Access the Application
+- **Frontend**: `http://<YOUR_VPS_IP>:3000` (Main Interface)
+- **Backend API**: `http://<YOUR_VPS_IP>:8000/docs` (Swagger UI)
 
-```bash
-curl http://localhost:8000/docs
-```
-Or open `http://<YOUR_VPS_IP>:8000/docs` in your browser (ensure port 8000 is allowed in your VPS firewall/security group).
+> **Note**: Ensure ports **3000** and **8000** are open in your VPS firewall.
 
 ## Updating
 
