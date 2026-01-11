@@ -6,9 +6,10 @@ class KodiakAgent:
     The Brain. 
     Decoupled from the loop. It just takes state in, and outputs actions.
     """
-    def __init__(self, agent_id: str, model_name: str = settings.KODIAK_MODEL):
+    def __init__(self, agent_id: str, model_name: str = settings.KODIAK_MODEL, session: Any = None):
         self.agent_id = agent_id
         self.model_name = model_name
+        self.session = session
         
     async def think(self, history: List[Dict[str, Any]], allowed_tools: List[str] = None, system_prompt: str = None) -> Any:
         """
@@ -21,6 +22,15 @@ class KodiakAgent:
         from litellm import acompletion
         from kodiak.core.tools.inventory import inventory
         import os
+
+        # 1. Dynamic Prompts: Load only requested skills
+        # 0. Load Context (The Blackboard)
+        context_str = ""
+        if hasattr(self, "session") and self.session: 
+             # Assuming session is available on self if injected, or passed in think args?
+             # For now, simplistic approach: pass session to think?
+             # Act ually, orchestrator passes session to _run_agent_for_task, which passes it to Agent ctor
+             pass
 
         # 1. Dynamic Prompts: Load only requested skills
         tools = self._load_skills(inventory, allowed_tools)
@@ -36,6 +46,15 @@ class KodiakAgent:
             "Result format: Always call a tool or provide a final summary."
         )
         
+        # Injection
+        if self.session and history and isinstance(history[0]["content"], str) and "MISSION:" in history[0]["content"]:
+             # This is likely the first turn "Context Refresher"
+             # Or we inject it into the System Prompt
+             # Let's inspect session project_id from somewhere?
+             # Current simplification: Agent doesn't know project_id in Ctor.
+             # Orchestrator should probably pass context_str in system_prompt
+             pass
+             
         system_msg = {
             "role": "system",
             "content": content
@@ -58,18 +77,86 @@ class KodiakAgent:
         
         return response.choices[0].message
 
+    async def _load_context(self, session: Any, project_id: Any) -> str:
+        """
+        Queries the Blackboard (DB) for facts relevant to this project.
+        Injects:
+        - Known Nodes (Assets)
+        - Confirmed Findings
+        - Recent Attempts (Tool Executions)
+        """
+        from kodiak.database.models import Node, Finding, Attempt
+        from sqlmodel import select, col
+        
+        if not session or not project_id:
+            return "No Context Available (Offline Mode)"
+            
+        context_str = "BLACKBOARD CONTEXT:\n"
+        
+        # 1. Fetch Key Nodes (Limit 20 recent)
+        stmt_nodes = select(Node).where(Node.project_id == project_id).limit(20)
+        nodes = (await session.execute(stmt_nodes)).scalars().all()
+        if nodes:
+            context_str += "  [NODES]\n"
+            for n in nodes:
+                context_str += f"  - ({n.type}) {n.name}\n"
+        
+        # 2. Fetch Findings
+        stmt_findings = select(Finding).where(Finding.scan_id == self.agent_id).limit(5) # Self-findings? Generic?
+        # Maybe fetch project-wide critical findings?
+        stmt_crit = select(Finding).where(Finding.project_id == project_id, col(Finding.severity) == "critical").limit(5)
+        findings = (await session.execute(stmt_crit)).scalars().all()
+        if findings:
+            context_str += "  [CRITICAL FINDINGS]\n"
+            for f in findings:
+                context_str += f"  - {f.title} (Asset: {f.node_id})\n"
+                
+        # 3. Fetch Recent Attempts (To avoid loops)
+        stmt_attempts = select(Attempt).where(Attempt.project_id == project_id).order_by(col(Attempt.timestamp).desc()).limit(10)
+        attempts = (await session.execute(stmt_attempts)).scalars().all()
+        if attempts:
+            context_str += "  [RECENT OPERATIONS]\n"
+            for a in attempts:
+                context_str += f"  - [{a.status}] {a.tool} -> {a.target}\n"
+                
+        return context_str
+
     def _load_skills(self, inventory, allowed_tools: List[str] = None) -> List[Dict[str, Any]]:
         """
         Dynamically loads only the tools needed for the current context.
         """
         all_tools = inventory._tools
-        if allowed_tools:
-            # Filter tools to only those requested
-            return [t.to_openai_schema() for name, t in all_tools.items() if name in allowed_tools]
+        tools_schema = []
         
-        # If no specific tools requested, return all (default behavior)
-        # In a more advanced version, we could inject tools based on the 'phase' of the task.
-        return [t.to_openai_schema() for t in all_tools.values()]
+        # 1. Standard Inventory Tools
+        if allowed_tools:
+            for name in allowed_tools:
+                if name in all_tools:
+                    tools_schema.append(all_tools[name].to_openai_schema())
+        else:
+             tools_schema = [t.to_openai_schema() for t in all_tools.values()]
+
+        # 2. Meta-Tools (Not in Inventory, Native to Agent)
+        # spawn_agent schema
+        if not allowed_tools or "spawn_agent" in allowed_tools:
+            tools_schema.append({
+                "type": "function",
+                "function": {
+                    "name": "spawn_agent",
+                    "description": "Spawn a sub-agent to perform a specific task in parallel.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "role": {"type": "string", "enum": ["scout", "attacker", "specialist"], "description": "The type of agent needed."},
+                            "goal": {"type": "string", "description": "Specific instruction for the sub-agent."},
+                             "target": {"type": "string", "description": "The target asset for the agent."}
+                        },
+                        "required": ["role", "goal"]
+                    }
+                }
+            })
+            
+        return tools_schema
 
     async def _summarize_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -108,103 +195,109 @@ class KodiakAgent:
         
         return [summary_msg] + recent_history
 
-    async def act(self, tool_name: str, args: Dict[str, Any], session: Any = None, project_id: Any = None, scan_id: Any = None) -> Any:
+    async def act(self, tool_name: str, args: Dict[str, Any], session: Any = None, project_id: Any = None, scan_id: Any = None, **kwargs) -> Any:
         """
         Execute a tool by name with the given arguments.
         If session and project_id are provided, persists Assets and Findings.
         """
         from kodiak.core.tools.inventory import inventory
-        from kodiak.database.models import Asset, Finding, FindingSeverity
-        from kodiak.database.crud import asset as crud_asset # Assuming we will implement this helper or use direct session add
+        from kodiak.database.models import Node, Finding, FindingSeverity, Attempt
+        # from kodiak.database.crud import asset as crud_asset 
+
         
-        tool = inventory.get(tool_name)
-        if not tool:
-            return {"error": f"Tool '{tool_name}' not found."}
-            
-        try:
+            # --- META TOOLS ---
+            if tool_name == "spawn_agent":
+                from kodiak.database.models import Task
+                
+                role = args.get("role")
+                goal = args.get("goal")
+                target = args.get("target")
+                
+                # Check Hierarchy (Is this agent allowed to spawn?)
+                # Simplified: All agents can spawn
+                
+                new_task = Task(
+                    project_id=project_id,
+                    name=f"Subtask: {role}",
+                    status="pending",
+                    assigned_agent_id=f"{role}-{self.agent_id.split('-')[-1]}-sub", # simplistic ID gen
+                    parent_task_id=kwargs.get("task_id"), # Need to pass this in act
+                    directive=json.dumps({"role": role, "goal": goal, "target": target}) 
+                )
+                session.add(new_task)
+                await session.commit()
+                return {"success": True, "output": f"Spawned {role} to {goal}"}
+
+            if not tool:
+                return {"error": f"Tool '{tool_name}' not found."}
+
+            # --- REGULAR TOOLS ---
             # Validate args against tool schema
             if tool.args_schema:
                 validated_args = tool.args_schema(**args)
             else:
                 validated_args = args # Pass dict directly
 
+            # --- SAFETY CHECK ---
+            from kodiak.core.safety import safety
+            task_id = kwargs.get("task_id")
+            is_safe, reason = await safety.check_tool_safety(tool_name, validated_args, project_id, session, task_id=task_id)
+            if not is_safe:
+                if task_id:
+                    await safety.request_approval(task_id, tool_name, validated_args, session)
+                    return {"success": False, "status": "PAUSED", "error": f"Action blocked: {reason}. Waiting for Approval."}
+                else:
+                    return {"success": False, "error": f"Action blocked: {reason} (No Task ID to pause)"}
+
             # Execute with Context
             context = {
                 "scan_id": scan_id,
                 "project_id": project_id,
-                "agent_id": self.agent_id
+                "agent_id": self.agent_id,
+                "session": session # Pass DB session to tool
             }
             result = await tool.run(validated_args, context=context)
             
             # --- Persistence Logic ---
             if session and project_id and result.success and result.data:
                 try:
-                    # 1. Save Assets
-                    if "assets" in result.data:
-                         # Expected format: [{"type": "domain", "value": "example.com", "metadata": {}}]
-                        for asset_data in result.data["assets"]:
-                            # Naive upsert (TODO: use proper CRUD with check)
-                            asset = Asset(
-                                project_id=project_id,
-                                type=asset_data.get("type", "unknown"),
-                                value=asset_data.get("value"),
-                                metadata_=asset_data.get("metadata", {})
-                            )
-                            session.add(asset) 
-                            # Flush to get ID if needed for findings, but usually we commit at end of loop
+                    # 1. Save Nodes (Assets)
+                    if "assets" in result.data: # Legacy support
+                        pass
                     
-                    # 2. Save Subdomains (Special case for Subfinder)
-                    if "subdomains" in result.data:
-                        for sub in result.data["subdomains"]:
-                            asset = Asset(
+                    if "nodes" in result.data or "assets" in result.data:
+                         nodes_data = result.data.get("nodes", []) + result.data.get("assets", [])
+                         for n_data in nodes_data:
+                            # Check if exists? (Collision Algo needed later)
+                            # Upsert logic
+                            # For simplicity now: Just add
+                            node = Node(
                                 project_id=project_id,
-                                type="subdomain",
-                                value=sub,
-                                metadata_={"source": "subfinder"}
+                                label="Asset",
+                                type=n_data.get("type", "unknown"),
+                                name=n_data.get("value"),
+                                properties=n_data.get("metadata", {})
                             )
-                            session.add(asset)
-
-                    # 3. Save Live Hosts (Special case for Httpx)
-                    if "live_hosts" in result.data and isinstance(result.data["live_hosts"], list):
-                         # If it returns a list of hosts
-                         for host in result.data["live_hosts"]:
-                            # Might be dict or str
-                            if isinstance(host, str):
-                                val = host
-                                meta = {}
-                            else:
-                                val = host.get("url", host.get("host"))
-                                meta = host
-                            
-                            asset = Asset(
-                                project_id=project_id,
-                                type="endpoint",
-                                value=val,
-                                metadata_={"source": "httpx", "details": meta}
-                            )
-                            session.add(asset)
-
-                    # 4. Save Findings
+                            session.add(node)
+                    
+                    # 2. Save Findings
                     if "findings" in result.data:
-                         # Expected: [{"title": "X", "description": "Y", "severity": "high", "asset_value": "Z"}]
-                        for finding_data in result.data["findings"]:
-                            # Link to asset? Ideally we need asset_id. 
-                            # For MVP, we might create a generic asset or require asset lookup.
-                            # Assuming finding data has enough info.
-                            
-                            # Assuming finding data has enough info.
-                            finding = Finding(
-                                scan_id=scan_id,
-                                project_id=project_id, 
-                                title=finding_data.get("title"),
-                                description=finding_data.get("description"),
-                                severity=finding_data.get("severity", FindingSeverity.INFO),
-                                evidence=finding_data.get("evidence", {})
-                            )
-                            # We need asset_id... skipping strict relational save for now to avoid breaking run
-                            # session.add(finding)
+                        for f_data in result.data["findings"]:
+                            # Find node?
+                            # ...
+                            # Keep simple
                             pass
                             
+                    # 3. Save Attempt (Operational Memory)
+                    attempt = Attempt(
+                        project_id=project_id,
+                        tool=tool_name,
+                        target=str(args),
+                        status="success",
+                        reason=result.output[:100]
+                    )
+                    session.add(attempt)
+
                     await session.commit()
                 except Exception as e:
                     # Don't fail the tool execution if DB save fails

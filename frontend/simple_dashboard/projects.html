@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KODIAK // PROJECTS</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="project-container">
+        <header class="project-header">
+            <div class="brand">
+                <div class="logo-icon"></div>
+                <h1>KODIAK_v2</h1>
+            </div>
+            <div class="user-profile">
+                <span>ADMIN</span>
+                <div class="avatar"></div>
+            </div>
+        </header>
+
+        <main class="project-grid-view">
+            <div class="grid-header">
+                <h2>ENGAGEMENTS</h2>
+                <button class="btn primary"
+                    onclick="document.getElementById('modal-new-project').classList.remove('hidden')">+ NEW
+                    PROJECT</button>
+            </div>
+
+            <div class="projects-grid">
+                <!-- Example Project Card -->
+                <div class="project-card" onclick="window.location.href='index.html'">
+                    <div class="card-top">
+                        <div class="project-status running">RUNNING</div>
+                        <h3>Kodiak Internal Audit</h3>
+                    </div>
+                    <p class="scope">target: 127.0.0.1</p>
+                    <div class="card-stats">
+                        <span class="stat critically-vuln">2 CRITICAL</span>
+                        <span class="stat">5 High</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="fill" style="width: 45%;"></div>
+                    </div>
+                    <div class="last-active">Active 2m ago</div>
+                </div>
+
+                <!-- Example Project Card 2 -->
+                <div class="project-card">
+                    <div class="card-top">
+                        <div class="project-status paused">PAUSED</div>
+                        <h3>Client X - Web App</h3>
+                    </div>
+                    <p class="scope">target: client-x.com</p>
+                    <div class="card-stats">
+                        <span class="stat">0 CRITICAL</span>
+                        <span class="stat">12 Info</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="fill" style="width: 10%;"></div>
+                    </div>
+                    <div class="last-active">Active 2d ago</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- New Project Modal -->
+    <div class="modal-overlay hidden" id="modal-new-project">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>CREATE_NEW_ENGAGEMENT</h3>
+                <button class="close-modal"
+                    onclick="this.closest('.modal-overlay').classList.add('hidden')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form>
+                    <div class="form-group">
+                        <label>PROJECT_NAME</label>
+                        <input type="text" placeholder="Bug Bounty - Tesla" required>
+                    </div>
+                    <div class="form-group">
+                        <div class="row">
+                            <div class="col">
+                                <label>TYPE</label>
+                                <select>
+                                    <option>Web Application</option>
+                                    <option>Network Scan</option>
+                                    <option>API Audit</option>
+                                </select>
+                            </div>
+                            <div class="col">
+                                <label>COMPLIANCE</label>
+                                <select>
+                                    <option>Standard</option>
+                                    <option>OWASP Top 10</option>
+                                    <option>PCI-DSS</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>ROOT_DOMAINS</label>
+                        <textarea placeholder="tesla.com, api.tesla.com"></textarea>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn secondary close-modal"
+                            onclick="this.closest('.modal-overlay').classList.add('hidden')">CANCEL</button>
+                        <button type="button" class="btn primary"
+                            onclick="window.location.href='index.html'">INITIALIZE</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -12,285 +12,209 @@ from kodiak.database.models import ScanJob, ScanStatus
 
 class Orchestrator:
     """
-    Manages the lifecycle of scans and the state machine.
+    The Swarm Kernel.
+    Instead of hardcoded loops, it acts as a 'Task Scheduler'.
+    It polls the 'Task' table (Blackboard) and spawns workers for pending tasks.
     """
     
     def __init__(self):
-        self._active_scans: Dict[UUID, asyncio.Task] = {}
+        self._active_workers: Dict[UUID, asyncio.Task] = {} # Task.id -> asyncio.Task
+        self._scheduler_task: Optional[asyncio.Task] = None
+        self._running = False
+
+    async def start(self):
+        """
+        Start the global scheduler loop.
+        """
+        if self._running: return
+        self._running = True
+        self._scheduler_task = asyncio.create_task(self._scheduler_loop())
+        logger.info("Orchestrator Scheduler started.")
+
+    async def stop(self):
+        self._running = False
+        if self._scheduler_task:
+            self._scheduler_task.cancel()
+        
+        # Cancel all workers
+        for task_id, worker in self._active_workers.items():
+            worker.cancel()
+        self._active_workers.clear()
 
     async def start_scan(self, scan_id: UUID):
         """
-        Start or Resume a scan.
+        Bootstraps a scan by creating the initial 'Root Task' for the Manager.
         """
-        if scan_id in self._active_scans:
-            logger.warning(f"Scan {scan_id} is already active.")
-            return
-
         async for session in get_session():
             scan = await crud_scan.get(session, scan_id)
-            if not scan:
-                logger.error(f"Scan {scan_id} not found.")
-                return
+            if not scan: return
             
-            # Update status to RUNNING
+            # Create Root Task if not exists
+            # We check if there's already a root task for this project?
+            # For now, simplistic: Create a "Mission" task
+            from kodiak.database.models import Task
+            
+            # The Goal comes from the user config
+            user_goal = scan.config.get("instructions", "Conduct a full penetration test.")
+            
+            root_task = Task(
+                project_id=scan.project_id,
+                name="Mission Manager",
+                status="pending",
+                assigned_agent_id=f"manager-{scan_id}",
+                directive=json.dumps({
+                    "goal": user_goal,
+                    "target": scan.config.get("target"),
+                    "role": "manager"
+                })
+            )
+            session.add(root_task)
             await crud_scan.update_status(session, scan_id, ScanStatus.RUNNING)
-            
-            # Start the background tasks
-            # We treat these as "Subagents" running in parallel
-            manager_task = asyncio.create_task(self._manager_worker(scan_id))
-            discovery_task = asyncio.create_task(self._discovery_worker(scan_id))
-            exploit_task = asyncio.create_task(self._exploit_worker(scan_id))
-            
-            self._active_scans[scan_id] = [manager_task, discovery_task, exploit_task]
-            logger.info(f"Started Subagent Swarm (Manager + Workers) for {scan_id}")
-            break # Only need one session from generator
+            await session.commit()
+            logger.info(f"Bootstrapped Root Task {root_task.id} for Scan {scan_id}")
+            # The scheduler loop will pick this up automatically!
 
-    async def _manager_worker(self, scan_id: UUID):
+    async def _scheduler_loop(self):
         """
-        The Boss.
-        Decides the HIGH LEVEL STRATEGY.
-        Can stop/start workers (logically) or change their instructions.
+        The Heartbeat. Polls for pending tasks and spawns workers.
         """
-        from kodiak.core.agent import KodiakAgent
-        logger.info(f"Manager Agent started for {scan_id}")
-        
-        agent = KodiakAgent(agent_id=f"manager-{scan_id}")
-        
-        try:
-             async for session in get_session():
-                scan = await crud_scan.get(session, scan_id)
-                target = scan.config.get("target") if scan else None
-                if not target: return
-                
-                # The Manager sees the BIG PICTURE
-                history = [{"role": "user", "content": f"You are the Mission Manager for {target}. Orchestrate the Scout and Attacker to complete the pentest."}]
-                
-                # Main Loop
-                while True:
-                    # 1. Refresh Context (What have we found?)
-                    # Simplification: Manager just ensures workers are running with correct instructions for now
-                    # Future: Query DB stats
-                    
-                    tools = ["manage_mission"]
-                    user_directives = scan.config.get("instructions", "")
-                    
-                    system_prompt = (
-                        "You are KODIAK MANAGER. You control the swarm."
-                        "You have two workers: 'scout' (Discovery) and 'attacker' (Exploitation)."
-                        "Use 'manage_mission' to set their instructions based on the User's Goal."
-                        f"\n\nUSER GOAL: {user_directives}"
-                    )
-                    
-                    response = await agent.think(history, allowed_tools=tools, system_prompt=system_prompt)
-                    
-                    if response.tool_calls:
-                         for tool_call in response.tool_calls:
-                            fn_name = tool_call.function.name
-                            fn_args = json.loads(tool_call.function.arguments)
-                            
-                            logger.info(f"[Manager] Command: {fn_name} -> {fn_args}")
-                            
-                            # EXECUTE: Update Config in DB
-                            if fn_name == "manage_mission":
-                                role = fn_args.get("role")
-                                action = fn_args.get("action")
-                                new_instr = fn_args.get("instructions")
-                                
-                                # Update Scan Config
-                                # We need to be careful with concurrent DB updates here?
-                                # SQLModel/SQLAlchemy handle simple updates well usually
-                                
-                                # Re-fetch to be safe
-                                s = await crud_scan.get(session, scan_id)
-                                current_config = dict(s.config) # copy
-                                directives = current_config.get("directives", {})
-                                
-                                directives[role] = {"action": action, "instructions": new_instr}
-                                current_config["directives"] = directives
-                                
-                                s.config = current_config
-                                session.add(s)
-                                await session.commit()
-                                await session.refresh(s)
-                                
-                                history.append({
-                                    "role": "tool", 
-                                    "tool_call_id": tool_call.id,
-                                    "content": "Directives updated in database."
-                                })
-                    
-                    await asyncio.sleep(10) # Manager thinks every 10s
-                    
-        except Exception as e:
-            logger.exception(f"Manager Worker failed: {e}")
-
-    async def _discovery_worker(self, scan_id: UUID):
-        """
-        Subagent 1: The Scout.
-        Focus: Finds assets (Subdomains, IPs, Live Hosts) and saves them to DB.
-        """
-        from kodiak.core.agent import KodiakAgent
-        logger.info(f"Discovery Agent started for {scan_id}")
-        
-        try:
-            async for session in get_session():
-                scan = await crud_scan.get(session, scan_id)
-                target = scan.config.get("target") if scan else None
-                if not target: return
-                
-                # Instructions from Manager (via Config)
-                directives = scan.config.get("directives", {}).get("scout", {})
-                manager_instr = directives.get("instructions", "")
-                action = directives.get("action", "start")
-                
-                if action == "stop":
-                    logger.info("[Scout] Paused by Manager.")
-                    await asyncio.sleep(5)
-                    continue
-
-                user_instructions = scan.config.get("instructions", "")
-                
-                agent = KodiakAgent(agent_id=f"scout-{scan_id}")
-                
-                # RECON LOOP
-                history = [{"role": "user", "content": f"Find subdomains and live hosts for {target}."}]
-                tools = ["subfinder_enumerate", "httpx_probe", "terminal_execute"]
-                system_prompt = (
-                    "You are the SCOUT AGENT. Your ONLY job is discovery."
-                    "1. Find subdomains."
-                    "2. Verify they are alive."
-                    "3. Do NOT run active scans (nmap/nuclei)."
-                    f"\n\nUser Context: {user_instructions}"
-                    f"\nMANAGER ORDERS: {manager_instr}"
-                )
-                
-                for _ in range(10): # Max steps for recon
-                    # Check stop signal
-                    # (Simplified: if scan status changed)
-                    
-                    response = await agent.think(history, allowed_tools=tools, system_prompt=system_prompt)
-                    
-                    # Log & Execute
-                    if response.tool_calls:
-                         for tool_call in response.tool_calls:
-                            fn_name = tool_call.function.name
-                            fn_args = json.loads(tool_call.function.arguments)
-                            
-                            logger.info(f"[Scout] Executing: {fn_name}")
-                            result = await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id, scan_id=scan_id)
-                            
-                            history.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": json.dumps(result)
-                            })
-                    else:
-                        logger.info(f"[Scout] Thought: {response.content}")
-                        history.append(response.dict() if hasattr(response, 'dict') else dict(response))
-                        if "completed" in str(response.content).lower():
-                            break
-                            
-                logger.info("Discovery Agent finished.")
-                return 
-
-        except Exception as e:
-            logger.exception(f"Discovery Worker failed: {e}")
-
-    async def _exploit_worker(self, scan_id: UUID):
-        """
-        Subagent 2: The Attacker.
-        Focus: Polling the DB for new 'unscanned' assets and nuking them.
-        """
-        from kodiak.core.agent import KodiakAgent
-        from kodiak.database.models import Asset
+        from kodiak.database.models import Task
         from sqlmodel import select
         
-        logger.info(f"Exploit Agent started for {scan_id}")
-        
-        agent = KodiakAgent(agent_id=f"attacker-{scan_id}")
-        
-        try:
-            # Poll Loop
-            while True:
+        while self._running:
+            try:
                 async for session in get_session():
-                    scan = await crud_scan.get(session, scan_id)
-                    if not scan or scan.status != ScanStatus.RUNNING:
-                        return
-
-                    # 1. Find Unscanned Assets
-                    # We need assets belonging to this project/scan
-                    # Simplification: Fetch one unscanned asset
-                    statement = select(Asset).where(
-                        Asset.project_id == scan.project_id,
-                        Asset.scanned == False,
-                        Asset.type == "endpoint" # Only scan live endpoints for now
-                    ).limit(1)
+                    # Find pending tasks
+                    statement = select(Task).where(Task.status == "pending")
+                    results = await session.execute(statement)
+                    pending_tasks = results.scalars().all()
                     
-                    result = await session.execute(statement)
-                    asset = result.scalar_one_or_none()
-                    
-                    if asset:
-                        # Lock it
-                        asset.scanned = True
-                        session.add(asset)
+                    for task in pending_tasks:
+                        if task.id in self._active_workers:
+                            continue
+                            
+                        # Mark as running
+                        task.status = "running"
+                        session.add(task)
                         await session.commit()
                         
-                        target_host = asset.value
-                        logger.info(f"[Attacker] Picked up target: {target_host}")
-                        
-                        # Check Manager Directives
-                        directives = scan.config.get("directives", {}).get("attacker", {})
-                        manager_instr = directives.get("instructions", "")
-                        action = directives.get("action", "start")
-                        
-                        if action == "stop":
-                             logger.info("[Attacker] Paused by Manager.")
-                             await asyncio.sleep(5)
-                             continue
-                        
-                        # Attack it!
-                        # We create a mini-session for this target
-                        history = [{"role": "user", "content": f"Scan {target_host} for vulnerabilities."}]
-                        tools = ["nmap", "nuclei_scan"] # Focused set
-                        system_prompt = (
-                            "You are the ATTACKER. Find vulnerabilities. High impact only."
-                            f"\nMANAGER ORDERS: {manager_instr}"
-                        )
-                        
-                        # Quick exploit loop (3 steps max per asset)
-                        for _ in range(3):
-                             response = await agent.think(history, allowed_tools=tools, system_prompt=system_prompt)
-                             if response.tool_calls:
-                                for tool_call in response.tool_calls:
-                                    fn_name = tool_call.function.name
-                                    fn_args = json.loads(tool_call.function.arguments)
-                                    await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id, scan_id=scan_id)
-                             else:
-                                 break
-                    else:
-                        # No targets yet, wait for Scout
-                        await asyncio.sleep(5)
-                        
-        except Exception as e:
-            logger.exception(f"Exploit Worker failed: {e}")
-
-        except asyncio.CancelledError:
-            logger.info(f"Scan {scan_id} cancelled.")
-        except Exception as e:
-            logger.exception(f"Error in scan loop {scan_id}: {e}")
-            # Update DB to failed
-            async for session in get_session():
-                await crud_scan.update_status(session, scan_id, ScanStatus.FAILED)
+                        # Spawn Worker
+                        worker_task = asyncio.create_task(self._worker_wrapper(task.id, task.project_id))
+                        self._active_workers[task.id] = worker_task
+                        logger.info(f"Spawned Worker for Task {task.id} ({task.assigned_agent_id})")
+                
+                await asyncio.sleep(2) # Check every 2s
+            except asyncio.CancelledError:
                 break
-    
-    async def stop_scan(self, scan_id: UUID):
-        if scan_id in self._active_scans:
-            self._active_scans[scan_id].cancel()
-            del self._active_scans[scan_id]
+            except Exception as e:
+                logger.error(f"Scheduler Loop Error: {e}")
+                await asyncio.sleep(5)
+
+    async def _worker_wrapper(self, task_id: UUID, project_id: UUID):
+        """
+        Wrapper to handle worker lifecycle and update Task status on completion.
+        """
+        from kodiak.database.models import Task
+        
+        try:
+            await self._run_agent_for_task(task_id, project_id)
+            status = "completed"
+            result = "Task finished successfully."
+        except Exception as e:
+            logger.exception(f"Worker {task_id} crashed: {e}")
+            status = "failed"
+            result = str(e)
             
+        # cleanup
+        if task_id in self._active_workers:
+            del self._active_workers[task_id]
+            
+        # Update DB
+        try:
+            async for session in get_session():
+                task = await session.get(Task, task_id)
+                if task:
+                    task.status = status
+                    task.result = result
+                    session.add(task)
+                    await session.commit()
+        except Exception as db_e:
+            logger.error(f"Failed to update task status {task_id}: {db_e}")
+
+    async def _run_agent_for_task(self, task_id: UUID, project_id: UUID):
+        """
+        The Generic Agent Runtime.
+        Instantiates an Agent with the specific Task Context.
+        """
+        from kodiak.core.agent import KodiakAgent
+        from kodiak.database.models import Task
+        
         async for session in get_session():
-            await crud_scan.update_status(session, scan_id, ScanStatus.PAUSED)
-            break
-        logger.info(f"Stopped scan {scan_id}")
+            task = await session.get(Task, task_id)
+            if not task: return
+            
+            # Extract Directive
+            try:
+                directive = json.loads(task.properties.get("directive", "{}")) if hasattr(task, "properties") else json.loads(getattr(task, "directive", "{}"))
+            except:
+                directive = {}
+                
+            role = directive.get("role", "specialist")
+            goal = directive.get("goal", "Execute assigned task.")
+            
+            # Instantiate Agent
+            agent = KodiakAgent(agent_id=task.assigned_agent_id, session=session) # Pass session? usually per tool
+            
+            # Initial Memory
+            history = [{"role": "user", "content": f"MISSION: {goal}"}]
+            
+            # Different available tools based on Role?
+            # For now, broad access, safety middleware restricts
+            tools = ["spawn_agent", "terminal_execute", "browser_navigate", "search_web"]
+            
+            system_prompt = (
+                f"You are a specialized agent: {role.upper()}.\n"
+                f"Your Goal: {goal}\n"
+                "You are part of a Hive Mind. You DO NOT need to report back extensively."
+                "Just execute the work and save findings to the Blackboard."
+                "If you need help, use 'spawn_agent' to create a sub-worker."
+                "When finished, simply output 'TASK_COMPLETE'."
+            )
+            
+            # THINK LOOP
+            for _ in range(20): # Safety limit
+                # Check if task was cancelled externally?
+                await session.refresh(task)
+                if task.status == "cancelled":
+                    return
+
+                response = await agent.think(history, allowed_tools=tools, system_prompt=system_prompt)
+                
+                if "TASK_COMPLETE" in str(response.content):
+                    logger.info(f"Agent {agent.agent_id} completed task.")
+                    return
+
+                if response.tool_calls:
+                    for tool_call in response.tool_calls:
+                        fn_name = tool_call.function.name
+                        fn_args = json.loads(tool_call.function.arguments)
+                        
+                        logger.info(f"[{agent.agent_id}] Tool: {fn_name}")
+                        
+                        # Handle 'spawn_agent' specifically if not in standard toolbox yet
+                        # Or delegate to agent.act()
+                        
+                        result = await agent.act(fn_name, fn_args, session=session, project_id=project_id, task_id=task_id)
+                        
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(result)
+                        })
+                else:
+                    history.append(response.dict() if hasattr(response, 'dict') else dict(response))
+                
+                await asyncio.sleep(1) # Breathe
+
 
 orchestrator = Orchestrator()

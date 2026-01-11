@@ -33,3 +33,43 @@ export async function createScan(name: string, target: string, instructions: str
     if (!res.ok) throw new Error('Failed to create scan');
     return res.json();
 }
+
+export async function getProjects() {
+    const res = await fetch(`${API_BASE}/projects/`);
+    if (!res.ok) throw new Error('Failed to fetch projects');
+    return res.json();
+}
+
+export async function createProject(name: string, type: string, compliance: string) {
+    // We map frontend Project creation to backend Project model
+    // The backend model is generic.
+    const res = await fetch(`${API_BASE}/projects/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            name,
+            description: `Type: ${type}, Compliance: ${compliance}`,
+            status: 'active'
+        })
+    });
+    if (!res.ok) throw new Error('Failed to create project');
+    return res.json();
+}
+
+export async function getGraph(projectId: string) {
+    const res = await fetch(`${API_BASE}/graph/${projectId}`);
+    if (!res.ok) return { nodes: [], links: [] };
+    return res.json();
+}
+
+export async function getApprovals() {
+    const res = await fetch(`${API_BASE}/approvals/pending`);
+    if (!res.ok) return [];
+    return res.json();
+}
+
+export async function resolveApproval(taskId: string, action: 'approve' | 'deny') {
+    const res = await fetch(`${API_BASE}/approvals/${taskId}/${action}`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to resolve approval');
+    return res.json();
+}

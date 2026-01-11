@@ -32,7 +32,8 @@ class Project(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     scans: List["ScanJob"] = Relationship(back_populates="project")
-    assets: List["Asset"] = Relationship(back_populates="project")
+    scans: List["ScanJob"] = Relationship(back_populates="project")
+    nodes: List["Node"] = Relationship(back_populates="project")
 
 
 class ScanJob(SQLModel, table=True):
@@ -50,27 +51,89 @@ class ScanJob(SQLModel, table=True):
     logs: List["AgentLog"] = Relationship(back_populates="scan")
 
 
-class Asset(SQLModel, table=True):
+class Node(SQLModel, table=True):
+    """
+    The fundamental unit of the Knowledge Graph.
+    Replaces 'Asset' to be more generic.
+    """
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     project_id: UUID = Field(foreign_key="project.id")
     
-    type: str  # domain, ip, url, service, file
-    value: str = Field(index=True) # example.com, 192.168.1.1
-    metadata_: Dict[str, Any] = Field(default={}, sa_column=Column("metadata", JSON))
+    label: str # e.g. "Asset", "User", "Technology"
+    type: str  # domain, ip, url, service, file, technology
+    name: str = Field(index=True) # example.com, 80/tcp, admin 
+    
+    # Flexible metadata (e.g., {'version': '1.2', 'headers': {...}})
+    properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
     
     # Workflow Status
     scanned: bool = Field(default=False)
     
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
-    project: Project = Relationship(back_populates="assets")
-    findings: List["Finding"] = Relationship(back_populates="asset")
+    project: Project = Relationship(back_populates="nodes")
+    findings: List["Finding"] = Relationship(back_populates="node")
+
+
+class Edge(SQLModel, table=True):
+    """
+    Relationships between Nodes.
+    e.g. Domain --resolves_to--> IP
+    """
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    source_id: UUID = Field(foreign_key="node.id")
+    target_id: UUID = Field(foreign_key="node.id")
+    
+    # "resolves_to", "runs_on", "has_vulnerability"
+    relation: str = Field(index=True)
+    
+    # Metadata for the edge (e.g. "first_seen", "confidence")
+    properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Attempt(SQLModel, table=True):
+    """
+    Operational Memory.
+    Prevents the agent from trying the same tool on the same target infinitely.
+    """
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    project_id: UUID = Field(foreign_key="project.id")
+    
+    # What was attempted?
+    tool: str = Field(index=True) # "sqlmap"
+    target: str = Field(index=True) # "http://example.com/id=1"
+    
+    # Outcome
+    status: str # "success", "failure", "skipped"
+    reason: Optional[str] = None # "Connection timeout"
+    
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Task(SQLModel, table=True):
+    """
+    Directives for Agents.
+    """
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    project_id: UUID = Field(foreign_key="project.id")
+    
+    name: str # "Scan Port 80"
+    status: str = Field(default="pending") # pending, running, completed, failed
+    
+    assigned_agent_id: str # "Scout_1"
+    parent_task_id: Optional[UUID] = Field(foreign_key="task.id", default=None)
+    
+    result: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class Finding(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    asset_id: UUID = Field(foreign_key="asset.id")
-    scan_id: UUID = Field(foreign_key="scanjob.id")
+    node_id: UUID = Field(foreign_key="node.id")
+    # scan_id is optional as findings might be general project knowledge
+    scan_id: Optional[UUID] = Field(default=None, foreign_key="scanjob.id")
     
     title: str
     description: str
@@ -83,7 +146,7 @@ class Finding(SQLModel, table=True):
     remediation: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    asset: Asset = Relationship(back_populates="findings")
+    node: Node = Relationship(back_populates="findings")
 
 
 class AgentLog(SQLModel, table=True):

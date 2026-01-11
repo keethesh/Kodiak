@@ -17,6 +17,7 @@ export interface LogMessage {
 }
 
 export interface WebSocketMessage {
-    type: 'log' | 'status_update' | 'finding';
-    payload: any;
+    type: 'log' | 'status_update' | 'finding' | 'tool_start' | 'tool_complete';
+    payload?: any;
+    data?: any; // Some legacy events might use data
 }
