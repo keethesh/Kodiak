@@ -82,7 +82,6 @@ export default function HiveGraph({ nodes, links }: HiveGraphProps) {
                 zoomView: true
             },
             height: '100%',
-            height: '100%',
             width: '100%'
         };
 
