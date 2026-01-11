@@ -22,6 +22,7 @@ async def list_projects(session: AsyncSession = Depends(get_session)):
 async def create_project(project: Project, session: AsyncSession = Depends(get_session)):
     """
     Create a new engagement.
+    If description is not provided, it defaults to None.
     """
     session.add(project)
     await session.commit()

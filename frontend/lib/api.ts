@@ -40,16 +40,14 @@ export async function getProjects() {
     return res.json();
 }
 
-export async function createProject(name: string, type: string, compliance: string) {
-    // We map frontend Project creation to backend Project model
-    // The backend model is generic.
+export async function createProject(name: string) {
+    // Only send name, let backend handle ID/Defaults
+    // We do NOT send status/description as they are optional/defaulted
     const res = await fetch(`${API_BASE}/projects/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            name,
-            description: `Type: ${type}, Compliance: ${compliance}`,
-            status: 'active'
+            name
         })
     });
     if (!res.ok) throw new Error('Failed to create project');
