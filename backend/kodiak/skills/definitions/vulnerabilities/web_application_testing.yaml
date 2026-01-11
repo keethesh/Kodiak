@@ -1,0 +1,77 @@
+name: web_application_testing
+description: Comprehensive web application security testing methodology
+techniques:
+  - "Information gathering and reconnaissance"
+  - "Input validation testing"
+  - "Authentication and session management testing"
+  - "Authorization testing"
+  - "Data validation testing"
+  - "Error handling analysis"
+  - "Cryptography testing"
+  - "Business logic testing"
+tools:
+  - browser_navigate
+  - nuclei
+  - httpx
+  - sqlmap
+  - commix
+knowledge: |
+  Web application security testing follows a systematic methodology to identify
+  vulnerabilities across all layers of the application stack.
+  
+  ## Testing Phases:
+  1. **Information Gathering**: Map application architecture and technologies
+  2. **Authentication Testing**: Test login mechanisms and session handling
+  3. **Authorization Testing**: Verify access controls and privilege escalation
+  4. **Input Validation**: Test all input vectors for injection vulnerabilities
+  5. **Session Management**: Analyze session tokens and lifecycle
+  6. **Error Handling**: Test error conditions and information disclosure
+  7. **Business Logic**: Test application-specific workflows and logic
+  
+  ## Common Vulnerabilities:
+  - **OWASP Top 10**: Focus on most critical web application risks
+  - **Injection Flaws**: SQL, NoSQL, LDAP, OS command injection
+  - **Broken Authentication**: Weak passwords, session fixation, brute force
+  - **Sensitive Data Exposure**: Unencrypted data, weak cryptography
+  - **XML External Entities (XXE)**: XML parser vulnerabilities
+  - **Broken Access Control**: IDOR, privilege escalation, path traversal
+  - **Security Misconfiguration**: Default configs, verbose errors
+  - **Cross-Site Scripting (XSS)**: Reflected, stored, DOM-based
+  - **Insecure Deserialization**: Object injection attacks
+  - **Using Components with Known Vulnerabilities**: Outdated libraries
+  
+  ## Testing Methodology:
+  - **Black Box**: No knowledge of internal structure
+  - **Gray Box**: Limited knowledge of architecture
+  - **White Box**: Full access to source code and documentation
+examples:
+  - title: "Application Fingerprinting"
+    description: "Identify web technologies and frameworks"
+    payload: "Check HTTP headers, error pages, and static files"
+    validation: "Analyze Server, X-Powered-By, and other revealing headers"
+  - title: "Directory Enumeration"
+    description: "Discover hidden directories and files"
+    payload: "/admin/, /backup/, /config/, /.git/, /test/"
+    validation: "Check for accessible administrative interfaces"
+  - title: "Parameter Pollution"
+    description: "Test HTTP parameter pollution vulnerabilities"
+    payload: "param=value1&param=value2"
+    validation: "Analyze how application handles duplicate parameters"
+  - title: "HTTP Method Testing"
+    description: "Test for dangerous HTTP methods"
+    payload: "OPTIONS, PUT, DELETE, TRACE, CONNECT"
+    validation: "Check if dangerous methods are enabled"
+  - title: "Cookie Security Testing"
+    description: "Analyze cookie security attributes"
+    payload: "Check Secure, HttpOnly, SameSite attributes"
+    validation: "Verify cookies are properly protected"
+validation_methods:
+  - "Verify vulnerabilities with proof-of-concept exploits"
+  - "Test from different user privilege levels"
+  - "Validate findings across different browsers and platforms"
+  - "Check for false positives through manual verification"
+  - "Document impact and exploitability of findings"
+references:
+  - "https://owasp.org/www-project-web-security-testing-guide/"
+  - "https://owasp.org/www-project-top-ten/"
+  - "https://portswigger.net/web-security"

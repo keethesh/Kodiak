@@ -1,0 +1,78 @@
+name: nodejs_testing
+description: Node.js and Express.js security testing techniques
+techniques:
+  - "Package.json enumeration"
+  - "Node.js prototype pollution"
+  - "Express.js route enumeration"
+  - "NPM dependency vulnerabilities"
+  - "Server-side JavaScript injection"
+  - "Path traversal in Node.js"
+tools:
+  - browser_navigate
+  - nuclei
+  - httpx
+knowledge: |
+  Node.js applications have specific security considerations related to JavaScript runtime,
+  NPM packages, and common frameworks like Express.js.
+  
+  ## Common Node.js Vulnerabilities:
+  1. **Prototype Pollution**: Modify Object.prototype
+  2. **Package Vulnerabilities**: Outdated NPM dependencies
+  3. **Path Traversal**: Directory traversal in file operations
+  4. **Code Injection**: eval(), Function() constructor abuse
+  5. **Deserialization**: Unsafe JSON parsing
+  
+  ## Node.js Specific Files:
+  - `package.json` - Project metadata and dependencies
+  - `package-lock.json` - Exact dependency versions
+  - `node_modules/` - Installed packages directory
+  - `.env` - Environment variables
+  - `server.js` / `app.js` - Main application files
+  
+  ## Express.js Patterns:
+  - Route handlers and middleware
+  - Static file serving
+  - Template engines (EJS, Pug, Handlebars)
+  - Session management
+  - CORS configuration
+  
+  ## Security Headers:
+  - Helmet.js middleware for security headers
+  - CORS configuration
+  - Rate limiting middleware
+examples:
+  - title: "Package.json Exposure"
+    description: "Check for exposed package.json file"
+    payload: "/package.json"
+    validation: "Look for Node.js dependencies and version information"
+  - title: "Prototype Pollution Test"
+    description: "Test for prototype pollution vulnerability"
+    payload: '{"__proto__":{"polluted":"true"}}'
+    validation: "Check if prototype pollution affects application behavior"
+  - title: "Path Traversal"
+    description: "Test for directory traversal in Node.js file operations"
+    payload: "../../../etc/passwd"
+    validation: "Look for system file contents in response"
+  - title: "Server-Side JavaScript Injection"
+    description: "Test for code injection in Node.js"
+    payload: "'; process.exit(1); //"
+    validation: "Check if application crashes or behaves unexpectedly"
+  - title: "Environment File Access"
+    description: "Try to access environment configuration files"
+    payload: "/.env"
+    validation: "Look for environment variables and secrets"
+  - title: "Node Modules Enumeration"
+    description: "Enumerate installed NPM packages"
+    payload: "/node_modules/express/package.json"
+    validation: "Check for package information and versions"
+validation_methods:
+  - "Check for Node.js specific error messages and stack traces"
+  - "Look for Express.js powered by headers"
+  - "Test for common Node.js file paths and endpoints"
+  - "Analyze package.json for vulnerable dependencies"
+  - "Test prototype pollution with various payloads"
+  - "Check for exposed environment variables"
+references:
+  - "https://nodejs.org/en/docs/guides/security/"
+  - "https://expressjs.com/en/advanced/best-practice-security.html"
+  - "https://github.com/goldbergyoni/nodebestpractices#6-security-best-practices"

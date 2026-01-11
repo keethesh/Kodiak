@@ -1,0 +1,60 @@
+name: sql_injection
+description: Advanced SQL injection detection and exploitation techniques
+techniques:
+  - "Union-based SQL injection"
+  - "Boolean-based blind SQL injection"
+  - "Time-based blind SQL injection"
+  - "Error-based SQL injection"
+  - "Second-order SQL injection"
+  - "NoSQL injection techniques"
+tools:
+  - sqlmap
+  - nuclei
+  - browser_navigate
+knowledge: |
+  SQL injection occurs when user input is improperly sanitized and directly concatenated into SQL queries.
+  
+  ## Detection Strategies:
+  1. **Parameter Testing**: Test all input parameters (GET, POST, headers, cookies)
+  2. **Error Analysis**: Look for database error messages revealing backend DBMS
+  3. **Timing Analysis**: Use time delays to detect blind SQL injection
+  4. **Boolean Logic**: Test true/false conditions in blind scenarios
+  
+  ## Advanced Techniques:
+  - **WAF Bypass**: Use encoding, comments, and alternative syntax
+  - **Privilege Escalation**: Exploit DBMS-specific functions for system access
+  - **Data Exfiltration**: Extract sensitive data through various channels
+  - **Second-Order**: Inject payloads that execute in different contexts
+  
+  ## Database-Specific Payloads:
+  - **MySQL**: UNION SELECT, INTO OUTFILE, LOAD_FILE()
+  - **PostgreSQL**: COPY, pg_read_file(), pg_ls_dir()
+  - **MSSQL**: xp_cmdshell, OPENROWSET, bulk insert
+  - **Oracle**: UTL_FILE, UTL_HTTP, DBMS_XMLGEN
+examples:
+  - title: "Basic Union Injection"
+    description: "Standard union-based SQL injection"
+    payload: "' UNION SELECT 1,2,3,database(),user(),version()--"
+    validation: "Check if database information is reflected in response"
+  - title: "Boolean Blind Injection"
+    description: "Extract data character by character"
+    payload: "' AND (SELECT SUBSTRING(database(),1,1))='a'--"
+    validation: "Compare response differences for true/false conditions"
+  - title: "Time-Based Blind Injection"
+    description: "Use time delays to confirm injection"
+    payload: "'; WAITFOR DELAY '00:00:05'--"
+    validation: "Measure response time - delays indicate successful injection"
+  - title: "NoSQL Injection (MongoDB)"
+    description: "Bypass authentication in NoSQL databases"
+    payload: "username[$ne]=null&password[$ne]=null"
+    validation: "Check if authentication is bypassed"
+validation_methods:
+  - "Verify database error messages in responses"
+  - "Test mathematical operations (1+1=2) in numeric contexts"
+  - "Use time delays to confirm blind injection points"
+  - "Extract known database information to confirm access"
+  - "Test different payloads across multiple parameters"
+references:
+  - "https://owasp.org/www-community/attacks/SQL_Injection"
+  - "https://portswigger.net/web-security/sql-injection"
+  - "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection"

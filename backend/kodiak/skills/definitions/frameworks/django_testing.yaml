@@ -1,0 +1,76 @@
+name: django_testing
+description: Django framework-specific security testing techniques
+techniques:
+  - "Django admin interface testing"
+  - "CSRF token bypass methods"
+  - "Template injection attacks"
+  - "ORM injection techniques"
+  - "Debug mode exploitation"
+  - "Static file enumeration"
+tools:
+  - browser_navigate
+  - nuclei
+  - httpx
+  - subfinder
+knowledge: |
+  Django is a high-level Python web framework with specific security features and potential vulnerabilities.
+  
+  ## Common Django Vulnerabilities:
+  1. **Debug Mode Exposure**: Sensitive information in debug pages
+  2. **Admin Interface**: Default admin panel at /admin/
+  3. **CSRF Protection**: Django's CSRF middleware can be bypassed
+  4. **Template Injection**: Server-side template injection in Django templates
+  5. **ORM Injection**: SQL injection through Django ORM misuse
+  
+  ## Django-Specific Endpoints:
+  - `/admin/` - Django admin interface
+  - `/static/` - Static files directory
+  - `/media/` - User-uploaded files
+  - `/__debug__/` - Django Debug Toolbar (if enabled)
+  
+  ## Configuration Files:
+  - `settings.py` - Main configuration file
+  - `urls.py` - URL routing configuration
+  - `manage.py` - Django management script
+  - `requirements.txt` - Python dependencies
+  
+  ## Security Features to Test:
+  - **CSRF Protection**: Test CSRF token validation
+  - **XSS Protection**: Django auto-escapes templates
+  - **SQL Injection**: ORM provides protection but can be bypassed
+  - **Clickjacking**: X-Frame-Options middleware
+examples:
+  - title: "Django Admin Discovery"
+    description: "Check for accessible Django admin interface"
+    payload: "/admin/"
+    validation: "Look for Django admin login page"
+  - title: "Debug Mode Detection"
+    description: "Test for Django debug mode exposure"
+    payload: "/nonexistent-page-12345"
+    validation: "Check for Django debug page with traceback"
+  - title: "Static File Enumeration"
+    description: "Enumerate static files and directories"
+    payload: "/static/admin/css/base.css"
+    validation: "Check if Django admin CSS files are accessible"
+  - title: "Template Injection"
+    description: "Test for server-side template injection"
+    payload: "{{7*7}}"
+    validation: "Look for '49' in response indicating template evaluation"
+  - title: "CSRF Token Bypass"
+    description: "Test CSRF protection bypass methods"
+    payload: "Content-Type: text/plain"
+    validation: "Check if CSRF validation is bypassed with different content types"
+  - title: "Django Secret Key Exposure"
+    description: "Look for exposed Django secret key"
+    payload: "/settings.py"
+    validation: "Search for SECRET_KEY in accessible files"
+validation_methods:
+  - "Check HTTP response headers for Django-specific headers"
+  - "Look for Django admin interface at common paths"
+  - "Test for debug mode by accessing non-existent pages"
+  - "Enumerate static and media directories"
+  - "Test CSRF protection with different HTTP methods"
+  - "Search for Django-specific error messages"
+references:
+  - "https://docs.djangoproject.com/en/stable/topics/security/"
+  - "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information"

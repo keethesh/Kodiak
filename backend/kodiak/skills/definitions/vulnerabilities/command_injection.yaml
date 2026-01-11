@@ -1,0 +1,75 @@
+name: command_injection
+description: OS command injection detection and exploitation techniques
+techniques:
+  - "Direct command injection"
+  - "Blind command injection"
+  - "Time-based command injection"
+  - "Output-based command injection"
+  - "Filter bypass techniques"
+  - "Command chaining methods"
+tools:
+  - commix
+  - nuclei
+  - terminal_execute
+knowledge: |
+  Command injection occurs when an application passes unsafe user input to a system shell,
+  allowing attackers to execute arbitrary operating system commands.
+  
+  ## Injection Contexts:
+  1. **Direct Injection**: Commands executed and output returned
+  2. **Blind Injection**: Commands executed but no direct output
+  3. **Time-Based**: Use delays to confirm command execution
+  4. **Error-Based**: Trigger errors to confirm injection
+  
+  ## Detection Methods:
+  - **Command Separators**: Use ;, &&, ||, |, `, $()
+  - **Time Delays**: sleep, ping, timeout commands
+  - **File Operations**: Create, read, or modify files
+  - **Network Requests**: Make outbound connections
+  
+  ## Operating System Specifics:
+  - **Linux/Unix**: bash, sh, curl, wget, nc
+  - **Windows**: cmd, powershell, ping, timeout
+  - **Cross-Platform**: Python, node, java execution
+  
+  ## Advanced Techniques:
+  - **Filter Evasion**: Use alternative command syntax
+  - **Encoding**: Base64, hex, URL encoding
+  - **Environment Variables**: Exploit $PATH, $HOME
+  - **Wildcard Abuse**: Use *, ?, [] for obfuscation
+examples:
+  - title: "Basic Command Injection"
+    description: "Simple command chaining with semicolon"
+    payload: "; whoami"
+    validation: "Check if username appears in response"
+  - title: "Blind Time-Based Injection"
+    description: "Use sleep command to confirm injection"
+    payload: "; sleep 5"
+    validation: "Measure response time - 5+ second delay indicates success"
+  - title: "Output Redirection"
+    description: "Redirect command output to web-accessible location"
+    payload: "; whoami > /var/www/html/output.txt"
+    validation: "Check if output.txt is accessible via web browser"
+  - title: "Backtick Command Substitution"
+    description: "Use backticks for command substitution"
+    payload: "`whoami`"
+    validation: "Look for username in response or error messages"
+  - title: "Filter Bypass - Concatenation"
+    description: "Bypass keyword filters using string concatenation"
+    payload: "; who$()ami"
+    validation: "Test if empty variable expansion bypasses filters"
+  - title: "Windows Command Injection"
+    description: "Windows-specific command injection"
+    payload: "& echo %USERNAME%"
+    validation: "Check if Windows username appears in response"
+validation_methods:
+  - "Execute 'whoami' or 'id' commands to identify current user"
+  - "Use 'sleep' or 'ping' commands to create time delays"
+  - "Create temporary files and check if they exist"
+  - "Make DNS queries to controlled domains"
+  - "Execute 'uname -a' or 'systeminfo' for system information"
+  - "Test different command separators (;, &&, ||, |)"
+references:
+  - "https://owasp.org/www-community/attacks/Command_Injection"
+  - "https://portswigger.net/web-security/os-command-injection"
+  - "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Command%20Injection"

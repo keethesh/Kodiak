@@ -1,0 +1,76 @@
+name: xss_detection
+description: Cross-Site Scripting (XSS) detection and exploitation techniques
+techniques:
+  - "Reflected XSS detection"
+  - "Stored XSS identification"
+  - "DOM-based XSS analysis"
+  - "Blind XSS testing"
+  - "CSP bypass techniques"
+  - "Filter evasion methods"
+tools:
+  - browser_navigate
+  - nuclei
+  - httpx
+knowledge: |
+  Cross-Site Scripting (XSS) allows attackers to inject malicious scripts into web applications
+  that are then executed in other users' browsers.
+  
+  ## XSS Types:
+  1. **Reflected XSS**: Payload reflected immediately in response
+  2. **Stored XSS**: Payload stored and executed when viewed by others
+  3. **DOM XSS**: Client-side script manipulation without server involvement
+  4. **Blind XSS**: Payload executed in unseen contexts (admin panels, logs)
+  
+  ## Detection Strategies:
+  - **Input Reflection**: Test if user input is reflected in HTML output
+  - **Context Analysis**: Identify where input appears (HTML, attributes, JavaScript)
+  - **Filter Testing**: Probe for input sanitization and filtering
+  - **Encoding Analysis**: Test different encoding methods
+  
+  ## Advanced Techniques:
+  - **CSP Bypass**: Exploit Content Security Policy weaknesses
+  - **Filter Evasion**: Use alternative syntax and encoding
+  - **Polyglot Payloads**: Payloads that work in multiple contexts
+  - **Event Handler Injection**: Exploit HTML event attributes
+  
+  ## Context-Specific Payloads:
+  - **HTML Context**: <script>, <img>, <svg> tags
+  - **Attribute Context**: Event handlers, href attributes
+  - **JavaScript Context**: String escaping, template literals
+  - **CSS Context**: Expression(), url(), @import
+examples:
+  - title: "Basic Reflected XSS"
+    description: "Simple script injection in HTML context"
+    payload: "<script>alert('XSS')</script>"
+    validation: "Check if JavaScript alert executes in browser"
+  - title: "Attribute Context XSS"
+    description: "Break out of HTML attribute context"
+    payload: "\" onmouseover=\"alert('XSS')\""
+    validation: "Verify if event handler is injected into attribute"
+  - title: "JavaScript Context XSS"
+    description: "Escape JavaScript string context"
+    payload: "'; alert('XSS'); //"
+    validation: "Check if JavaScript execution occurs"
+  - title: "SVG-based XSS"
+    description: "Use SVG elements for script execution"
+    payload: "<svg onload=alert('XSS')>"
+    validation: "Verify SVG onload event triggers"
+  - title: "Filter Bypass - Double Encoding"
+    description: "Bypass filters using double URL encoding"
+    payload: "%253Cscript%253Ealert('XSS')%253C/script%253E"
+    validation: "Check if double-encoded payload executes"
+  - title: "DOM XSS via URL Fragment"
+    description: "Exploit client-side URL processing"
+    payload: "#<img src=x onerror=alert('XSS')>"
+    validation: "Test if URL fragment is processed by JavaScript"
+validation_methods:
+  - "Execute JavaScript alert() or console.log() functions"
+  - "Inject unique identifiers and search for them in response"
+  - "Test payload execution in different browser contexts"
+  - "Use browser developer tools to verify DOM manipulation"
+  - "Check for HTTP requests to external domains (for blind XSS)"
+  - "Analyze Content Security Policy headers for bypass opportunities"
+references:
+  - "https://owasp.org/www-community/attacks/xss/"
+  - "https://portswigger.net/web-security/cross-site-scripting"
+  - "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XSS%20Injection"

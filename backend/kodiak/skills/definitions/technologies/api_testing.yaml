@@ -1,0 +1,79 @@
+name: api_testing
+description: REST API and GraphQL security testing techniques
+techniques:
+  - "REST API endpoint enumeration"
+  - "GraphQL introspection and testing"
+  - "API authentication bypass"
+  - "Rate limiting and DoS testing"
+  - "Input validation in API parameters"
+  - "API versioning vulnerabilities"
+  - "CORS misconfiguration testing"
+tools:
+  - httpx
+  - nuclei
+  - browser_navigate
+knowledge: |
+  API security testing focuses on identifying vulnerabilities in REST APIs,
+  GraphQL endpoints, and other API architectures.
+  
+  ## API Types:
+  1. **REST APIs**: RESTful web services using HTTP methods
+  2. **GraphQL**: Query language and runtime for APIs
+  3. **SOAP**: Simple Object Access Protocol
+  4. **gRPC**: High-performance RPC framework
+  
+  ## Common API Vulnerabilities:
+  - **Broken Object Level Authorization**: IDOR in API endpoints
+  - **Broken User Authentication**: Weak API authentication
+  - **Excessive Data Exposure**: APIs returning sensitive data
+  - **Lack of Resources & Rate Limiting**: DoS vulnerabilities
+  - **Broken Function Level Authorization**: Privilege escalation
+  - **Mass Assignment**: Binding client input to data models
+  - **Security Misconfiguration**: Default configs, CORS issues
+  - **Injection**: SQL, NoSQL, Command injection in API parameters
+  - **Improper Assets Management**: Outdated API versions
+  - **Insufficient Logging & Monitoring**: Lack of security monitoring
+  
+  ## Testing Strategies:
+  - **Endpoint Discovery**: Find undocumented API endpoints
+  - **Parameter Fuzzing**: Test all input parameters
+  - **Authentication Testing**: Test API keys, tokens, OAuth
+  - **Authorization Testing**: Test access controls between users
+  - **Rate Limiting**: Test for DoS and brute force protection
+  - **Data Validation**: Test input validation and sanitization
+examples:
+  - title: "API Endpoint Discovery"
+    description: "Discover API endpoints through common patterns"
+    payload: "/api/v1/, /api/v2/, /rest/, /graphql"
+    validation: "Check for API documentation or endpoint responses"
+  - title: "GraphQL Introspection"
+    description: "Extract GraphQL schema information"
+    payload: "query IntrospectionQuery { __schema { types { name } } }"
+    validation: "Check if introspection reveals sensitive schema details"
+  - title: "IDOR in API Parameters"
+    description: "Test for insecure direct object references"
+    payload: "GET /api/users/123 -> GET /api/users/124"
+    validation: "Check if user can access other users' data"
+  - title: "Mass Assignment Attack"
+    description: "Test for mass assignment vulnerabilities"
+    payload: '{"username":"test","password":"pass","role":"admin"}'
+    validation: "Check if additional parameters are processed"
+  - title: "API Version Testing"
+    description: "Test older API versions for vulnerabilities"
+    payload: "/api/v1/users vs /api/v2/users"
+    validation: "Check if older versions have weaker security"
+  - title: "CORS Misconfiguration"
+    description: "Test Cross-Origin Resource Sharing configuration"
+    payload: "Origin: https://evil.com"
+    validation: "Check if API allows requests from arbitrary origins"
+validation_methods:
+  - "Test API endpoints with different HTTP methods"
+  - "Verify authentication and authorization controls"
+  - "Test rate limiting and input validation"
+  - "Check for information disclosure in error messages"
+  - "Validate CORS configuration and security headers"
+  - "Test API versioning and backward compatibility issues"
+references:
+  - "https://owasp.org/www-project-api-security/"
+  - "https://github.com/OWASP/API-Security/blob/master/2019/en/dist/owasp-api-security-top-10.pdf"
+  - "https://graphql.org/learn/introspection/"
