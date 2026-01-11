@@ -10,29 +10,36 @@ class KodiakAgent:
         self.agent_id = agent_id
         self.model_name = model_name
         
-    async def think(self, history: List[Dict[str, Any]]) -> Any:
+    async def think(self, history: List[Dict[str, Any]], allowed_tools: List[str] = None, system_prompt: str = None) -> Any:
         """
         Ask the LLM what to do next given the conversation history.
         Returns the full response object from LiteLLM (which contains tool_calls).
+        
+        :param allowed_tools: List of tool names to expose to the LLM. If None, uses all.
+        :param system_prompt: Custom system prompt for the current phase.
         """
         from litellm import acompletion
         from kodiak.core.tools.inventory import inventory
         import os
 
-        # Get all available tools
-        tools = [t.to_openai_schema() for t in inventory._tools.values()]
+        # Get available tools
+        all_tools = inventory._tools
+        if allowed_tools:
+            # Filter tools
+            tools = [t.to_openai_schema() for name, t in all_tools.items() if name in allowed_tools]
+        else:
+            tools = [t.to_openai_schema() for t in all_tools.values()]
         
         # System Prompt
+        content = system_prompt or (
+            "You are KODIAK, an advanced autonomous penetration testing agent. "
+            "Your goal is to scan, enumerate, and identify vulnerabilities in the target scope. "
+            "Result format: Always call a tool or provide a final summary."
+        )
+        
         system_msg = {
             "role": "system",
-            "content": (
-                "You are KODIAK, an advanced autonomous penetration testing agent. "
-                "Your goal is to scan, enumerate, and identify vulnerabilities in the target scope. "
-                "You have access to a suite of security tools. Use them ethically and effectively. "
-                "Always start with Recon (Subfinder/Httpx) before Active Scanning (Nmap/Nuclei). "
-                "Use the 'terminal_execute' tool only when necessary for tasks not covered by other tools. "
-                "Result format: Always call a tool or provide a final summary."
-            )
+            "content": content
         }
         
         # Prepare messages

@@ -75,74 +75,112 @@ class Orchestrator:
                         # For now, simplistic logic
                         pass
 
-                    # B. AI-Driven Loop
                     if target:
-                        logger.info(f"Orchestrator: Starting AI Loop on {target}")
+                        logger.info(f"Orchestrator: Starting Phased Scan on {target}")
                         
-                        # Initialize History
-                        # TODO: Load history from DB if resuming
-                        history = []
-                        history.append({
+                        # --- PHASE 1: RECONNAISSANCE ---
+                        logger.info(">>> PHASE 1: RECONNAISSANCE <<<")
+                        history_recon = []
+                        history_recon.append({
                             "role": "user", 
-                            "content": f"Perform a comprehensive penetration test on {target}. Start with subdomain enumeration, then probe for live hosts, then scan ports and vulnerabilities. Report all findings."
+                            "content": f"Begin RECON phase for {target}. Find subdomains and live hosts. Do NOT run active scans yet."
                         })
                         
-                        # LIMIT steps to prevent infinite loops and cost
-                        MAX_STEPS = 15
+                        recon_tools = ["subfinder_enumerate", "httpx_probe", "terminal_execute"]
+                        recon_prompt = (
+                            "You are KODIAK (Phase: RECON). Focus ONLY on discovery. "
+                            "1. Use subfinder to find subdomains. "
+                            "2. Use httpx to check which ones are alive. "
+                            "3. Stop when you have a list of live targets."
+                        )
                         
-                        for step in range(MAX_STEPS):
-                            logger.info(f"Step {step+1}/{MAX_STEPS}")
-                            
-                            # 1. THINK
-                            # Check if we should stop? (handled by outer loop check)
-                            
+                        # Run Recon Loop (Short)
+                        for step in range(8):
                             try:
-                                response_message = await agent.think(history)
-                            except Exception as e:
-                                logger.error(f"LLM Error: {e}")
-                                break
+                                response = await agent.think(history_recon, allowed_tools=recon_tools, system_prompt=recon_prompt)
                                 
-                            # Append assistant response to history
-                            # We need to convert the message object to a dict for next iteration context
-                            # LiteLLM/OpenAI objects usually convert to dict easily
-                            # Pydantic v2 usually has model_dump()
-                            msg_dict = response_message.dict() if hasattr(response_message, 'dict') else dict(response_message)
-                            history.append(msg_dict)
-                            
-                            # 2. ACT
-                            if response_message.tool_calls:
-                                for tool_call in response_message.tool_calls:
-                                    fn_name = tool_call.function.name
-                                    fn_args_str = tool_call.function.arguments
-                                    import json
-                                    try:
-                                        fn_args = json.loads(fn_args_str)
-                                    except:
-                                        fn_args = {}
-                                    
-                                    logger.info(f"Agent executing: {fn_name}({fn_args})")
-                                    
-                                    # Execute with Persistence Context
-                                    # scan.project_id available from loaded scan object
-                                    result = await agent.act(
-                                        fn_name, 
-                                        fn_args, 
-                                        session=session, 
-                                        project_id=scan.project_id
-                                    )
-                                    
-                                    # Append result
-                                    history.append({
-                                        "role": "tool",
-                                        "tool_call_id": tool_call.id,
-                                        "content": json.dumps(result)
-                                    })
-                            else:
-                                # No tool calls? Maybe it's done or asking a question
-                                logger.info(f"Agent Message: {response_message.content}")
-                                if "Scan Completed" in str(response_message.content):
-                                    break
+                                # Process Response
+                                msg_dict = response.dict() if hasattr(response, 'dict') else dict(response)
+                                history_recon.append(msg_dict)
+                                
+                                if response.tool_calls:
+                                    for tool_call in response.tool_calls:
+                                        fn_name = tool_call.function.name
+                                        fn_args = {
+                                            **json.loads(tool_call.function.arguments),
+                                            # We assume orchestrator injects session implicitly via act() but JSON args are from LLM
+                                        } 
+                                        import json # ensure import
+                                        
+                                        logger.info(f"[Recon] Executing: {fn_name}")
+                                        result = await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id)
+                                        
+                                        history_recon.append({
+                                            "role": "tool",
+                                            "tool_call_id": tool_call.id,
+                                            "content": json.dumps(result)
+                                        })
+                                else:
+                                    logger.info(f"[Recon] Agent: {response.content}")
+                                    if "completed" in str(response.content).lower():
+                                        break
+                            except Exception as e:
+                                logger.error(f"Recon Error: {e}")
+                                break
                         
+                        # --- PHASE 2: ACTIVE SCANNING ---
+                        logger.info(">>> PHASE 2: ACTIVE SCANNING <<<")
+                        
+                        # In a real system, we'd query the DB for the assets found in Phase 1
+                        # For this MVP, we rely on the agent's own memory/history or we explicitly query DB.
+                        # Let's query the DB to give the agent a "Summary of Targets"
+                        
+                        # Fetch confirmed assets (simplification)
+                        # assets = await crud_asset.get_by_project(session, scan.project_id) 
+                        # We'll just prompt it to scan what it found or general target scope if DB query is complex here.
+                        
+                        history_exploit = []
+                        history_exploit.append({
+                            "role": "user", 
+                            "content": f"Begin EXPLOIT phase for {target}. Scan the live hosts identified in Phase 1 for vulnerabilities using Nmap and Nuclei."
+                        })
+                        
+                        exploit_tools = ["nmap", "nuclei_scan", "terminal_execute"]
+                        exploit_prompt = (
+                            "You are KODIAK (Phase: EXPLOIT). Your goal is to find vulnerabilities. "
+                            "1. Run Nmap on identified live hosts. "
+                            "2. Run Nuclei on web endpoints. "
+                            "3. Report critical findings."
+                        )
+                        
+                        for step in range(10):
+                             try:
+                                response = await agent.think(history_exploit, allowed_tools=exploit_tools, system_prompt=exploit_prompt)
+                                
+                                msg_dict = response.dict() if hasattr(response, 'dict') else dict(response)
+                                history_exploit.append(msg_dict)
+                                
+                                if response.tool_calls:
+                                    for tool_call in response.tool_calls:
+                                        fn_name = tool_call.function.name
+                                        fn_args = json.loads(tool_call.function.arguments)
+                                        
+                                        logger.info(f"[Exploit] Executing: {fn_name}")
+                                        result = await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id)
+                                        
+                                        history_exploit.append({
+                                            "role": "tool",
+                                            "tool_call_id": tool_call.id,
+                                            "content": json.dumps(result)
+                                        })
+                                else:
+                                    logger.info(f"[Exploit] Agent: {response.content}")
+                                    if "completed" in str(response.content).lower():
+                                        break
+                             except Exception as e:
+                                logger.error(f"Exploit Error: {e}")
+                                break
+
                         # Mark as completed
                         await crud_scan.update_status(session, scan_id, ScanStatus.COMPLETED)
                         return
