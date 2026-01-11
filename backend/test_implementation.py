@@ -78,10 +78,19 @@ async def test_agent():
     
     try:
         from kodiak.core.agent import KodiakAgent
+        from kodiak.core.tools.inventory import inventory
+        from kodiak.api.events import EventManager
+        from kodiak.services.websocket_manager import manager as websocket_manager
+        from unittest.mock import Mock
         
-        # Create agent with skills
+        # Create mock event manager
+        event_manager = EventManager(websocket_manager)
+        
+        # Create agent with required dependencies
         agent = KodiakAgent(
             agent_id="test-agent-001",
+            tool_inventory=inventory,
+            event_manager=event_manager,
             role="scout",
             skills=["sql_injection", "web_application_testing"]
         )

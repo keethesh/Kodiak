@@ -7,7 +7,7 @@ import pytest
 from kodiak.core.agent import KodiakAgent
 from kodiak.core.tools.inventory import ToolInventory
 from kodiak.api.events import EventManager
-from kodiak.services.executor import Orchestrator
+from kodiak.core.orchestrator import Orchestrator
 from unittest.mock import Mock, AsyncMock
 
 
