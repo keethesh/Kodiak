@@ -45,6 +45,7 @@ export default function HiveGraph({ nodes, links }: HiveGraphProps) {
         })));
 
         const visEdges = new DataSet(links.map(l => ({
+            id: `${l.source}-${l.target}`, // Fix: vis-data DataSet requires an 'id'
             from: l.source,
             to: l.target,
             label: l.label,
@@ -81,12 +82,20 @@ export default function HiveGraph({ nodes, links }: HiveGraphProps) {
                 zoomView: true
             },
             height: '100%',
+            height: '100%',
             width: '100%'
         };
 
+        // Explicitly assert data type to match vis-network's expected loose types if needed
+        // but adding 'id' usually solves the structure mismatch.
+        // @ts-ignore
+        const networkData = { nodes: visNodes, edges: visEdges };
+
         // Initialize Network
         // @ts-ignore - vis-network types can be finicky
-        networkRef.current = new Network(containerRef.current, data, options);
+        // Initialize Network
+        // @ts-ignore
+        networkRef.current = new Network(containerRef.current, networkData, options);
 
         return () => {
             if (networkRef.current) {
