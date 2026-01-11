@@ -75,48 +75,68 @@ class Orchestrator:
                         # For now, simplistic logic
                         pass
 
-                    # B. Full Recon Workflow
+                    # B. AI-Driven Loop
                     if target:
-                        logger.info(f"Orchestrator: Starting Recon on {target}")
+                        logger.info(f"Orchestrator: Starting AI Loop on {target}")
                         
-                        # Step 1: Subdomain Enumeration
-                        logger.info("Step 1: Subfinder")
-                        sub_result = await agent.act("subfinder_enumerate", {"domain": target})
-                        subdomains = sub_result.get("data", {}).get("subdomains", [])
-                        logger.info(f"Found {len(subdomains)} subdomains.")
+                        # Initialize History
+                        # TODO: Load history from DB if resuming
+                        history = []
+                        history.append({
+                            "role": "user", 
+                            "content": f"Perform a comprehensive penetration test on {target}. Start with subdomain enumeration, then probe for live hosts, then scan ports and vulnerabilities. Report all findings."
+                        })
                         
-                        # Step 2: Live Host Probing
-                        logger.info("Step 2: Httpx")
-                        # Combine target + subdomains for probing
-                        probe_targets = [target] + subdomains
-                        # Join for httpx CLI (comma separated or handled by tool logic)
-                        # The tool logic currently takes a single target string or handles lists?
-                        # Let's simple probe the main target first for reliability in this demo
-                        # TODO: Loop through list or improve tool to handle bulk
+                        # LIMIT steps to prevent infinite loops and cost
+                        MAX_STEPS = 15
                         
-                        live_hosts = []
-                        for host in probe_targets[:5]: # Limit to 5 for speed in demo
-                            probe_res = await agent.act("httpx_probe", {"target": host})
-                            if probe_res.get("data", {}).get("live_hosts", 0) > 0:
-                                live_hosts.append(host)
-                        
-                        logger.info(f"Live Hosts: {live_hosts}")
-                        
-                        # Step 3: Nmap & Nuclei on Live Hosts
-                        for host in live_hosts:
-                            logger.info(f"Step 3: Nmap on {host}")
-                            await agent.act("nmap", {
-                                "target": host,
-                                "ports": "80,443,8080",
-                                "fast_mode": True
-                            })
+                        for step in range(MAX_STEPS):
+                            logger.info(f"Step {step+1}/{MAX_STEPS}")
                             
-                            logger.info(f"Step 4: Nuclei on {host}")
-                            await agent.act("nuclei_scan", {
-                                "target": host,
-                                "tags": "cve,misconfig"
-                            })
-
+                            # 1. THINK
+                            # Check if we should stop? (handled by outer loop check)
+                            
+                            try:
+                                response_message = await agent.think(history)
+                            except Exception as e:
+                                logger.error(f"LLM Error: {e}")
+                                break
+                                
+                            # Append assistant response to history
+                            # We need to convert the message object to a dict for next iteration context
+                            # LiteLLM/OpenAI objects usually convert to dict easily
+                            # Pydantic v2 usually has model_dump()
+                            msg_dict = response_message.dict() if hasattr(response_message, 'dict') else dict(response_message)
+                            history.append(msg_dict)
+                            
+                            # 2. ACT
+                            if response_message.tool_calls:
+                                for tool_call in response_message.tool_calls:
+                                    fn_name = tool_call.function.name
+                                    fn_args_str = tool_call.function.arguments
+                                    import json
+                                    try:
+                                        fn_args = json.loads(fn_args_str)
+                                    except:
+                                        fn_args = {}
+                                    
+                                    logger.info(f"Agent executing: {fn_name}({fn_args})")
+                                    
+                                    # Execute
+                                    result = await agent.act(fn_name, fn_args)
+                                    
+                                    # Append result
+                                    history.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "content": json.dumps(result)
+                                    })
+                            else:
+                                # No tool calls? Maybe it's done or asking a question
+                                logger.info(f"Agent Message: {response_message.content}")
+                                if "Scan Completed" in str(response_message.content):
+                                    break
+                        
                         # Mark as completed
                         await crud_scan.update_status(session, scan_id, ScanStatus.COMPLETED)
                         return

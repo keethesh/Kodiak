@@ -27,6 +27,17 @@ class KodiakTool(ABC):
         """JSON Schema for the tool parameters."""
         return {}
     
+    def to_openai_schema(self) -> Dict[str, Any]:
+        """Converts the tool definition to OpenAI function schema."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters_schema
+            }
+        }
+    
     # Optional Pydantic support
     args_schema: Type[BaseModel] | None = None
 

@@ -10,9 +10,47 @@ class KodiakAgent:
         self.agent_id = agent_id
         self.model_name = model_name
         
-    async def think(self, context: Dict[str, Any]) -> List[Any]:
-        # TODO: Implement LiteLLM call here
-        pass
+    async def think(self, history: List[Dict[str, Any]]) -> Any:
+        """
+        Ask the LLM what to do next given the conversation history.
+        Returns the full response object from LiteLLM (which contains tool_calls).
+        """
+        from litellm import acompletion
+        from kodiak.core.tools.inventory import inventory
+        import os
+
+        # Get all available tools
+        tools = [t.to_openai_schema() for t in inventory._tools.values()]
+        
+        # System Prompt
+        system_msg = {
+            "role": "system",
+            "content": (
+                "You are KODIAK, an advanced autonomous penetration testing agent. "
+                "Your goal is to scan, enumerate, and identify vulnerabilities in the target scope. "
+                "You have access to a suite of security tools. Use them ethically and effectively. "
+                "Always start with Recon (Subfinder/Httpx) before Active Scanning (Nmap/Nuclei). "
+                "Use the 'terminal_execute' tool only when necessary for tasks not covered by other tools. "
+                "Result format: Always call a tool or provide a final summary."
+            )
+        }
+        
+        # Prepare messages
+        messages = [system_msg] + history
+        
+        # Call LLM
+        # We use a default generic model if not specified, but settings.KODIAK_MODEL should be set.
+        model = self.model_name or "gpt-3.5-turbo" 
+        
+        # Using OpenAI-compatible tool calling
+        response = await acompletion(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        
+        return response.choices[0].message
 
     async def act(self, tool_name: str, args: Dict[str, Any]) -> Any:
         """
