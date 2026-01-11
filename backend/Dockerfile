@@ -9,7 +9,19 @@ ENV PYTHONUNBUFFERED=1 \
     POETRY_HOME="/opt/poetry" \
     POETRY_VIRTUALENVS_IN_PROJECT=true \
     POETRY_NO_INTERACTION=1 \
-    # Add poetry and venv to PATH
+    PATH="/app/.venv/bin:$PATH"
+
+# Install system dependencies and Tools (Nmap, etc.)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        netcat-traditional \
+        nmap \
+        build-essential \
+        libpq-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Poetry via pip (simpler path management in Docker)
 RUN pip install poetry==1.7.1
 
