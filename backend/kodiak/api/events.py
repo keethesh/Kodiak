@@ -1,8 +1,15 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import asyncio
 import json
+import time
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
+
+# Import the existing WebSocketManager
+from kodiak.services.websocket_manager import manager as websocket_manager
+from kodiak.core.error_handling import (
+    ErrorHandler, EventBroadcastingError, handle_errors, ErrorCategory
+)
 
 class ExternalEvent:
     """
@@ -20,9 +27,202 @@ class ExternalEvent:
             "project_id": self.project_id
         })
 
+class EventManager:
+    """
+    Unified event manager for tool execution events.
+    Integrates with the existing WebSocketManager for client notifications.
+    """
+    def __init__(self, websocket_manager):
+        self.websocket_manager = websocket_manager
+        logger.info("EventManager initialized")
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_tool_start(self, tool_name: str, target: str, agent_id: str, scan_id: str = None):
+        """Broadcast tool execution start event"""
+        try:
+            logger.info(f"Tool {tool_name} started by agent {agent_id} on target {target}")
+            
+            if scan_id:
+                await self.websocket_manager.send_tool_update(
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    status="started",
+                    data={
+                        "target": target,
+                        "agent_id": agent_id,
+                        "timestamp": time.time()
+                    }
+                )
+            
+            # Also send agent update
+            if scan_id:
+                await self.websocket_manager.send_agent_update(
+                    scan_id=scan_id,
+                    agent_id=agent_id,
+                    status="executing",
+                    message_text=f"Executing {tool_name} on {target}"
+                )
+                
+        except Exception as e:
+            raise EventBroadcastingError(
+                message=f"Failed to emit tool start event for {tool_name}",
+                event_type="tool_start",
+                details={
+                    "tool_name": tool_name,
+                    "target": target,
+                    "agent_id": agent_id,
+                    "scan_id": scan_id,
+                    "original_error": str(e)
+                }
+            )
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_tool_progress(self, tool_name: str, progress: dict, scan_id: str = None):
+        """Broadcast tool execution progress"""
+        try:
+            logger.debug(f"Tool {tool_name} progress: {progress}")
+            
+            if scan_id:
+                await self.websocket_manager.send_tool_update(
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    status="progress",
+                    data={
+                        "progress": progress,
+                        "timestamp": time.time()
+                    }
+                )
+                
+        except Exception as e:
+            raise EventBroadcastingError(
+                message=f"Failed to emit tool progress event for {tool_name}",
+                event_type="tool_progress",
+                details={
+                    "tool_name": tool_name,
+                    "progress": progress,
+                    "scan_id": scan_id,
+                    "original_error": str(e)
+                }
+            )
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_tool_complete(self, tool_name: str, result, scan_id: str = None):
+        """Broadcast tool execution completion"""
+        try:
+            status = "completed" if result.success else "failed"
+            logger.info(f"Tool {tool_name} {status}")
+            
+            if scan_id:
+                await self.websocket_manager.send_tool_update(
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    status=status,
+                    data={
+                        "success": result.success,
+                        "output": result.output if hasattr(result, 'output') else None,
+                        "error": result.error if hasattr(result, 'error') else None,
+                        "data": result.data if hasattr(result, 'data') else None,
+                        "timestamp": time.time()
+                    }
+                )
+                
+        except Exception as e:
+            raise EventBroadcastingError(
+                message=f"Failed to emit tool complete event for {tool_name}",
+                event_type="tool_complete",
+                details={
+                    "tool_name": tool_name,
+                    "result_success": getattr(result, 'success', None),
+                    "scan_id": scan_id,
+                    "original_error": str(e)
+                }
+            )
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_agent_thinking(self, agent_id: str, message: str, scan_id: str = None):
+        """Broadcast agent thinking event"""
+        try:
+            logger.debug(f"Agent {agent_id} thinking: {message}")
+            
+            if scan_id:
+                await self.websocket_manager.send_agent_update(
+                    scan_id=scan_id,
+                    agent_id=agent_id,
+                    status="thinking",
+                    message_text=message
+                )
+                
+        except Exception as e:
+            raise EventBroadcastingError(
+                message=f"Failed to emit agent thinking event for {agent_id}",
+                event_type="agent_thinking",
+                details={
+                    "agent_id": agent_id,
+                    "message": message,
+                    "scan_id": scan_id,
+                    "original_error": str(e)
+                }
+            )
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_discovery(self, discovery: Dict[str, Any], scan_id: str = None):
+        """Broadcast asset discovery event"""
+        try:
+            logger.info(f"New discovery: {discovery}")
+            
+            if scan_id:
+                await self.websocket_manager.send_finding_update(
+                    scan_id=scan_id,
+                    finding=discovery
+                )
+                
+        except Exception as e:
+            raise EventBroadcastingError(
+                message="Failed to emit discovery event",
+                event_type="discovery",
+                details={
+                    "discovery": discovery,
+                    "scan_id": scan_id,
+                    "original_error": str(e)
+                }
+            )
+    
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_error(self, error: Dict[str, Any], scan_id: str = None):
+        """Broadcast error event to clients"""
+        try:
+            logger.warning(f"Broadcasting error event: {error}")
+            
+            if scan_id:
+                await self.websocket_manager.send_error_notification(
+                    scan_id=scan_id,
+                    error=error
+                )
+                
+        except Exception as e:
+            # Don't create recursive error handling for error events
+            logger.error(f"Failed to emit error event: {e}")
+    
+    def get_health_status(self) -> Dict[str, Any]:
+        """Get EventManager health status"""
+        try:
+            ws_stats = self.websocket_manager.get_connection_stats()
+            return {
+                "healthy": True,
+                "websocket_manager": ws_stats.get("healthy", True),
+                "total_connections": ws_stats.get("total_scan_connections", 0) + ws_stats.get("global_connections", 0)
+            }
+        except Exception as e:
+            return {
+                "healthy": False,
+                "error": str(e)
+            }
+
+# Legacy ConnectionManager for backward compatibility
 class ConnectionManager:
     """
-    Manages WebSocket connections and broadcasts events.
+    Legacy connection manager - kept for backward compatibility.
+    Delegates to the new EventManager.
     """
     def __init__(self):
         # scan_id -> list of websockets
@@ -57,5 +257,6 @@ class ConnectionManager:
     async def emit(self, event: ExternalEvent, scan_id: str):
         await self.broadcast(event.to_json(), scan_id)
 
-# Global Manager
-event_manager = ConnectionManager()
+# Global instances
+event_manager = EventManager(websocket_manager)
+legacy_connection_manager = ConnectionManager()

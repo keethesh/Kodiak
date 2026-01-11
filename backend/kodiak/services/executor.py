@@ -7,8 +7,8 @@ from typing import AsyncGenerator
 from loguru import logger
 from pydantic import BaseModel
 
-# Placeholder for settings import if needed for Docker config
-# from kodiak.core.config import settings
+# Import settings for Docker config if needed
+from kodiak.core.config import settings
 
 
 class CommandResult(BaseModel):

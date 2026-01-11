@@ -6,8 +6,9 @@ through LiteLLM with flexible environment-based configuration.
 """
 
 import os
-from typing import Optional, Dict, Any
-from pydantic import BaseSettings, Field
+from typing import Optional, Dict, Any, List
+from pydantic_settings import BaseSettings
+from pydantic import Field
 from enum import Enum
 
 
@@ -24,6 +25,17 @@ class LLMProvider(str, Enum):
 
 class KodiakSettings(BaseSettings):
     """Kodiak application settings"""
+    
+    # Application Configuration
+    PROJECT_NAME: str = Field(default="Kodiak", env="KODIAK_PROJECT_NAME")
+    VERSION: str = Field(default="1.0.0", env="KODIAK_VERSION")
+    API_V1_STR: str = Field(default="/api/v1", env="KODIAK_API_V1_STR")
+    
+    # CORS Configuration
+    BACKEND_CORS_ORIGINS: List[str] = Field(
+        default=["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"],
+        env="KODIAK_BACKEND_CORS_ORIGINS"
+    )
     
     # Database Configuration
     postgres_server: str = Field(default="localhost", env="POSTGRES_SERVER")
@@ -60,6 +72,12 @@ class KodiakSettings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        # Support for list parsing from environment variables
+        @classmethod
+        def parse_env_var(cls, field_name: str, raw_val: str) -> Any:
+            if field_name == 'BACKEND_CORS_ORIGINS':
+                return [x.strip() for x in raw_val.split(',')]
+            return cls.json_loads(raw_val)
 
     @property
     def database_url(self) -> str:
@@ -109,10 +127,127 @@ class KodiakSettings(BaseSettings):
             "claude-3-opus-20240229": "Claude 3 Opus",
         }
         return model_map.get(self.llm_model, self.llm_model)
+    
+    def validate_required_config(self) -> List[str]:
+        """Validate required configuration values and return list of missing items"""
+        missing = []
+        
+        # Check for required API keys based on provider
+        if self.llm_provider == LLMProvider.OPENAI and not self.openai_api_key and not self.llm_api_key:
+            missing.append("OPENAI_API_KEY or KODIAK_LLM_API_KEY")
+        elif self.llm_provider == LLMProvider.GEMINI and not self.google_api_key and not self.llm_api_key:
+            missing.append("GOOGLE_API_KEY or KODIAK_LLM_API_KEY")
+        elif self.llm_provider == LLMProvider.CLAUDE and not self.anthropic_api_key and not self.llm_api_key:
+            missing.append("ANTHROPIC_API_KEY or KODIAK_LLM_API_KEY")
+        
+        # Check database configuration
+        if not self.postgres_server:
+            missing.append("POSTGRES_SERVER")
+        if not self.postgres_user:
+            missing.append("POSTGRES_USER")
+        if not self.postgres_password:
+            missing.append("POSTGRES_PASSWORD")
+        if not self.postgres_db:
+            missing.append("POSTGRES_DB")
+            
+        return missing
 
 
 # Global settings instance
 settings = KodiakSettings()
+
+
+# Validate configuration on startup
+def validate_startup_config():
+    """Validate configuration on application startup"""
+    from kodiak.core.error_handling import ErrorHandler, ConfigurationError
+    
+    try:
+        missing_config = settings.validate_required_config()
+        if missing_config:
+            error_msg = (
+                f"Missing required configuration values: {', '.join(missing_config)}. "
+                f"Please set these environment variables or add them to your .env file. "
+                f"See the documentation for configuration examples."
+            )
+            raise ConfigurationError(
+                message=error_msg,
+                details={
+                    "missing_keys": missing_config,
+                    "env_file_path": ".env",
+                    "documentation_url": "https://github.com/your-org/kodiak/docs/configuration.md"
+                }
+            )
+        
+        # Validate LLM configuration
+        try:
+            llm_config = settings.get_llm_config()
+            if not llm_config.get("api_key"):
+                provider_key_map = {
+                    "gemini": "GOOGLE_API_KEY",
+                    "openai": "OPENAI_API_KEY", 
+                    "claude": "ANTHROPIC_API_KEY"
+                }
+                suggested_key = provider_key_map.get(settings.llm_provider, "KODIAK_LLM_API_KEY")
+                raise ConfigurationError(
+                    message=f"No API key found for LLM provider '{settings.llm_provider}'. Please set {suggested_key}.",
+                    config_key=suggested_key,
+                    details={
+                        "provider": settings.llm_provider,
+                        "model": settings.llm_model,
+                        "suggested_env_var": suggested_key
+                    }
+                )
+        except Exception as e:
+            if not isinstance(e, ConfigurationError):
+                raise ConfigurationError(
+                    message=f"LLM configuration validation failed: {str(e)}",
+                    config_key="llm_config",
+                    details={"provider": settings.llm_provider, "model": settings.llm_model}
+                )
+            raise
+        
+        # Validate database configuration
+        try:
+            db_url = settings.database_url
+            if not all([settings.postgres_server, settings.postgres_user, settings.postgres_password, settings.postgres_db]):
+                raise ConfigurationError(
+                    message="Incomplete database configuration. All database settings are required.",
+                    config_key="database",
+                    details={
+                        "required_vars": ["POSTGRES_SERVER", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"],
+                        "current_server": settings.postgres_server,
+                        "current_db": settings.postgres_db
+                    }
+                )
+        except Exception as e:
+            if not isinstance(e, ConfigurationError):
+                raise ConfigurationError(
+                    message=f"Database configuration validation failed: {str(e)}",
+                    config_key="database",
+                    details={"database_url": settings.database_url}
+                )
+            raise
+        
+        # Log successful configuration
+        from loguru import logger
+        logger.info(f"Configuration loaded successfully")
+        logger.info(f"LLM Provider: {settings.llm_provider}")
+        logger.info(f"LLM Model: {settings.get_model_display_name()}")
+        logger.info(f"Database: {settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}")
+        logger.info(f"Debug Mode: {settings.debug}")
+        logger.info(f"Safety Checks: {settings.enable_safety_checks}")
+        logger.info(f"Hive Mind: {settings.enable_hive_mind}")
+        
+    except ConfigurationError:
+        # Re-raise configuration errors as-is
+        raise
+    except Exception as e:
+        # Wrap unexpected errors
+        raise ConfigurationError(
+            message=f"Unexpected error during configuration validation: {str(e)}",
+            details={"error_type": type(e).__name__}
+        )
 
 
 # LLM Model presets for easy configuration

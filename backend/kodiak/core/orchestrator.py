@@ -1,5 +1,5 @@
 import asyncio
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from uuid import UUID
 import json
 
@@ -9,6 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from kodiak.database import get_session
 from kodiak.database.crud import scan_job as crud_scan, project as crud_project
 from kodiak.database.models import ScanJob, ScanStatus
+from kodiak.core.tools.inventory import inventory
 
 class Orchestrator:
     """
@@ -17,10 +18,61 @@ class Orchestrator:
     It polls the 'Task' table (Blackboard) and spawns workers for pending tasks.
     """
     
-    def __init__(self):
+    def __init__(self, tool_inventory=None):
         self._active_workers: Dict[UUID, asyncio.Task] = {} # Task.id -> asyncio.Task
         self._scheduler_task: Optional[asyncio.Task] = None
         self._running = False
+        self.tool_inventory = tool_inventory or inventory
+        
+        # Cache available tools for validation
+        self._available_tools = list(self.tool_inventory.list_tools().keys())
+        logger.info(f"Orchestrator initialized with {len(self._available_tools)} available tools: {self._available_tools}")
+
+    def get_available_tools(self) -> List[str]:
+        """Get list of available tool names from inventory"""
+        return self._available_tools.copy()
+    
+    def validate_tool_exists(self, tool_name: str) -> bool:
+        """Validate that a tool exists in the inventory"""
+        return tool_name in self._available_tools
+    
+    def get_tools_for_role(self, role: str) -> List[str]:
+        """Get appropriate tools for a specific agent role"""
+        # Get all available tools
+        all_tools = self.get_available_tools()
+        
+        # Role-based tool filtering (can be expanded based on requirements)
+        if role == "scout":
+            # Scout agents focus on reconnaissance and discovery
+            preferred_tools = [
+                "nmap", "subfinder", "httpx", "nuclei", "web_search",
+                "terminal_execute", "browser_navigate"
+            ]
+        elif role == "attacker":
+            # Attacker agents focus on exploitation
+            preferred_tools = [
+                "sqlmap", "commix", "nuclei", "browser_navigate", 
+                "terminal_execute", "python_execute", "proxy_request"
+            ]
+        elif role == "manager":
+            # Manager agents coordinate and analyze
+            preferred_tools = [
+                "web_search", "terminal_execute", "browser_navigate",
+                "nmap", "nuclei", "httpx"
+            ]
+        else:
+            # Generalist agents get access to all tools
+            preferred_tools = all_tools
+        
+        # Filter to only include tools that actually exist
+        valid_tools = [tool for tool in preferred_tools if tool in all_tools]
+        
+        # If no preferred tools are available, fall back to all available tools
+        if not valid_tools:
+            valid_tools = all_tools
+            
+        logger.debug(f"Tools for role '{role}': {valid_tools}")
+        return valid_tools
 
     async def start(self):
         """
@@ -148,6 +200,7 @@ class Orchestrator:
         """
         from kodiak.core.agent import KodiakAgent
         from kodiak.database.models import Task
+        from kodiak.api.events import event_manager
         
         async for session in get_session():
             task = await session.get(Task, task_id)
@@ -162,15 +215,35 @@ class Orchestrator:
             role = directive.get("role", "specialist")
             goal = directive.get("goal", "Execute assigned task.")
             
-            # Instantiate Agent with Role
-            agent = KodiakAgent(agent_id=task.assigned_agent_id, session=session, role=role, project_id=project_id) 
+            # Instantiate Agent with proper dependencies
+            agent = KodiakAgent(
+                agent_id=task.assigned_agent_id, 
+                tool_inventory=self.tool_inventory,
+                event_manager=event_manager,
+                session=session, 
+                role=role, 
+                project_id=project_id
+            ) 
             
             # Initial Memory
             history = [{"role": "user", "content": f"MISSION: {goal}"}]
             
-            # Different available tools based on Role?
-            # For now, broad access, safety middleware restricts
-            tools = ["spawn_agent", "terminal_execute", "browser_navigate", "search_web"]
+            # Get appropriate tools for the agent's role with validation
+            tools = self.get_tools_for_role(role)
+            
+            # Validate all tools exist in inventory
+            validated_tools = []
+            for tool_name in tools:
+                if self.validate_tool_exists(tool_name):
+                    validated_tools.append(tool_name)
+                else:
+                    logger.warning(f"Tool '{tool_name}' not found in inventory, skipping")
+            
+            if not validated_tools:
+                logger.error(f"No valid tools available for role '{role}', using all available tools")
+                validated_tools = self.get_available_tools()
+            
+            logger.info(f"Agent {agent.agent_id} assigned tools: {validated_tools}")
             
             # We allow the Agent to select its own System Prompt based on role now
             system_prompt = None
@@ -182,7 +255,7 @@ class Orchestrator:
                 if task.status == "cancelled":
                     return
 
-                response = await agent.think(history, allowed_tools=tools, system_prompt=system_prompt)
+                response = await agent.think(history, allowed_tools=validated_tools, system_prompt=system_prompt)
                 
                 if "TASK_COMPLETE" in str(response.content):
                     logger.info(f"Agent {agent.agent_id} completed task.")
@@ -195,9 +268,18 @@ class Orchestrator:
                         
                         logger.info(f"[{agent.agent_id}] Tool: {fn_name}")
                         
-                        # Handle 'spawn_agent' specifically if not in standard toolbox yet
-                        # Or delegate to agent.act()
+                        # Validate tool exists before execution
+                        if not self.validate_tool_exists(fn_name):
+                            error_msg = f"Tool '{fn_name}' not found in inventory"
+                            logger.error(error_msg)
+                            history.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps({"error": error_msg})
+                            })
+                            continue
                         
+                        # Execute tool through agent
                         result = await agent.act(fn_name, fn_args, session=session, project_id=project_id, task_id=task_id)
                         
                         history.append({
@@ -211,4 +293,4 @@ class Orchestrator:
                 await asyncio.sleep(1) # Breathe
 
 
-orchestrator = Orchestrator()
+orchestrator = Orchestrator(tool_inventory=inventory)

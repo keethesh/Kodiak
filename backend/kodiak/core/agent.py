@@ -6,21 +6,74 @@ class KodiakAgent:
     """
     The Brain. 
     Decoupled from the loop. It just takes state in, and outputs actions.
-    Enhanced with dynamic skill loading capabilities.
+    Enhanced with dynamic skill loading capabilities and EventManager integration.
+    Integrates with Hive Mind for state synchronization across agents.
     """
-    def __init__(self, agent_id: str, model_name: str = settings.KODIAK_MODEL, session: Any = None, role: str = "generalist", project_id: Any = None, skills: Optional[List[str]] = None):
+    def __init__(self, agent_id: str, tool_inventory, event_manager, model_name: str = None, session: Any = None, role: str = "generalist", project_id: Any = None, skills: Optional[List[str]] = None):
         self.agent_id = agent_id
-        self.model_name = model_name
+        self.model_name = model_name or settings.llm_model
         self.session = session
         self.role = role
         self.project_id = project_id
+        self.tool_inventory = tool_inventory
+        self.event_manager = event_manager
         self.inbox: List[Dict[str, Any]] = [] # Priority Message Queue
         self.loaded_skills: List[str] = skills or []
         self.skills_knowledge: str = ""
+        self._hive_mind = None
+        
+        # Use actual tool names from inventory
+        self.available_tools = [tool_name for tool_name in self.tool_inventory.list_tools().keys()]
         
         # Load skills if provided
         if self.loaded_skills:
             self._load_agent_skills()
+    
+    async def register_with_hive_mind(self):
+        """Register this agent with the Hive Mind for state synchronization"""
+        from kodiak.core.hive_mind import hive_mind
+        self._hive_mind = hive_mind
+        
+        if self.project_id:
+            await hive_mind.register_agent(
+                agent_id=self.agent_id,
+                project_id=str(self.project_id),
+                role=self.role
+            )
+    
+    async def unregister_from_hive_mind(self):
+        """Unregister this agent from the Hive Mind"""
+        if self._hive_mind:
+            await self._hive_mind.unregister_agent(self.agent_id)
+    
+    async def share_discovery(self, discovery: Dict[str, Any]) -> Dict[str, Any]:
+        """Share a discovery with other agents via the Hive Mind"""
+        if not self._hive_mind or not self.project_id:
+            return discovery
+        
+        return await self._hive_mind.share_discovery(
+            agent_id=self.agent_id,
+            project_id=str(self.project_id),
+            discovery=discovery,
+            scan_id=str(self.project_id)
+        )
+    
+    async def get_shared_discoveries(self, since=None) -> List[Dict[str, Any]]:
+        """Get discoveries shared by other agents"""
+        if not self._hive_mind or not self.project_id:
+            return []
+        
+        return await self._hive_mind.get_shared_discoveries(
+            project_id=str(self.project_id),
+            since=since
+        )
+    
+    async def get_peer_agents(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about other active agents in the same project"""
+        if not self._hive_mind or not self.project_id:
+            return {}
+        
+        return await self._hive_mind.get_active_agents(str(self.project_id))
 
     def _load_agent_skills(self):
         """Load specialized skills for this agent"""
@@ -52,7 +105,6 @@ class KodiakAgent:
         :param system_prompt: Custom system prompt for the current phase.
         """
         from litellm import acompletion
-        from kodiak.core.tools.inventory import inventory
         import os
 
         # 0. SOFT INTERRUPT CHECK
@@ -66,8 +118,8 @@ class KodiakAgent:
                            f"DROP CURRENT PLAN AND ADDRESS THIS IMMEDIATELY."
             })
 
-        # 1. Load available tools
-        tools = self._prepare_tools(inventory, allowed_tools)
+        # 1. Load available tools from inventory
+        tools = self._prepare_tools(allowed_tools)
         
         # 2. Rolling Summaries: Compress history if too long
         optimized_history = await self._summarize_history(history)
@@ -166,12 +218,12 @@ class KodiakAgent:
         
         return full_prompt
 
-    def _prepare_tools(self, inventory, allowed_tools: List[str] = None) -> List[Dict[str, Any]]:
-        """Prepare tool definitions for LLM"""
+    def _prepare_tools(self, allowed_tools: List[str] = None) -> List[Dict[str, Any]]:
+        """Prepare tool definitions for LLM using the injected tool inventory"""
         available_tools = []
         
         # Get all tools from inventory
-        all_tools = inventory.list_tools()
+        all_tools = self.tool_inventory.list_tools()
         
         # Filter tools if allowed_tools is specified
         if allowed_tools:
@@ -181,7 +233,7 @@ class KodiakAgent:
         
         # Convert to OpenAI tool format
         for tool_name, tool_desc in filtered_tools.items():
-            tool_instance = inventory.get(tool_name)
+            tool_instance = self.tool_inventory.get(tool_name)
             if tool_instance:
                 available_tools.append(tool_instance.to_openai_schema())
         
@@ -261,15 +313,21 @@ class KodiakAgent:
 
     async def act(self, tool_name: str, args: Dict[str, Any], session: Any = None, project_id: Any = None, task_id: Any = None) -> Any:
         """
-        Execute a tool action through the inventory system.
+        Execute a tool action through the inventory system with proper error handling.
         """
-        from kodiak.core.tools.inventory import inventory
-        
-        tool = inventory.get(tool_name)
+        tool = self.tool_inventory.get(tool_name)
         if not tool:
             return {"error": f"Tool '{tool_name}' not found in inventory"}
         
         try:
+            # Emit tool start event
+            await self.event_manager.emit_tool_start(
+                tool_name=tool_name,
+                target=args.get('target', 'unknown'),
+                agent_id=self.agent_id,
+                scan_id=project_id
+            )
+            
             # Execute the tool
             result = await tool.run(args, context={
                 "agent_id": self.agent_id,
@@ -278,10 +336,47 @@ class KodiakAgent:
                 "task_id": task_id
             })
             
+            # Emit tool completion event
+            await self.event_manager.emit_tool_complete(
+                tool_name=tool_name,
+                result=result,
+                scan_id=project_id
+            )
+            
             return result.dict() if hasattr(result, 'dict') else result
             
         except Exception as e:
+            # Create error result for event emission
+            error_result = type('ErrorResult', (), {
+                'success': False,
+                'error': str(e),
+                'output': None,
+                'data': None
+            })()
+            
+            # Emit tool completion event with error
+            await self.event_manager.emit_tool_complete(
+                tool_name=tool_name,
+                result=error_result,
+                scan_id=project_id
+            )
+            
             return {"error": f"Tool execution failed: {str(e)}"}
+
+    async def execute_tool(self, tool_name: str, **kwargs) -> Any:
+        """
+        Execute tool with proper error handling and consistent naming.
+        This method ensures tool names are validated against the inventory.
+        """
+        if tool_name not in self.available_tools:
+            return {"error": f"Tool {tool_name} not found in available tools: {self.available_tools}"}
+        
+        return await self.act(
+            tool_name=tool_name,
+            args=kwargs,
+            session=self.session,
+            project_id=self.project_id
+        )
 
     def get_skill_recommendations(self, target_info: Dict[str, Any]) -> List[str]:
         """Get skill recommendations based on target information"""

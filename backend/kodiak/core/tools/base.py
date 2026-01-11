@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Type
+from typing import Any, Dict, Type, Optional
 
 from pydantic import BaseModel
 
@@ -11,7 +11,15 @@ class ToolResult(BaseModel):
     error: str | None = None
 
 
-class KodiakTool(ABC):
+class BaseTool(ABC):
+    """
+    Base class for all Kodiak tools with EventManager integration.
+    """
+    
+    def __init__(self, event_manager=None):
+        """Initialize tool with optional EventManager for event broadcasting."""
+        self.event_manager = event_manager
+    
     @property
     @abstractmethod
     def name(self) -> str:
@@ -41,19 +49,68 @@ class KodiakTool(ABC):
     # Optional Pydantic support
     args_schema: Type[BaseModel] | None = None
 
+    async def execute(self, **kwargs) -> ToolResult:
+        """
+        Public interface - handles events and calls _execute.
+        This is the main entry point for tool execution.
+        """
+        # Extract context information
+        target = kwargs.get('target', 'unknown')
+        agent_id = kwargs.get('agent_id', 'unknown_agent')
+        scan_id = kwargs.get('scan_id')
+        
+        try:
+            # Emit tool start event
+            if self.event_manager and scan_id:
+                await self.event_manager.emit_tool_start(self.name, target, agent_id, scan_id)
+            
+            # Execute the actual tool logic
+            result = await self._execute(**kwargs)
+            
+            # Ensure we have a ToolResult
+            if not isinstance(result, ToolResult):
+                # Convert other return types to ToolResult
+                if isinstance(result, dict):
+                    result = ToolResult(
+                        success=True,
+                        output=result.get('output', str(result)),
+                        data=result
+                    )
+                else:
+                    result = ToolResult(
+                        success=True,
+                        output=str(result),
+                        data={'raw': result}
+                    )
+            
+            # Emit tool complete event
+            if self.event_manager and scan_id:
+                await self.event_manager.emit_tool_complete(self.name, result, scan_id)
+            
+            return result
+            
+        except Exception as e:
+            error_result = ToolResult(success=False, output="", error=str(e))
+            
+            # Emit tool complete event with error
+            if self.event_manager and scan_id:
+                await self.event_manager.emit_tool_complete(self.name, error_result, scan_id)
+            
+            return error_result
+
     async def run(self, args: BaseModel | Dict[str, Any], context: Dict[str, Any] = None) -> ToolResult:
         """
-        Execute the tool. Accepts either Pydantic model or Dict.
+        Legacy interface for backward compatibility.
         Includes automatic Hive Mind synchronization (Caching & Deduplication).
         """
         from kodiak.core.hive_mind import hive_mind
-        from kodiak.api.events import event_manager, ExternalEvent
         from kodiak.services.websocket_manager import manager
         import json
         
         context = context or {}
         scan_id = context.get("scan_id")
         agent_id = context.get("agent_id", "unknown_agent")
+        project_id = context.get("project_id")
         
         try:
             # 1. Normalize Args
@@ -62,9 +119,16 @@ class KodiakTool(ABC):
             else:
                 data = args
 
+            # Add context to data for execute method
+            data.update({
+                'scan_id': scan_id,
+                'agent_id': agent_id,
+                'target': data.get('target', 'unknown')
+            })
+
             # 2. Generate Cache Key (Deterministic)
             # Sort keys to ensure {"a": 1, "b": 2} == {"b": 2, "a": 1}
-            args_str = json.dumps(data, sort_keys=True)
+            args_str = json.dumps({k: v for k, v in data.items() if k not in ['scan_id', 'agent_id']}, sort_keys=True)
             cmd_key = f"{self.name}:{args_str}"
             
             # Send WebSocket update: Tool started
@@ -75,17 +139,9 @@ class KodiakTool(ABC):
                     status="started",
                     data={"args": data, "agent_id": agent_id}
                 )
-            
-            # Emit Start Event
-            if scan_id:
-                await event_manager.emit(ExternalEvent(
-                    type="tool_start", 
-                    data={"tool": self.name, "args": data}, 
-                    project_id=str(context.get("project_id", ""))
-                ), str(scan_id))
 
             # 3. Check Cache
-            cached_output = await hive_mind.get_cached_result(cmd_key)
+            cached_output = await hive_mind.get_cached_result(cmd_key, scan_id)
             if cached_output:
                 result = ToolResult(success=True, output=cached_output, data={"cached": True})
                 
@@ -97,11 +153,6 @@ class KodiakTool(ABC):
                         status="completed",
                         data={"cached": True, "result": result.dict()}
                     )
-                    await event_manager.emit(ExternalEvent(
-                        type="tool_complete", 
-                        data={"tool": self.name, "result": result.dict()}, 
-                        project_id=str(context.get("project_id", ""))
-                    ), str(scan_id))
                 return result
 
             # 4. Synchronization (The Hive Mind)
@@ -116,7 +167,7 @@ class KodiakTool(ABC):
                 
                 # Follower: Wait for result
                 try:
-                    output = await hive_mind.wait_for_result(cmd_key)
+                    output = await hive_mind.wait_for_result(cmd_key, agent_id, scan_id)
                     result = ToolResult(success=True, output=output, data={"cached": True, "source": "hive_wait"})
                     
                     # Send WebSocket update: Tool completed (hive mind)
@@ -144,7 +195,7 @@ class KodiakTool(ABC):
                     return error_result
             
             # Leader: Acquire Lock
-            is_leader = await hive_mind.acquire(cmd_key, agent_id)
+            is_leader = await hive_mind.acquire(cmd_key, agent_id, scan_id)
             if not is_leader:
                 # Send WebSocket update: Waiting for hive mind
                 if scan_id:
@@ -156,7 +207,7 @@ class KodiakTool(ABC):
                 
                  # Lost the race, wait
                 try:
-                    output = await hive_mind.wait_for_result(cmd_key)
+                    output = await hive_mind.wait_for_result(cmd_key, agent_id, scan_id)
                     result = ToolResult(success=True, output=output, data={"cached": True, "source": "hive_wait"})
                     
                     # Send WebSocket update: Tool completed (hive mind)
@@ -191,26 +242,15 @@ class KodiakTool(ABC):
                     agent_id=agent_id
                 )
 
-            # I am the Leader - Execute
+            # I am the Leader - Execute using the new execute method
             try:
-                result_data = await self._execute(data)
+                result = await self.execute(**data)
                 
-                # Normalize Result
-                if isinstance(result_data, ToolResult):
-                    # If tool returns comprehensive result, use it
-                    final_output = result_data.output
-                    final_result = result_data
-                else:
-                    # If tool returns dict/str
-                    final_output = str(result_data.get("output", "")) if isinstance(result_data, dict) else str(result_data)
-                    final_result = ToolResult(
-                        success=True, 
-                        output=final_output,
-                        data=result_data if isinstance(result_data, dict) else {"raw": result_data}
-                    )
+                # Get output for hive mind
+                final_output = result.output
                 
                 # Release Lock & Notify Followers
-                await hive_mind.release(cmd_key, final_output)
+                await hive_mind.release(cmd_key, final_output, agent_id, scan_id)
                 
                 # Send WebSocket updates: Tool completed and hive mind released
                 if scan_id:
@@ -218,27 +258,19 @@ class KodiakTool(ABC):
                         scan_id=scan_id,
                         tool_name=self.name,
                         status="completed",
-                        data={"result": final_result.dict()}
+                        data={"result": result.dict()}
                     )
                     await manager.send_hive_mind_update(
                         command=cmd_key,
                         status="completed",
                         agent_id=agent_id
                     )
-                
-                # Emit Complete Event
-                if scan_id:
-                    await event_manager.emit(ExternalEvent(
-                        type="tool_complete", 
-                        data={"tool": self.name, "result": final_result.dict()}, 
-                        project_id=str(context.get("project_id", ""))
-                    ), str(scan_id))
                     
-                return final_result
+                return result
 
             except Exception as e:
                 error_msg = str(e)
-                await hive_mind.release(cmd_key, f"Error: {error_msg}")
+                await hive_mind.release(cmd_key, f"Error: {error_msg}", agent_id, scan_id)
                 
                 error_result = ToolResult(success=False, output="", error=error_msg)
                 
@@ -268,5 +300,13 @@ class KodiakTool(ABC):
             return error_result
 
     @abstractmethod
-    async def _execute(self, args: Dict[str, Any]) -> Any:
+    async def _execute(self, **kwargs) -> ToolResult:
+        """
+        Override this in concrete tools.
+        This method should contain the actual tool implementation.
+        """
         pass
+
+
+# Backward compatibility alias
+KodiakTool = BaseTool

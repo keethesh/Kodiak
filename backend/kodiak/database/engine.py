@@ -6,8 +6,8 @@ from sqlmodel import SQLModel
 from kodiak.core.config import settings
 
 engine = create_async_engine(
-    str(settings.DATABASE_URI),
-    echo=True,
+    settings.async_database_url,
+    echo=settings.debug,
     future=True,
 )
 
