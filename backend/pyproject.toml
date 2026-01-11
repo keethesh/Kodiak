@@ -16,6 +16,7 @@ litellm = "^1.20.0"
 sqlalchemy = "^2.0.25"
 sqlmodel = "^0.0.14"
 alembic = "^1.13.1"
+asyncpg = "^0.29.0"
 psycopg = {extras = ["binary"], version = "^3.1.18"}
 python-multipart = "^0.0.9"
 python-jose = {extras = ["cryptography"], version = "^3.3.0"}
