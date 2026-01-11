@@ -80,5 +80,5 @@ class NucleiTool(KodiakTool):
                 
         return {
             "summary": summary,
-            "raw_findings": findings
+            "findings": findings
         }

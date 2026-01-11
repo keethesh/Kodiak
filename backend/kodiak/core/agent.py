@@ -22,18 +22,17 @@ class KodiakAgent:
         from kodiak.core.tools.inventory import inventory
         import os
 
-        # Get available tools
-        all_tools = inventory._tools
-        if allowed_tools:
-            # Filter tools
-            tools = [t.to_openai_schema() for name, t in all_tools.items() if name in allowed_tools]
-        else:
-            tools = [t.to_openai_schema() for t in all_tools.values()]
+        # 1. Dynamic Prompts: Load only requested skills
+        tools = self._load_skills(inventory, allowed_tools)
+        
+        # 2. Rolling Summaries: Compress history if too long
+        optimized_history = await self._summarize_history(history)
         
         # System Prompt
         content = system_prompt or (
             "You are KODIAK, an advanced autonomous penetration testing agent. "
             "Your goal is to scan, enumerate, and identify vulnerabilities in the target scope. "
+            "Efficiency Rule: OUTPUT COMPACT JSON. Do not be verbose. "
             "Result format: Always call a tool or provide a final summary."
         )
         
@@ -43,7 +42,7 @@ class KodiakAgent:
         }
         
         # Prepare messages
-        messages = [system_msg] + history
+        messages = [system_msg] + optimized_history
         
         # Call LLM
         # We use a default generic model if not specified, but settings.KODIAK_MODEL should be set.
@@ -59,7 +58,57 @@ class KodiakAgent:
         
         return response.choices[0].message
 
-    async def act(self, tool_name: str, args: Dict[str, Any], session: Any = None, project_id: Any = None) -> Any:
+    def _load_skills(self, inventory, allowed_tools: List[str] = None) -> List[Dict[str, Any]]:
+        """
+        Dynamically loads only the tools needed for the current context.
+        """
+        all_tools = inventory._tools
+        if allowed_tools:
+            # Filter tools to only those requested
+            return [t.to_openai_schema() for name, t in all_tools.items() if name in allowed_tools]
+        
+        # If no specific tools requested, return all (default behavior)
+        # In a more advanced version, we could inject tools based on the 'phase' of the task.
+        return [t.to_openai_schema() for t in all_tools.values()]
+
+    async def _summarize_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Implements Rolling Summaries.
+        If history is too long (> 15 messages), summarizes the older half into a single system message.
+        """
+        MAX_HISTORY = 15
+        
+        if len(history) <= MAX_HISTORY:
+            return history
+            
+        # Keep the last N messages intact
+        keep_count = 8
+        recent_history = history[-keep_count:]
+        older_history = history[:-keep_count]
+        
+        # In a real implementation, we would call an LLM to summarize 'older_history'
+        # For now, we will perform a 'lossy' summary by extracting key events (User/Tool outputs)
+        # to save tokens without an extra LLM call loop (latency trace).
+        
+        summary_text = "Previous actions summary: "
+        for msg in older_history:
+            role = msg.get("role")
+            if role == "tool":
+                summary_text += f"[Tool Output: {msg.get('name', 'Unknown')}] "
+            elif role == "user":
+                content = msg.get("content", "")
+                if len(content) > 50:
+                    content = content[:50] + "..."
+                summary_text += f"[User: {content}] "
+                
+        summary_msg = {
+            "role": "system",
+            "content": f"HISTORY SUMMARY: {summary_text[:1000]}" # Hardcap summary size
+        }
+        
+        return [summary_msg] + recent_history
+
+    async def act(self, tool_name: str, args: Dict[str, Any], session: Any = None, project_id: Any = None, scan_id: Any = None) -> Any:
         """
         Execute a tool by name with the given arguments.
         If session and project_id are provided, persists Assets and Findings.
@@ -76,10 +125,16 @@ class KodiakAgent:
             # Validate args against tool schema
             if tool.args_schema:
                 validated_args = tool.args_schema(**args)
-                result = await tool.run(validated_args)
             else:
-                # Pass dict directly
-                result = await tool.run(args)
+                validated_args = args # Pass dict directly
+
+            # Execute with Context
+            context = {
+                "scan_id": scan_id,
+                "project_id": project_id,
+                "agent_id": self.agent_id
+            }
+            result = await tool.run(validated_args, context=context)
             
             # --- Persistence Logic ---
             if session and project_id and result.success and result.data:
@@ -136,12 +191,11 @@ class KodiakAgent:
                             # Link to asset? Ideally we need asset_id. 
                             # For MVP, we might create a generic asset or require asset lookup.
                             # Assuming finding data has enough info.
+                            
+                            # Assuming finding data has enough info.
                             finding = Finding(
-                                scan_id=getattr(session, "scan_id_context", None), # Hacky context passing or need arg
-                                # We need scan_id passed to act() really
-                                project_id=project_id, # Finding model doesn't have project_id directly usually, linked via asset/scan?
-                                # Let's check model... Finding has scan_id and asset_id.
-                                # For now, let's skip strict FKs complexity in this snippet and just log wrapper
+                                scan_id=scan_id,
+                                project_id=project_id, 
                                 title=finding_data.get("title"),
                                 description=finding_data.get("description"),
                                 severity=finding_data.get("severity", FindingSeverity.INFO),

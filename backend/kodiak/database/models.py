@@ -112,3 +112,16 @@ class VulnerabilityDefinition(SQLModel, table=True):
     cvss_score: Optional[float] = None
     affected_products: List[str] = Field(default=[], sa_column=Column(JSON)) 
     # We will use Postgres Full Text Search on this field later
+
+class CommandCache(SQLModel, table=True):
+    """
+    Cache for tool outputs to prevent redundant execution.
+    Part of "The Hive Mind".
+    """
+    command_hash: str = Field(primary_key=True) # e.g. "nmap:192.168.1.1" (hashed or normalized)
+    tool_name: str = Field(index=True)
+    args_json: str # Normalized JSON of args
+    
+    output: str # The raw or compressed output
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: Optional[datetime] = None

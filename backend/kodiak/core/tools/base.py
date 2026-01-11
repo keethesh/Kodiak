@@ -41,13 +41,17 @@ class KodiakTool(ABC):
     # Optional Pydantic support
     args_schema: Type[BaseModel] | None = None
 
-    async def run(self, args: BaseModel | Dict[str, Any]) -> ToolResult:
+    async def run(self, args: BaseModel | Dict[str, Any], context: Dict[str, Any] = None) -> ToolResult:
         """
         Execute the tool. Accepts either Pydantic model or Dict.
         Includes automatic Hive Mind synchronization (Caching & Deduplication).
         """
         from kodiak.core.hive_mind import hive_mind
+        from kodiak.api.events import event_manager, ExternalEvent
         import json
+        
+        context = context or {}
+        scan_id = context.get("scan_id")
         
         try:
             # 1. Normalize Args
@@ -60,11 +64,26 @@ class KodiakTool(ABC):
             # Sort keys to ensure {"a": 1, "b": 2} == {"b": 2, "a": 1}
             args_str = json.dumps(data, sort_keys=True)
             cmd_key = f"{self.name}:{args_str}"
+            
+            # Emit Start Event
+            if scan_id:
+                await event_manager.emit(ExternalEvent(
+                    type="tool_start", 
+                    data={"tool": self.name, "args": data}, 
+                    project_id=str(context.get("project_id", ""))
+                ), str(scan_id))
 
             # 3. Check Cache
-            cached_output = hive_mind.get_cached_result(cmd_key)
+            cached_output = await hive_mind.get_cached_result(cmd_key)
             if cached_output:
-                return ToolResult(success=True, output=cached_output, data={"cached": True})
+                result = ToolResult(success=True, output=cached_output, data={"cached": True})
+                if scan_id:
+                    await event_manager.emit(ExternalEvent(
+                        type="tool_complete", 
+                        data={"tool": self.name, "result": result.dict()}, 
+                        project_id=str(context.get("project_id", ""))
+                    ), str(scan_id))
+                return result
 
             # 4. Synchronization (The Hive Mind)
             if hive_mind.is_running(cmd_key):
@@ -78,7 +97,8 @@ class KodiakTool(ABC):
                     return ToolResult(success=False, output="", error=f"Error waiting for shared command: {str(e)}")
             
             # Leader: Acquire Lock
-            is_leader = await hive_mind.acquire(cmd_key, "agent_placeholder") # TODO: Pass real Agent ID
+            agent_id = context.get("agent_id", "unknown_agent")
+            is_leader = await hive_mind.acquire(cmd_key, agent_id)
             if not is_leader:
                  # Lost the race, wait
                 try:
@@ -107,6 +127,15 @@ class KodiakTool(ABC):
                 
                 # Release Lock & Notify Followers
                 await hive_mind.release(cmd_key, final_output)
+                
+                # Emit Complete Event
+                if scan_id:
+                    await event_manager.emit(ExternalEvent(
+                        type="tool_complete", 
+                        data={"tool": self.name, "result": final_result.dict()}, 
+                        project_id=str(context.get("project_id", ""))
+                    ), str(scan_id))
+                    
                 return final_result
 
             except Exception as e:

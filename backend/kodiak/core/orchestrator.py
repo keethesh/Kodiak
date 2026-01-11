@@ -1,6 +1,7 @@
 import asyncio
 from typing import Dict, Optional
 from uuid import UUID
+import json
 
 from loguru import logger
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -176,7 +177,7 @@ class Orchestrator:
                             fn_args = json.loads(tool_call.function.arguments)
                             
                             logger.info(f"[Scout] Executing: {fn_name}")
-                            result = await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id)
+                            result = await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id, scan_id=scan_id)
                             
                             history.append({
                                 "role": "tool",
@@ -263,7 +264,7 @@ class Orchestrator:
                                 for tool_call in response.tool_calls:
                                     fn_name = tool_call.function.name
                                     fn_args = json.loads(tool_call.function.arguments)
-                                    await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id)
+                                    await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id, scan_id=scan_id)
                              else:
                                  break
                     else:

@@ -20,6 +20,7 @@ class ToolInventory:
 from kodiak.core.tools.definitions.web import NucleiTool
 from kodiak.core.tools.definitions.system import TerminalTool
 from kodiak.core.tools.definitions.discovery import SubfinderTool, HttpxTool
+from kodiak.core.tools.definitions.browser import BrowserNavigateTool
 
 inventory = ToolInventory()
 inventory.register(NmapTool())
@@ -27,3 +28,11 @@ inventory.register(NucleiTool())
 inventory.register(TerminalTool())
 inventory.register(SubfinderTool())
 inventory.register(HttpxTool())
+inventory.register(BrowserNavigateTool())
+
+from kodiak.core.tools.definitions.osint import WebSearchTool
+from kodiak.core.tools.definitions.exploitation import SQLMapTool, CommixTool
+
+inventory.register(WebSearchTool())
+inventory.register(SQLMapTool())
+inventory.register(CommixTool())

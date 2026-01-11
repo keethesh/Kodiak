@@ -47,6 +47,9 @@ COPY . .
 # Install the app itself
 RUN poetry install --only main
 
+# Install Playwright Browsers
+RUN playwright install --with-deps chromium
+
 # Expose port
 EXPOSE 8000
 
