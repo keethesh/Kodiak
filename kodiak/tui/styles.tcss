@@ -1,0 +1,92 @@
+/* Kodiak TUI Styles */
+
+/* Global styles */
+Screen {
+    background: $background;
+}
+
+/* Header and Footer */
+Header {
+    dock: top;
+    height: 3;
+    background: $primary;
+    color: $text;
+}
+
+Footer {
+    dock: bottom;
+    height: 3;
+    background: $primary;
+    color: $text;
+}
+
+/* Home Screen */
+#home-container {
+    align: center middle;
+    height: 100%;
+}
+
+#welcome {
+    text-align: center;
+    text-style: bold;
+    color: $accent;
+    margin: 1;
+}
+
+#instructions {
+    text-align: center;
+    margin: 1;
+}
+
+#help-hint {
+    text-align: center;
+    color: $text-muted;
+    margin: 1;
+}
+
+/* Help Screen */
+#help-container {
+    align: center middle;
+    height: 100%;
+    max-width: 60;
+}
+
+#help-title {
+    text-align: center;
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+#help-global-title, #help-home-title {
+    text-style: bold;
+    color: $secondary;
+    margin-top: 1;
+}
+
+#help-quit, #help-home, #help-help, #help-new, #help-refresh {
+    margin-left: 2;
+    color: $text;
+}
+
+#help-close {
+    text-align: center;
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#help-spacer, #help-spacer2, #help-spacer3 {
+    height: 1;
+}
+
+/* Color scheme - Dark theme */
+$background: #1e1e2e;
+$surface: #313244;
+$overlay: #6c7086;
+$text: #cdd6f4;
+$text-muted: #9399b2;
+$primary: #89b4fa;
+$secondary: #f38ba8;
+$accent: #a6e3a1;
+$warning: #f9e2af;
+$error: #f38ba8;

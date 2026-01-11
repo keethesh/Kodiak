@@ -78,25 +78,25 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
   - Ask user if questions arise
   - _Requirements: 1.7_
 
-- [ ] 6. TUI Application Framework
-  - [ ] 6.1 Create main application class
+- [x] 6. TUI Application Framework
+  - [x] 6.1 Create main application class
     - Create `kodiak/tui/app.py` with `KodiakApp` class
     - Implement global key bindings (q, h, ?)
     - Implement screen stack navigation
     - Create base CSS styles in `kodiak/tui/styles.tcss`
     - _Requirements: 2.1, 2.6, 2.7, 12.1_
   
-  - [ ] 6.2 Create state management
+  - [x] 6.2 Create state management
     - Create `kodiak/tui/state.py` with `AppState` class
     - Implement reactive state for projects, agents, findings
     - _Requirements: 5.4, 6.4, 11.1_
   
-  - [ ] 6.3 Create event system
+  - [x] 6.3 Create event system
     - Create `kodiak/tui/events.py` with TUI event classes
     - Define `AgentStatusChanged`, `AssetDiscovered`, `FindingCreated` messages
     - _Requirements: 11.2, 11.3, 11.4_
   
-  - [ ] 6.4 Create core bridge
+  - [x] 6.4 Create core bridge
     - Create `kodiak/tui/core_bridge.py`
     - Implement database initialization
     - Implement orchestrator integration

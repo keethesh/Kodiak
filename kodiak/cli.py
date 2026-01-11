@@ -69,10 +69,7 @@ def run_tui(debug: bool = False) -> int:
         # Import here to avoid circular imports and ensure textual is available
         from kodiak.tui.app import KodiakApp
         
-        app = KodiakApp()
-        if debug:
-            app.debug = True
-        
+        app = KodiakApp(debug=debug)
         app.run()
         return 0
     except ImportError as e:
