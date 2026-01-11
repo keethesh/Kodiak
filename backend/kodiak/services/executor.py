@@ -88,18 +88,28 @@ class LocalExecutor(ServiceExecutor):
 
 
 class DockerExecutor(ServiceExecutor):
+    """
+    Simplified Docker executor - since everything runs in one container,
+    this just delegates to LocalExecutor for simplicity and performance.
+    """
     def __init__(self, image: str = "kalilinux/kali-rolling"):
         self.image = image
-        # TODO: Initialize Docker client here
-        # self.client = docker.from_env()
+        self.local_executor = LocalExecutor()
 
     async def run_command(
         self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None
     ) -> CommandResult:
-        logger.info(f"DockerExec ({self.image}): {' '.join(command)}")
-        # Placeholder implementation
-        # In a real impl, this would use aio-docker or thread-pool wrapped docker-py
-        return CommandResult(exit_code=0, stdout="Docker not fully implemented yet", stderr="")
+        logger.info(f"DockerExec (local): {' '.join(command)}")
+        # Since we're already in the Docker container, just use local execution
+        return await self.local_executor.run_command(command, cwd, env)
+
+    async def stream_command(
+        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None
+    ) -> AsyncGenerator[str, None]:
+        logger.info(f"DockerExec Stream (local): {' '.join(command)}")
+        # Since we're already in the Docker container, just use local execution
+        async for line in self.local_executor.stream_command(command, cwd, env):
+            yield line
 
 class MockExecutor(ServiceExecutor):
     async def run_command(

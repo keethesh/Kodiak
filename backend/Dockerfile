@@ -9,6 +9,7 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
+
 # Install system dependencies and Tools (Nmap, etc.)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -35,17 +36,22 @@ RUN pip install poetry==1.7.1
 WORKDIR /app
 
 # Copy dependency files first (for caching)
-# Copy dependency files first (for caching)
 COPY pyproject.toml ./
+COPY poetry.lock* ./
 
-# Install dependencies
-RUN poetry config virtualenvs.create false \
-    && poetry install --no-root --only main
+# Configure Poetry and install dependencies
+RUN poetry config virtualenvs.create false
+
+# If poetry.lock doesn't exist, generate it and install
+RUN if [ ! -f poetry.lock ]; then \
+        poetry lock --no-update; \
+    fi && \
+    poetry install --only main --no-root
 
 # Copy application code
 COPY . .
 
-# Install the app itself
+# Install the app itself (now that code is copied)
 RUN poetry install --only main
 
 # Install Playwright Browsers

@@ -24,6 +24,15 @@ from kodiak.core.tools.definitions.discovery import SubfinderTool, HttpxTool
 from kodiak.core.tools.definitions.browser import BrowserNavigateTool
 from kodiak.core.tools.definitions.osint import WebSearchTool
 from kodiak.core.tools.definitions.exploitation import SQLMapTool, CommixTool
+from kodiak.core.tools.definitions.proxy import (
+    ProxyStartTool, ProxyRequestTool, ProxyHistoryTool, ProxyStopTool
+)
+from kodiak.core.tools.definitions.terminal import (
+    TerminalStartTool, TerminalExecuteTool, TerminalHistoryTool, TerminalStopTool
+)
+from kodiak.core.tools.definitions.python_runtime import (
+    PythonStartTool, PythonExecuteTool, PythonHistoryTool, PythonStopTool
+)
 
 # Create inventory instance
 inventory = ToolInventory()
@@ -39,6 +48,22 @@ inventory.register(WebSearchTool())
 inventory.register(SQLMapTool())
 inventory.register(CommixTool())
 
+# Register new comprehensive tools
+inventory.register(ProxyStartTool())
+inventory.register(ProxyRequestTool())
+inventory.register(ProxyHistoryTool())
+inventory.register(ProxyStopTool())
+
+inventory.register(TerminalStartTool())
+inventory.register(TerminalExecuteTool())
+inventory.register(TerminalHistoryTool())
+inventory.register(TerminalStopTool())
+
+inventory.register(PythonStartTool())
+inventory.register(PythonExecuteTool())
+inventory.register(PythonHistoryTool())
+inventory.register(PythonStopTool())
+
 # Export available tools for easy access
 AVAILABLE_TOOLS = {
     # Network & Infrastructure
@@ -53,6 +78,24 @@ AVAILABLE_TOOLS = {
     "browser_navigate": "Browser automation for web app testing",
     "sqlmap": "Automatic SQL injection detection and exploitation",
     "commix": "Command injection detection and exploitation",
+    
+    # HTTP Proxy System
+    "proxy_start": "Start HTTP proxy server for request interception",
+    "proxy_request": "Send HTTP requests through proxy with full control",
+    "proxy_history": "View proxy request/response history",
+    "proxy_stop": "Stop HTTP proxy server",
+    
+    # Terminal Environment
+    "terminal_start": "Start persistent terminal session",
+    "terminal_execute": "Execute commands in terminal session",
+    "terminal_history": "View terminal command history",
+    "terminal_stop": "Stop terminal session",
+    
+    # Python Runtime
+    "python_start": "Start Python session for exploit development",
+    "python_execute": "Execute Python code in persistent session",
+    "python_history": "View Python execution history",
+    "python_stop": "Stop Python session",
     
     # OSINT & Information Gathering
     "web_search": "Web search for reconnaissance",

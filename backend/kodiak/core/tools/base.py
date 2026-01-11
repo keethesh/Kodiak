@@ -48,10 +48,12 @@ class KodiakTool(ABC):
         """
         from kodiak.core.hive_mind import hive_mind
         from kodiak.api.events import event_manager, ExternalEvent
+        from kodiak.services.websocket_manager import manager
         import json
         
         context = context or {}
         scan_id = context.get("scan_id")
+        agent_id = context.get("agent_id", "unknown_agent")
         
         try:
             # 1. Normalize Args
@@ -65,6 +67,15 @@ class KodiakTool(ABC):
             args_str = json.dumps(data, sort_keys=True)
             cmd_key = f"{self.name}:{args_str}"
             
+            # Send WebSocket update: Tool started
+            if scan_id:
+                await manager.send_tool_update(
+                    scan_id=scan_id,
+                    tool_name=self.name,
+                    status="started",
+                    data={"args": data, "agent_id": agent_id}
+                )
+            
             # Emit Start Event
             if scan_id:
                 await event_manager.emit(ExternalEvent(
@@ -77,7 +88,15 @@ class KodiakTool(ABC):
             cached_output = await hive_mind.get_cached_result(cmd_key)
             if cached_output:
                 result = ToolResult(success=True, output=cached_output, data={"cached": True})
+                
+                # Send WebSocket update: Tool completed (cached)
                 if scan_id:
+                    await manager.send_tool_update(
+                        scan_id=scan_id,
+                        tool_name=self.name,
+                        status="completed",
+                        data={"cached": True, "result": result.dict()}
+                    )
                     await event_manager.emit(ExternalEvent(
                         type="tool_complete", 
                         data={"tool": self.name, "result": result.dict()}, 
@@ -87,25 +106,90 @@ class KodiakTool(ABC):
 
             # 4. Synchronization (The Hive Mind)
             if hive_mind.is_running(cmd_key):
+                # Send WebSocket update: Waiting for hive mind
+                if scan_id:
+                    await manager.send_hive_mind_update(
+                        command=cmd_key,
+                        status="waiting",
+                        agent_id=agent_id
+                    )
+                
                 # Follower: Wait for result
                 try:
                     output = await hive_mind.wait_for_result(cmd_key)
-                    # Try to parse cached output as JSON if possible for 'data' field, 
-                    # but for now we just return the raw string output.
-                    return ToolResult(success=True, output=output, data={"cached": True, "source": "hive_wait"})
+                    result = ToolResult(success=True, output=output, data={"cached": True, "source": "hive_wait"})
+                    
+                    # Send WebSocket update: Tool completed (hive mind)
+                    if scan_id:
+                        await manager.send_tool_update(
+                            scan_id=scan_id,
+                            tool_name=self.name,
+                            status="completed",
+                            data={"hive_mind": True, "result": result.dict()}
+                        )
+                    
+                    return result
                 except Exception as e:
-                    return ToolResult(success=False, output="", error=f"Error waiting for shared command: {str(e)}")
+                    error_result = ToolResult(success=False, output="", error=f"Error waiting for shared command: {str(e)}")
+                    
+                    # Send WebSocket update: Tool failed
+                    if scan_id:
+                        await manager.send_tool_update(
+                            scan_id=scan_id,
+                            tool_name=self.name,
+                            status="failed",
+                            data={"error": str(e)}
+                        )
+                    
+                    return error_result
             
             # Leader: Acquire Lock
-            agent_id = context.get("agent_id", "unknown_agent")
             is_leader = await hive_mind.acquire(cmd_key, agent_id)
             if not is_leader:
+                # Send WebSocket update: Waiting for hive mind
+                if scan_id:
+                    await manager.send_hive_mind_update(
+                        command=cmd_key,
+                        status="waiting",
+                        agent_id=agent_id
+                    )
+                
                  # Lost the race, wait
                 try:
                     output = await hive_mind.wait_for_result(cmd_key)
-                    return ToolResult(success=True, output=output, data={"cached": True, "source": "hive_wait"})
+                    result = ToolResult(success=True, output=output, data={"cached": True, "source": "hive_wait"})
+                    
+                    # Send WebSocket update: Tool completed (hive mind)
+                    if scan_id:
+                        await manager.send_tool_update(
+                            scan_id=scan_id,
+                            tool_name=self.name,
+                            status="completed",
+                            data={"hive_mind": True, "result": result.dict()}
+                        )
+                    
+                    return result
                 except Exception as e:
-                    return ToolResult(success=False, output="", error=f"Error waiting for shared command: {str(e)}")
+                    error_result = ToolResult(success=False, output="", error=f"Error waiting for shared command: {str(e)}")
+                    
+                    # Send WebSocket update: Tool failed
+                    if scan_id:
+                        await manager.send_tool_update(
+                            scan_id=scan_id,
+                            tool_name=self.name,
+                            status="failed",
+                            data={"error": str(e)}
+                        )
+                    
+                    return error_result
+
+            # Send WebSocket update: Hive mind acquired, executing
+            if scan_id:
+                await manager.send_hive_mind_update(
+                    command=cmd_key,
+                    status="executing",
+                    agent_id=agent_id
+                )
 
             # I am the Leader - Execute
             try:
@@ -128,6 +212,20 @@ class KodiakTool(ABC):
                 # Release Lock & Notify Followers
                 await hive_mind.release(cmd_key, final_output)
                 
+                # Send WebSocket updates: Tool completed and hive mind released
+                if scan_id:
+                    await manager.send_tool_update(
+                        scan_id=scan_id,
+                        tool_name=self.name,
+                        status="completed",
+                        data={"result": final_result.dict()}
+                    )
+                    await manager.send_hive_mind_update(
+                        command=cmd_key,
+                        status="completed",
+                        agent_id=agent_id
+                    )
+                
                 # Emit Complete Event
                 if scan_id:
                     await event_manager.emit(ExternalEvent(
@@ -141,10 +239,33 @@ class KodiakTool(ABC):
             except Exception as e:
                 error_msg = str(e)
                 await hive_mind.release(cmd_key, f"Error: {error_msg}")
-                return ToolResult(success=False, output="", error=error_msg)
+                
+                error_result = ToolResult(success=False, output="", error=error_msg)
+                
+                # Send WebSocket update: Tool failed
+                if scan_id:
+                    await manager.send_tool_update(
+                        scan_id=scan_id,
+                        tool_name=self.name,
+                        status="failed",
+                        data={"error": error_msg}
+                    )
+                
+                return error_result
 
         except Exception as e:
-            return ToolResult(success=False, output="", error=str(e))
+            error_result = ToolResult(success=False, output="", error=str(e))
+            
+            # Send WebSocket update: Tool failed
+            if scan_id:
+                await manager.send_tool_update(
+                    scan_id=scan_id,
+                    tool_name=self.name,
+                    status="failed",
+                    data={"error": str(e)}
+                )
+            
+            return error_result
 
     @abstractmethod
     async def _execute(self, args: Dict[str, Any]) -> Any:
