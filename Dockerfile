@@ -8,7 +8,8 @@ FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    TERM=xterm-256color
 
 # Install system dependencies and Tools (Nmap, etc.)
 RUN apt-get update \
@@ -20,6 +21,9 @@ RUN apt-get update \
         build-essential \
         libpq-dev \
         unzip \
+        bash \
+        less \
+        vim \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -57,8 +61,7 @@ RUN poetry install --only main
 # Install Playwright Browsers
 RUN playwright install --with-deps chromium
 
-# Expose port
-EXPOSE 8000
-
-# Copy start script if needed, or just CMD
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default command provides shell access for TUI usage
+# Use: docker-compose run --rm kodiak python -m kodiak
+# Or: docker-compose exec kodiak bash
+CMD ["bash"]

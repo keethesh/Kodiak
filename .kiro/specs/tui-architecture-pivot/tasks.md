@@ -33,40 +33,40 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - Update `pyproject.toml` with `[tool.poetry.scripts]` entry
     - _Requirements: 2.2, 17.9_
 
-- [ ] 3. Architecture cleanup - Remove frontend artifacts
-  - [ ] 3.1 Remove frontend directory
+- [x] 3. Architecture cleanup - Remove frontend artifacts
+  - [x] 3.1 Remove frontend directory
     - Delete entire `frontend/` directory
     - _Requirements: 1.1_
   
-  - [ ] 3.2 Remove FastAPI API layer
+  - [x] 3.2 Remove FastAPI API layer
     - Delete `kodiak/api/endpoints/` directory
     - Delete `kodiak/api/api.py`
     - Keep `kodiak/api/events.py` (will be adapted for TUI)
     - _Requirements: 1.2_
   
-  - [ ] 3.3 Remove WebSocket code
+  - [x] 3.3 Remove WebSocket code
     - Delete `kodiak/api/ws.py`
     - Delete `kodiak/services/websocket_manager.py`
     - _Requirements: 1.3_
   
-  - [ ] 3.4 Remove FastAPI main entry point
+  - [x] 3.4 Remove FastAPI main entry point
     - Delete `main.py` (FastAPI app)
     - _Requirements: 1.6_
   
-  - [ ] 3.5 Clean up configuration
+  - [x] 3.5 Clean up configuration
     - Remove CORS configuration from `kodiak/core/config.py`
     - Remove `BACKEND_CORS_ORIGINS` setting
     - Add TUI-specific settings (color_theme, refresh_rate)
     - _Requirements: 1.4, 15.3, 15.4_
 
-- [ ] 4. Update Docker configuration
-  - [ ] 4.1 Simplify docker-compose.yml
+- [x] 4. Update Docker configuration
+  - [x] 4.1 Simplify docker-compose.yml
     - Remove frontend service definition
     - Update backend service to run TUI (or remove if TUI runs locally)
     - Keep only db and kodiak services
     - _Requirements: 1.5, 14.3_
   
-  - [ ] 4.2 Update backend Dockerfile
+  - [x] 4.2 Update backend Dockerfile
     - Remove FastAPI/uvicorn references
     - Update CMD to run TUI or provide shell access
     - _Requirements: 14.2_

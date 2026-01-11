@@ -1,40 +1,101 @@
-from typing import List, Dict, Any, Optional
+"""
+Event management for Kodiak TUI
+
+Provides event broadcasting and management for the TUI interface.
+Adapted from the original WebSocket-based event system.
+"""
+
+from typing import List, Dict, Any, Optional, Callable
 import asyncio
 import json
 import time
-from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
 
-# Import the existing WebSocketManager
-from kodiak.services.websocket_manager import manager as websocket_manager
 from kodiak.core.error_handling import (
     ErrorHandler, EventBroadcastingError, handle_errors, ErrorCategory
 )
 
-class ExternalEvent:
+
+class TUIEvent:
     """
-    Standard event structure for frontend.
+    Standard event structure for TUI.
     """
     def __init__(self, type: str, data: Dict[str, Any], project_id: str = None):
         self.type = type
         self.data = data
         self.project_id = project_id
+        self.timestamp = time.time()
     
-    def to_json(self):
-        return json.dumps({
+    def to_dict(self):
+        return {
             "type": self.type,
             "data": self.data,
-            "project_id": self.project_id
-        })
+            "project_id": self.project_id,
+            "timestamp": self.timestamp
+        }
 
-class EventManager:
+
+class TUIEventManager:
     """
-    Unified event manager for tool execution events.
-    Integrates with the existing WebSocketManager for client notifications.
+    Event manager for TUI interface.
+    Manages event broadcasting to TUI components.
     """
-    def __init__(self, websocket_manager):
-        self.websocket_manager = websocket_manager
-        logger.info("EventManager initialized")
+    def __init__(self):
+        self.event_handlers: Dict[str, List[Callable]] = {}
+        self.scan_handlers: Dict[str, List[Callable]] = {}
+        logger.info("TUIEventManager initialized")
+    
+    def subscribe(self, event_type: str, handler: Callable):
+        """Subscribe to global events"""
+        if event_type not in self.event_handlers:
+            self.event_handlers[event_type] = []
+        self.event_handlers[event_type].append(handler)
+    
+    def subscribe_scan(self, scan_id: str, handler: Callable):
+        """Subscribe to events for a specific scan"""
+        if scan_id not in self.scan_handlers:
+            self.scan_handlers[scan_id] = []
+        self.scan_handlers[scan_id].append(handler)
+    
+    def unsubscribe(self, event_type: str, handler: Callable):
+        """Unsubscribe from global events"""
+        if event_type in self.event_handlers:
+            if handler in self.event_handlers[event_type]:
+                self.event_handlers[event_type].remove(handler)
+    
+    def unsubscribe_scan(self, scan_id: str, handler: Callable):
+        """Unsubscribe from scan events"""
+        if scan_id in self.scan_handlers:
+            if handler in self.scan_handlers[scan_id]:
+                self.scan_handlers[scan_id].remove(handler)
+    
+    async def emit(self, event: TUIEvent, scan_id: str = None):
+        """Emit an event to subscribers"""
+        try:
+            # Emit to global handlers
+            if event.type in self.event_handlers:
+                for handler in self.event_handlers[event.type]:
+                    try:
+                        if asyncio.iscoroutinefunction(handler):
+                            await handler(event)
+                        else:
+                            handler(event)
+                    except Exception as e:
+                        logger.error(f"Error in event handler: {e}")
+            
+            # Emit to scan-specific handlers
+            if scan_id and scan_id in self.scan_handlers:
+                for handler in self.scan_handlers[scan_id]:
+                    try:
+                        if asyncio.iscoroutinefunction(handler):
+                            await handler(event)
+                        else:
+                            handler(event)
+                    except Exception as e:
+                        logger.error(f"Error in scan event handler: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Failed to emit event {event.type}: {e}")
     
     @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
     async def emit_tool_start(self, tool_name: str, target: str, agent_id: str, scan_id: str = None):
@@ -42,26 +103,14 @@ class EventManager:
         try:
             logger.info(f"Tool {tool_name} started by agent {agent_id} on target {target}")
             
-            if scan_id:
-                await self.websocket_manager.send_tool_update(
-                    scan_id=scan_id,
-                    tool_name=tool_name,
-                    status="started",
-                    data={
-                        "target": target,
-                        "agent_id": agent_id,
-                        "timestamp": time.time()
-                    }
-                )
+            event = TUIEvent("tool_start", {
+                "tool_name": tool_name,
+                "target": target,
+                "agent_id": agent_id,
+                "status": "started"
+            })
             
-            # Also send agent update
-            if scan_id:
-                await self.websocket_manager.send_agent_update(
-                    scan_id=scan_id,
-                    agent_id=agent_id,
-                    status="executing",
-                    message_text=f"Executing {tool_name} on {target}"
-                )
+            await self.emit(event, scan_id)
                 
         except Exception as e:
             raise EventBroadcastingError(
@@ -82,16 +131,12 @@ class EventManager:
         try:
             logger.debug(f"Tool {tool_name} progress: {progress}")
             
-            if scan_id:
-                await self.websocket_manager.send_tool_update(
-                    scan_id=scan_id,
-                    tool_name=tool_name,
-                    status="progress",
-                    data={
-                        "progress": progress,
-                        "timestamp": time.time()
-                    }
-                )
+            event = TUIEvent("tool_progress", {
+                "tool_name": tool_name,
+                "progress": progress
+            })
+            
+            await self.emit(event, scan_id)
                 
         except Exception as e:
             raise EventBroadcastingError(
@@ -112,19 +157,16 @@ class EventManager:
             status = "completed" if result.success else "failed"
             logger.info(f"Tool {tool_name} {status}")
             
-            if scan_id:
-                await self.websocket_manager.send_tool_update(
-                    scan_id=scan_id,
-                    tool_name=tool_name,
-                    status=status,
-                    data={
-                        "success": result.success,
-                        "output": result.output if hasattr(result, 'output') else None,
-                        "error": result.error if hasattr(result, 'error') else None,
-                        "data": result.data if hasattr(result, 'data') else None,
-                        "timestamp": time.time()
-                    }
-                )
+            event = TUIEvent("tool_complete", {
+                "tool_name": tool_name,
+                "status": status,
+                "success": result.success,
+                "output": result.output if hasattr(result, 'output') else None,
+                "error": result.error if hasattr(result, 'error') else None,
+                "data": result.data if hasattr(result, 'data') else None
+            })
+            
+            await self.emit(event, scan_id)
                 
         except Exception as e:
             raise EventBroadcastingError(
@@ -144,13 +186,13 @@ class EventManager:
         try:
             logger.debug(f"Agent {agent_id} thinking: {message}")
             
-            if scan_id:
-                await self.websocket_manager.send_agent_update(
-                    scan_id=scan_id,
-                    agent_id=agent_id,
-                    status="thinking",
-                    message_text=message
-                )
+            event = TUIEvent("agent_thinking", {
+                "agent_id": agent_id,
+                "message": message,
+                "status": "thinking"
+            })
+            
+            await self.emit(event, scan_id)
                 
         except Exception as e:
             raise EventBroadcastingError(
@@ -170,15 +212,15 @@ class EventManager:
         try:
             logger.info(f"Scan {scan_id} started: {scan_name} targeting {target}")
             
-            await self.websocket_manager.broadcast(scan_id, {
-                "type": "scan_started",
-                "timestamp": time.time(),
+            event = TUIEvent("scan_started", {
                 "scan_id": scan_id,
                 "scan_name": scan_name,
                 "target": target,
                 "agent_id": agent_id,
                 "status": "running"
             })
+            
+            await self.emit(event, scan_id)
             
         except Exception as e:
             raise EventBroadcastingError(
@@ -199,15 +241,15 @@ class EventManager:
         try:
             logger.info(f"Scan {scan_id} completed with status: {status}")
             
-            await self.websocket_manager.broadcast(scan_id, {
-                "type": "scan_completed",
-                "timestamp": time.time(),
+            event = TUIEvent("scan_completed", {
                 "scan_id": scan_id,
                 "scan_name": scan_name,
                 "status": status,
                 "summary": summary or {},
                 "completed_at": time.time()
             })
+            
+            await self.emit(event, scan_id)
             
         except Exception as e:
             raise EventBroadcastingError(
@@ -227,9 +269,7 @@ class EventManager:
         try:
             logger.error(f"Scan {scan_id} failed: {error}")
             
-            await self.websocket_manager.broadcast(scan_id, {
-                "type": "scan_failed",
-                "timestamp": time.time(),
+            event = TUIEvent("scan_failed", {
                 "scan_id": scan_id,
                 "scan_name": scan_name,
                 "status": "failed",
@@ -237,6 +277,8 @@ class EventManager:
                 "details": details or {},
                 "failed_at": time.time()
             })
+            
+            await self.emit(event, scan_id)
             
         except Exception as e:
             raise EventBroadcastingError(
@@ -256,9 +298,7 @@ class EventManager:
         try:
             logger.info(f"New finding discovered in scan {scan_id}: {finding.get('title', 'Unknown')}")
             
-            await self.websocket_manager.broadcast(scan_id, {
-                "type": "finding_discovered",
-                "timestamp": time.time(),
+            event = TUIEvent("finding_discovered", {
                 "scan_id": scan_id,
                 "agent_id": agent_id,
                 "finding": {
@@ -271,6 +311,8 @@ class EventManager:
                     "discovered_at": time.time()
                 }
             })
+            
+            await self.emit(event, scan_id)
             
         except Exception as e:
             raise EventBroadcastingError(
@@ -286,15 +328,15 @@ class EventManager:
     
     @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
     async def emit_error(self, error: Dict[str, Any], scan_id: str = None):
-        """Broadcast error event to clients"""
+        """Broadcast error event"""
         try:
             logger.warning(f"Broadcasting error event: {error}")
             
-            if scan_id:
-                await self.websocket_manager.send_error_notification(
-                    scan_id=scan_id,
-                    error=error
-                )
+            event = TUIEvent("error", {
+                "error": error
+            })
+            
+            await self.emit(event, scan_id)
                 
         except Exception as e:
             # Don't create recursive error handling for error events
@@ -303,11 +345,12 @@ class EventManager:
     def get_health_status(self) -> Dict[str, Any]:
         """Get EventManager health status"""
         try:
-            ws_stats = self.websocket_manager.get_connection_stats()
             return {
                 "healthy": True,
-                "websocket_manager": ws_stats.get("healthy", True),
-                "total_connections": ws_stats.get("total_scan_connections", 0) + ws_stats.get("global_connections", 0)
+                "global_handlers": len(self.event_handlers),
+                "scan_handlers": len(self.scan_handlers),
+                "total_handlers": sum(len(handlers) for handlers in self.event_handlers.values()) + 
+                                sum(len(handlers) for handlers in self.scan_handlers.values())
             }
         except Exception as e:
             return {
@@ -315,45 +358,17 @@ class EventManager:
                 "error": str(e)
             }
 
-# Legacy ConnectionManager for backward compatibility
-class ConnectionManager:
-    """
-    Legacy connection manager - kept for backward compatibility.
-    Delegates to the new EventManager.
-    """
-    def __init__(self):
-        # scan_id -> list of websockets
-        self.active_connections: Dict[str, List[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, scan_id: str):
-        await websocket.accept()
-        if scan_id not in self.active_connections:
-            self.active_connections[scan_id] = []
-        self.active_connections[scan_id].append(websocket)
-        logger.info(f"Client connected to scan {scan_id}")
+# Global instance
+event_manager = TUIEventManager()
 
-    def disconnect(self, websocket: WebSocket, scan_id: str):
-        if scan_id in self.active_connections:
-            if websocket in self.active_connections[scan_id]:
-                self.active_connections[scan_id].remove(websocket)
-            if not self.active_connections[scan_id]:
-                del self.active_connections[scan_id]
 
-    async def broadcast(self, message: str, scan_id: str):
-        """
-        Send raw message to all clients listening to scan_id.
-        """
-        if scan_id in self.active_connections:
-            for connection in self.active_connections[scan_id]:
-                try:
-                    await connection.send_text(message)
-                except Exception as e:
-                    logger.warning(f"Failed to send to client: {e}")
-                    # Could clean up dead connections here
+# Legacy compatibility - for any code that still imports the old names
+class EventManager(TUIEventManager):
+    """Legacy compatibility class"""
+    pass
 
-    async def emit(self, event: ExternalEvent, scan_id: str):
-        await self.broadcast(event.to_json(), scan_id)
 
-# Global instances
-event_manager = EventManager(websocket_manager)
-legacy_connection_manager = ConnectionManager()
+class ExternalEvent(TUIEvent):
+    """Legacy compatibility class"""
+    pass

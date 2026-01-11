@@ -18,13 +18,11 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  kodiak:
     build: 
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     restart: always
-    ports:
-      - "8000:8000"
     environment:
       - POSTGRES_SERVER=db
       - POSTGRES_USER=kodiak
@@ -58,27 +56,20 @@ services:
       - KODIAK_MAX_AGENTS=5
       - KODIAK_TOOL_TIMEOUT=300
       - KODIAK_ENABLE_HIVE_MIND=true
+      
+      # TUI Settings
+      - KODIAK_TUI_COLOR_THEME=dark
+      - KODIAK_TUI_REFRESH_RATE=10
     depends_on:
       db:
         condition: service_healthy
     volumes:
       # Mount source for dev (optional, remove for prod)
-      - ./backend/kodiak:/app/kodiak
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        # For browser access, this should be the PUBLIC URL of the VPS or localhost
-        # This is baked into the potential static pages, but mainly used by client-side hooks
-        - NEXT_PUBLIC_WS_URL=${KODIAK_PUBLIC_URL:-ws://localhost:8000/api/v1}
-    restart: always
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      # Persist wait-for-it or other scripts if needed
+      - ./kodiak:/app/kodiak
+    # For TUI access, you can either:
+    # 1. Run interactively: docker-compose run --rm kodiak
+    # 2. Or exec into running container: docker-compose exec kodiak bash
+    command: ["python", "-m", "kodiak", "init"]  # Initialize DB by default
 
 volumes:
   postgres_data:

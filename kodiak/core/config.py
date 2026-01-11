@@ -29,13 +29,10 @@ class KodiakSettings(BaseSettings):
     # Application Configuration
     PROJECT_NAME: str = Field(default="Kodiak", env="KODIAK_PROJECT_NAME")
     VERSION: str = Field(default="1.0.0", env="KODIAK_VERSION")
-    API_V1_STR: str = Field(default="/api/v1", env="KODIAK_API_V1_STR")
     
-    # CORS Configuration
-    BACKEND_CORS_ORIGINS: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"],
-        env="KODIAK_BACKEND_CORS_ORIGINS"
-    )
+    # TUI Configuration
+    tui_color_theme: str = Field(default="dark", env="KODIAK_TUI_COLOR_THEME")
+    tui_refresh_rate: int = Field(default=10, env="KODIAK_TUI_REFRESH_RATE")  # Hz
     
     # Database Configuration
     postgres_server: str = Field(default="localhost", env="POSTGRES_SERVER")
@@ -72,12 +69,6 @@ class KodiakSettings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
-        # Support for list parsing from environment variables
-        @classmethod
-        def parse_env_var(cls, field_name: str, raw_val: str) -> Any:
-            if field_name == 'BACKEND_CORS_ORIGINS':
-                return [x.strip() for x in raw_val.split(',')]
-            return cls.json_loads(raw_val)
 
     @property
     def database_url(self) -> str:
