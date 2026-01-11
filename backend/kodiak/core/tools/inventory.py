@@ -17,5 +17,8 @@ class ToolInventory:
     def list_tools(cls) -> Dict[str, str]:
         return {name: tool.description for name, tool in cls._tools.items()}
 
+from kodiak.core.tools.definitions.web import NucleiTool
+
 inventory = ToolInventory()
 inventory.register(NmapTool())
+inventory.register(NucleiTool())
