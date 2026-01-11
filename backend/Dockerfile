@@ -12,6 +12,7 @@ RUN apt-get update \
         nmap \
         build-essential \
         libpq-dev \
+        unzip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
