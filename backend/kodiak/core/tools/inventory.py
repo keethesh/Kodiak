@@ -18,7 +18,9 @@ class ToolInventory:
         return {name: tool.description for name, tool in cls._tools.items()}
 
 from kodiak.core.tools.definitions.web import NucleiTool
+from kodiak.core.tools.definitions.system import TerminalTool
 
 inventory = ToolInventory()
 inventory.register(NmapTool())
 inventory.register(NucleiTool())
+inventory.register(TerminalTool())
