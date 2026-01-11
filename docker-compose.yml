@@ -72,7 +72,7 @@ services:
       args:
         # For browser access, this should be the PUBLIC URL of the VPS or localhost
         # This is baked into the potential static pages, but mainly used by client-side hooks
-        - NEXT_PUBLIC_WS_URL=ws://localhost:8000/api/v1
+        - NEXT_PUBLIC_WS_URL=${KODIAK_PUBLIC_URL:-ws://localhost:8000/api/v1}
     restart: always
     ports:
       - "3000:3000"
