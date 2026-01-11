@@ -75,18 +75,49 @@ class Orchestrator:
                         # For now, simplistic logic
                         pass
 
-                    # B. Demo Logic: Just run Nmap on the target if it exists in config
+                    # B. Full Recon Workflow
                     if target:
-                        logger.info(f"Orchestrator: Dispatching Nmap on {target}")
-                        result = await agent.act("nmap", {
-                            "target": target, 
-                            "ports": "80,443", 
-                            "fast_mode": True,
-                            "version_detect": True
-                        })
-                        logger.info(f"Scan Result: {result.get('success')}")
+                        logger.info(f"Orchestrator: Starting Recon on {target}")
                         
-                        # Mark as completed to stop infinite loop for this demo
+                        # Step 1: Subdomain Enumeration
+                        logger.info("Step 1: Subfinder")
+                        sub_result = await agent.act("subfinder_enumerate", {"domain": target})
+                        subdomains = sub_result.get("data", {}).get("subdomains", [])
+                        logger.info(f"Found {len(subdomains)} subdomains.")
+                        
+                        # Step 2: Live Host Probing
+                        logger.info("Step 2: Httpx")
+                        # Combine target + subdomains for probing
+                        probe_targets = [target] + subdomains
+                        # Join for httpx CLI (comma separated or handled by tool logic)
+                        # The tool logic currently takes a single target string or handles lists?
+                        # Let's simple probe the main target first for reliability in this demo
+                        # TODO: Loop through list or improve tool to handle bulk
+                        
+                        live_hosts = []
+                        for host in probe_targets[:5]: # Limit to 5 for speed in demo
+                            probe_res = await agent.act("httpx_probe", {"target": host})
+                            if probe_res.get("data", {}).get("live_hosts", 0) > 0:
+                                live_hosts.append(host)
+                        
+                        logger.info(f"Live Hosts: {live_hosts}")
+                        
+                        # Step 3: Nmap & Nuclei on Live Hosts
+                        for host in live_hosts:
+                            logger.info(f"Step 3: Nmap on {host}")
+                            await agent.act("nmap", {
+                                "target": host,
+                                "ports": "80,443,8080",
+                                "fast_mode": True
+                            })
+                            
+                            logger.info(f"Step 4: Nuclei on {host}")
+                            await agent.act("nuclei_scan", {
+                                "target": host,
+                                "tags": "cve,misconfig"
+                            })
+
+                        # Mark as completed
                         await crud_scan.update_status(session, scan_id, ScanStatus.COMPLETED)
                         return
                     

@@ -19,19 +19,19 @@ class NmapTool(KodiakTool):
     description = "Run Nmap network scan"
     args_schema = NmapArgs
 
-    async def run(self, args: NmapArgs) -> ToolResult:
+    async def _execute(self, args: Dict[str, Any]) -> Any:
         # Construct command
         command = ["nmap"]
-        if args.fast_mode and not args.ports:
+        if args.get("fast_mode") and not args.get("ports"):
             command.append("-F")
-        if args.ports:
-            command.extend(["-p", args.ports])
-        if args.version_detect:
+        if args.get("ports"):
+            command.extend(["-p", args["ports"]])
+        if args.get("version_detect"):
             command.append("-sV")
-        if args.script_scan:
+        if args.get("script_scan"):
             command.append("-sC")
         
-        command.append(args.target)
+        command.append(args["target"])
         
         cmd_str = " ".join(command)
 

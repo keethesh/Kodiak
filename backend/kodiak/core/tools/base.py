@@ -12,13 +12,49 @@ class ToolResult(BaseModel):
 
 
 class KodiakTool(ABC):
-    name: str
-    description: str
-    args_schema: Type[BaseModel]
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        pass
+
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        pass
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        """JSON Schema for the tool parameters."""
+        return {}
+    
+    # Optional Pydantic support
+    args_schema: Type[BaseModel] | None = None
+
+    async def run(self, args: BaseModel | Dict[str, Any]) -> ToolResult:
+        """
+        Execute the tool. Accepts either Pydantic model or Dict.
+        """
+        try:
+            if isinstance(args, BaseModel):
+                data = args.dict()
+            else:
+                data = args
+            
+            # Call internal execute
+            result_data = await self._execute(data)
+            
+            # Allow _execute to return a dict or a ToolResult
+            if isinstance(result_data, ToolResult):
+                return result_data
+                
+            return ToolResult(
+                success=True, 
+                output=str(result_data.get("output", "")) if isinstance(result_data, dict) else str(result_data),
+                data=result_data if isinstance(result_data, dict) else {"raw": result_data}
+            )
+        except Exception as e:
+            return ToolResult(success=False, output="", error=str(e))
 
     @abstractmethod
-    async def run(self, args: BaseModel) -> ToolResult:
-        """
-        Execute the tool with the given arguments.
-        """
+    async def _execute(self, args: Dict[str, Any]) -> Any:
         pass

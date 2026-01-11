@@ -26,10 +26,12 @@ class KodiakAgent:
             
         try:
             # Validate args against tool schema
-            validated_args = tool.args_schema(**args)
-            
-            # Run tool
-            result = await tool.run(validated_args)
+            if tool.args_schema:
+                validated_args = tool.args_schema(**args)
+                result = await tool.run(validated_args)
+            else:
+                # Pass dict directly
+                result = await tool.run(args)
             
             # Return dict representation of result
             return {
