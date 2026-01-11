@@ -19,8 +19,11 @@ class ToolInventory:
 
 from kodiak.core.tools.definitions.web import NucleiTool
 from kodiak.core.tools.definitions.system import TerminalTool
+from kodiak.core.tools.definitions.discovery import SubfinderTool, HttpxTool
 
 inventory = ToolInventory()
 inventory.register(NmapTool())
 inventory.register(NucleiTool())
 inventory.register(TerminalTool())
+inventory.register(SubfinderTool())
+inventory.register(HttpxTool())

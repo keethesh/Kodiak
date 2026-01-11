@@ -6,6 +6,8 @@ import { useWebSocket } from '@/lib/useWebSocket';
 import { LogMessage } from '@/types';
 import { Play, Pause } from 'lucide-react';
 
+import { startScan, createScan } from '@/lib/api';
+
 export default function Home() {
   const [logs, setLogs] = useState<LogMessage[]>([]);
 
