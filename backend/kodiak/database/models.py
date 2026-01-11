@@ -58,6 +58,9 @@ class Asset(SQLModel, table=True):
     value: str = Field(index=True) # example.com, 192.168.1.1
     metadata_: Dict[str, Any] = Field(default={}, sa_column=Column("metadata", JSON))
     
+    # Workflow Status
+    scanned: bool = Field(default=False)
+    
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     project: Project = Relationship(back_populates="assets")

@@ -34,164 +34,141 @@ class Orchestrator:
             # Update status to RUNNING
             await crud_scan.update_status(session, scan_id, ScanStatus.RUNNING)
             
-            # Start the background loop
-            task = asyncio.create_task(self._scan_loop(scan_id))
-            self._active_scans[scan_id] = task
-            logger.info(f"Started scan loop for {scan_id}")
+            # Start the background tasks
+            # We treat these as "Subagents" running in parallel
+            discovery_task = asyncio.create_task(self._discovery_worker(scan_id))
+            exploit_task = asyncio.create_task(self._exploit_worker(scan_id))
+            
+            self._active_scans[scan_id] = [discovery_task, exploit_task]
+            logger.info(f"Started Subagent Swarm for {scan_id}")
             break # Only need one session from generator
 
-    async def _scan_loop(self, scan_id: UUID):
+    async def _discovery_worker(self, scan_id: UUID):
         """
-        The main state machine loop for a scan.
+        Subagent 1: The Scout.
+        Focus: Finds assets (Subdomains, IPs, Live Hosts) and saves them to DB.
         """
+        from kodiak.core.agent import KodiakAgent
+        logger.info(f"Discovery Agent started for {scan_id}")
+        
         try:
+            async for session in get_session():
+                scan = await crud_scan.get(session, scan_id)
+                target = scan.config.get("target") if scan else None
+                if not target: return
+                
+                # Instructions
+                user_instructions = scan.config.get("instructions", "")
+                
+                agent = KodiakAgent(agent_id=f"scout-{scan_id}")
+                
+                # RECON LOOP
+                history = [{"role": "user", "content": f"Find subdomains and live hosts for {target}."}]
+                tools = ["subfinder_enumerate", "httpx_probe", "terminal_execute"]
+                system_prompt = (
+                    "You are the SCOUT AGENT. Your ONLY job is discovery."
+                    "1. Find subdomains."
+                    "2. Verify they are alive."
+                    "3. Do NOT run active scans (nmap/nuclei)."
+                    f"\n\nContext: {user_instructions}"
+                )
+                
+                for _ in range(10): # Max steps for recon
+                    # Check stop signal
+                    # (Simplified: if scan status changed)
+                    
+                    response = await agent.think(history, allowed_tools=tools, system_prompt=system_prompt)
+                    
+                    # Log & Execute
+                    if response.tool_calls:
+                         for tool_call in response.tool_calls:
+                            fn_name = tool_call.function.name
+                            fn_args = json.loads(tool_call.function.arguments)
+                            
+                            logger.info(f"[Scout] Executing: {fn_name}")
+                            result = await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id)
+                            
+                            history.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps(result)
+                            })
+                    else:
+                        logger.info(f"[Scout] Thought: {response.content}")
+                        history.append(response.dict() if hasattr(response, 'dict') else dict(response))
+                        if "completed" in str(response.content).lower():
+                            break
+                            
+                logger.info("Discovery Agent finished.")
+                return 
+
+        except Exception as e:
+            logger.exception(f"Discovery Worker failed: {e}")
+
+    async def _exploit_worker(self, scan_id: UUID):
+        """
+        Subagent 2: The Attacker.
+        Focus: Polling the DB for new 'unscanned' assets and nuking them.
+        """
+        from kodiak.core.agent import KodiakAgent
+        from kodiak.database.models import Asset
+        from sqlmodel import select
+        
+        logger.info(f"Exploit Agent started for {scan_id}")
+        
+        agent = KodiakAgent(agent_id=f"attacker-{scan_id}")
+        
+        try:
+            # Poll Loop
             while True:
-                # 1. Load fresh state from DB
                 async for session in get_session():
                     scan = await crud_scan.get(session, scan_id)
                     if not scan or scan.status != ScanStatus.RUNNING:
-                        logger.info(f"Scan {scan_id} stopped or paused. Exiting loop.")
                         return
 
-                    # 2. Determine Next Step (The "Graph" Logic)
-                    # Simple Logic:
-                    # A. Check for Targets (Roots)
-                    # B. If Root exists and not scanned -> Run Nmap
+                    # 1. Find Unscanned Assets
+                    # We need assets belonging to this project/scan
+                    # Simplification: Fetch one unscanned asset
+                    statement = select(Asset).where(
+                        Asset.project_id == scan.project_id,
+                        Asset.scanned == False,
+                        Asset.type == "endpoint" # Only scan live endpoints for now
+                    ).limit(1)
                     
-                    # Check for any assets
-                    from kodiak.database.models import Asset
-                    from kodiak.core.agent import KodiakAgent
+                    result = await session.execute(statement)
+                    asset = result.scalar_one_or_none()
                     
-                    # Define a transient agent for this loop iteration
-                    # In future, we might persist agent instances
-                    agent = KodiakAgent(agent_id=f"worker-{scan_id}")
-
-                    # A. Check for Root Asset (Target)
-                    # We assume the config has the target, and we should create the asset if missing
-                    target = scan.config.get("target")
-                    if target:
-                        # Check if asset exists
-                        # TODO: proper CRUD for this check
-                        # For now, simplistic logic
-                        pass
-
-                    if target:
-                        logger.info(f"Orchestrator: Starting Phased Scan on {target}")
+                    if asset:
+                        # Lock it
+                        asset.scanned = True
+                        session.add(asset)
+                        await session.commit()
                         
-                        # --- PHASE 1: RECONNAISSANCE ---
-                        logger.info(">>> PHASE 1: RECONNAISSANCE <<<")
-                        history_recon = []
-                        history_recon.append({
-                            "role": "user", 
-                            "content": f"Begin RECON phase for {target}. Find subdomains and live hosts. Do NOT run active scans yet."
-                        })
+                        target_host = asset.value
+                        logger.info(f"[Attacker] Picked up target: {target_host}")
                         
-                        # Prepare Instructions
-                        user_instructions = scan.config.get("instructions", "")
-                        instruction_suffix = f"\n\nUSER DIRECTIVES: {user_instructions}" if user_instructions else ""
-
-                        recon_tools = ["subfinder_enumerate", "httpx_probe", "terminal_execute"]
-                        recon_prompt = (
-                            "You are KODIAK (Phase: RECON). Focus ONLY on discovery. "
-                            "1. Use subfinder to find subdomains. "
-                            "2. Use httpx to check which ones are alive. "
-                            "3. Stop when you have a list of live targets."
-                            f"{instruction_suffix}"
-                        )
+                        # Attack it!
+                        # We create a mini-session for this target
+                        history = [{"role": "user", "content": f"Scan {target_host} for vulnerabilities."}]
+                        tools = ["nmap", "nuclei_scan"] # Focused set
+                        system_prompt = "You are the ATTACKER. Find vulnerabilities. High impact only."
                         
-                        # Run Recon Loop (Short)
-                        for step in range(8):
-                            try:
-                                response = await agent.think(history_recon, allowed_tools=recon_tools, system_prompt=recon_prompt)
-                                
-                                # Process Response
-                                msg_dict = response.dict() if hasattr(response, 'dict') else dict(response)
-                                history_recon.append(msg_dict)
-                                
-                                if response.tool_calls:
-                                    for tool_call in response.tool_calls:
-                                        fn_name = tool_call.function.name
-                                        fn_args = {
-                                            **json.loads(tool_call.function.arguments),
-                                            # We assume orchestrator injects session implicitly via act() but JSON args are from LLM
-                                        } 
-                                        import json # ensure import
-                                        
-                                        logger.info(f"[Recon] Executing: {fn_name}")
-                                        result = await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id)
-                                        
-                                        history_recon.append({
-                                            "role": "tool",
-                                            "tool_call_id": tool_call.id,
-                                            "content": json.dumps(result)
-                                        })
-                                else:
-                                    logger.info(f"[Recon] Agent: {response.content}")
-                                    if "completed" in str(response.content).lower():
-                                        break
-                            except Exception as e:
-                                logger.error(f"Recon Error: {e}")
-                                break
+                        # Quick exploit loop (3 steps max per asset)
+                        for _ in range(3):
+                             response = await agent.think(history, allowed_tools=tools, system_prompt=system_prompt)
+                             if response.tool_calls:
+                                for tool_call in response.tool_calls:
+                                    fn_name = tool_call.function.name
+                                    fn_args = json.loads(tool_call.function.arguments)
+                                    await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id)
+                             else:
+                                 break
+                    else:
+                        # No targets yet, wait for Scout
+                        await asyncio.sleep(5)
                         
-                        # --- PHASE 2: ACTIVE SCANNING ---
-                        logger.info(">>> PHASE 2: ACTIVE SCANNING <<<")
-                        
-                        # In a real system, we'd query the DB for the assets found in Phase 1
-                        # For this MVP, we rely on the agent's own memory/history or we explicitly query DB.
-                        # Let's query the DB to give the agent a "Summary of Targets"
-                        
-                        # Fetch confirmed assets (simplification)
-                        # assets = await crud_asset.get_by_project(session, scan.project_id) 
-                        # We'll just prompt it to scan what it found or general target scope if DB query is complex here.
-                        
-                        history_exploit = []
-                        history_exploit.append({
-                            "role": "user", 
-                            "content": f"Begin EXPLOIT phase for {target}. Scan the live hosts identified in Phase 1 for vulnerabilities using Nmap and Nuclei."
-                        })
-                        
-                        exploit_tools = ["nmap", "nuclei_scan", "terminal_execute"]
-                        exploit_prompt = (
-                            "You are KODIAK (Phase: EXPLOIT). Your goal is to find vulnerabilities. "
-                            "1. Run Nmap on identified live hosts. "
-                            "2. Run Nuclei on web endpoints. "
-                            "3. Report critical findings."
-                            f"{instruction_suffix}"
-                        )
-                        
-                        for step in range(10):
-                             try:
-                                response = await agent.think(history_exploit, allowed_tools=exploit_tools, system_prompt=exploit_prompt)
-                                
-                                msg_dict = response.dict() if hasattr(response, 'dict') else dict(response)
-                                history_exploit.append(msg_dict)
-                                
-                                if response.tool_calls:
-                                    for tool_call in response.tool_calls:
-                                        fn_name = tool_call.function.name
-                                        fn_args = json.loads(tool_call.function.arguments)
-                                        
-                                        logger.info(f"[Exploit] Executing: {fn_name}")
-                                        result = await agent.act(fn_name, fn_args, session=session, project_id=scan.project_id)
-                                        
-                                        history_exploit.append({
-                                            "role": "tool",
-                                            "tool_call_id": tool_call.id,
-                                            "content": json.dumps(result)
-                                        })
-                                else:
-                                    logger.info(f"[Exploit] Agent: {response.content}")
-                                    if "completed" in str(response.content).lower():
-                                        break
-                             except Exception as e:
-                                logger.error(f"Exploit Error: {e}")
-                                break
-
-                        # Mark as completed
-                        await crud_scan.update_status(session, scan_id, ScanStatus.COMPLETED)
-                        return
-                    
-                    await asyncio.sleep(5) # Throttle loop
+        except Exception as e:
+            logger.exception(f"Exploit Worker failed: {e}")
 
         except asyncio.CancelledError:
             logger.info(f"Scan {scan_id} cancelled.")
