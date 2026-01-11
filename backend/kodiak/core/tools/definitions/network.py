@@ -35,52 +35,21 @@ class NmapTool(KodiakTool):
         
         cmd_str = " ".join(command)
 
-        # 0. Check Cache First
-        cached_output = hive_mind.get_cached_result(cmd_str)
-        if cached_output:
-            return ToolResult(success=True, output=cached_output, data={"cached": True})
-        
-        # Hive Mind Synchronization
-        # 1. Check if running
-        if hive_mind.is_running(cmd_str):
-            # 2. If running, wait for result (Follower)
-            try:
-                output = await hive_mind.wait_for_result(cmd_str)
-                return ToolResult(success=True, output=output, data={"cached": True})
-            except Exception as e:
-                return ToolResult(success=False, output="", error=f"Error waiting for shared command: {str(e)}")
+        cmd_str = " ".join(command)
 
-        # 3. If not running, acquire lock (Leader)
-        # Note: In a race condition, acquire might return False, handled by re-check logic usually, 
-        # but for simplicity we rely on is_running + acquire pattern or just acquire.
-        # Let's use acquire's return to be safe.
-        
-        is_leader = await hive_mind.acquire(cmd_str, "agent_placeholder_id") # TODO: Pass actual agent ID
-        if not is_leader:
-             # Lost the race, wait for result
-            try:
-                output = await hive_mind.wait_for_result(cmd_str)
-                return ToolResult(success=True, output=output, data={"cached": True})
-            except Exception as e:
-                return ToolResult(success=False, output="", error=f"Error waiting for shared command: {str(e)}")
-
-        # I am the Leader
+        # Execute
         try:
-            executor = get_executor() # Defaults to local for now
+            executor = get_executor() 
             result = await executor.run_command(command)
             
             output = result.stdout
             if result.exit_code != 0:
                 output += f"\nSTDERR: {result.stderr}"
             
-            # Notify followers
-            await hive_mind.release(cmd_str, output)
-            
-            return ToolResult(
-                success=result.exit_code == 0, 
-                output=output, 
-                error=result.stderr if result.exit_code != 0 else None
-            )
+            return {
+                "success": result.exit_code == 0,
+                "output": output,
+                "command": cmd_str
+            }
         except Exception as e:
-            await hive_mind.release(cmd_str, f"Error: {str(e)}")
-            return ToolResult(success=False, output="", error=str(e))
+            raise e
