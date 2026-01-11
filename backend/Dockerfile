@@ -10,22 +10,8 @@ ENV PYTHONUNBUFFERED=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=true \
     POETRY_NO_INTERACTION=1 \
     # Add poetry and venv to PATH
-    PATH="$POETRY_HOME/bin:/app/.venv/bin:$PATH"
-
-# Install system dependencies and Tools (Nmap, etc.)
-# We install standard tools here so the "LocalExecutor" (which is local to the container) finds them.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        curl \
-        netcat-traditional \
-        nmap \
-        build-essential \
-        libpq-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Poetry
-RUN curl -sSL https://install.python-poetry.org | python3 -
+# Install Poetry via pip (simpler path management in Docker)
+RUN pip install poetry==1.7.1
 
 # Set work directory
 WORKDIR /app
@@ -34,7 +20,8 @@ WORKDIR /app
 COPY pyproject.toml poetry.lock ./
 
 # Install dependencies
-RUN poetry install --no-root --only main
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-root --only main
 
 # Copy application code
 COPY . .
