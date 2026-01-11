@@ -3,6 +3,7 @@ from loguru import logger
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
 from sqlmodel import SQLModel
 
 from kodiak.core.config import settings
@@ -49,7 +50,7 @@ async def verify_database_connectivity():
     try:
         async with AsyncSession(engine) as session:
             # Simple query to verify connectivity
-            result = await session.execute("SELECT 1")
+            result = await session.execute(text("SELECT 1"))
             result.fetchone()
             logger.info("Database connectivity verified")
     except Exception as e:
