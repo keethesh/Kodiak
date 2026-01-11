@@ -1,55 +1,53 @@
-from pydantic import BaseModel, Field
+from typing import Dict, Any
+import asyncio
+from kodiak.core.tools.base import KodiakTool
 
-from kodiak.core.tools.base import KodiakTool, ToolResult
-from kodiak.services.executor import get_executor
-from kodiak.core.hive_mind import hive_mind
+class TerminalTool(KodiakTool):
+    """
+    Execute arbitrary shell commands.
+    This provides the 'Hybrid' capability: giving the LLM raw access when structured tools aren't enough.
+    """
+    @property
+    def name(self) -> str:
+        return "terminal_execute"
 
-class PingArgs(BaseModel):
-    hostname: str = Field(..., description="Hostname to ping")
-    count: int = Field(4, description="Number of packets")
+    @property
+    def description(self) -> str:
+        return "Executes a shell command on the system. Use this for tools that don't have dedicated wrappers or for file system exploration."
 
-class PingTool(KodiakTool):
-    name = "ping"
-    description = "Send ICMP Echo Request"
-    args_schema = PingArgs
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The command line to execute (e.g., 'ls -la', 'cat /etc/passwd')"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 60}
+            },
+            "required": ["command"]
+        }
 
-    async def run(self, args: PingArgs) -> ToolResult:
-        # Windows-specific ping command
-        command = ["ping", "-n", str(args.count), args.hostname]
-        cmd_str = " ".join(command)
+    async def _execute(self, args: Dict[str, Any]) -> Any:
+        command = args["command"]
+        timeout = args.get("timeout", 60)
         
-        # Hive Mind Synchronization
-        if hive_mind.is_running(cmd_str):
-            try:
-                output = await hive_mind.wait_for_result(cmd_str)
-                return ToolResult(success=True, output=output, data={"cached": True})
-            except Exception as e:
-                return ToolResult(success=False, output="", error=f"Error waiting: {str(e)}")
-
-        is_leader = await hive_mind.acquire(cmd_str, "agent_placeholder_id")
-        if not is_leader:
-            try:
-                output = await hive_mind.wait_for_result(cmd_str)
-                return ToolResult(success=True, output=output, data={"cached": True})
-            except Exception as e:
-                return ToolResult(success=False, output="", error=f"Error waiting: {str(e)}")
-
         try:
-            # REAL Executor (Local)
-            executor = get_executor("local") 
-            result = await executor.run_command(command)
-            
-            output = result.stdout
-            if result.exit_code != 0:
-                output += f"\nSTDERR: {result.stderr}"
-            
-            await hive_mind.release(cmd_str, output)
-            
-            return ToolResult(
-                success=result.exit_code == 0, 
-                output=output, 
-                error=result.stderr if result.exit_code != 0 else None
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
+            
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+                output = stdout.decode() + stderr.decode()
+                return {
+                    "command": command,
+                    "exit_code": process.returncode,
+                    "output": output
+                }
+            except asyncio.TimeoutError:
+                process.kill()
+                return {"error": f"Command timed out after {timeout} seconds"}
+                
         except Exception as e:
-            await hive_mind.release(cmd_str, f"Error: {str(e)}")
-            return ToolResult(success=False, output="", error=str(e))
+            return {"error": str(e)}
