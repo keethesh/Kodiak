@@ -15,6 +15,10 @@ export default function Home() {
   const [target, setTarget] = useState("scanme.nmap.org");
   const [instructions, setInstructions] = useState("");
 
+  // Scan State
+  const [scanId, setScanId] = useState<string>("demo-scan-1");
+  const [isStarted, setIsStarted] = useState(false);
+
   // Connect to WS
   const { isConnected, sendMessage } = useWebSocket({
     scanId,
