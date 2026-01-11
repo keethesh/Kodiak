@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "kodiak-backend"
+name = "kodiak"
 version = "0.1.0"
-description = "Backend for Kodiak - LLM Penetration Testing Suite"
+description = "Kodiak - LLM Penetration Testing Suite with TUI"
 authors = ["Kodiak Team"]
 readme = "README.md"
 packages = [{include = "kodiak"}]
@@ -40,6 +40,9 @@ black = "^24.1.0"
 isort = "^5.13.0"
 mypy = "^1.8.0"
 ruff = "^0.1.15"
+
+[tool.poetry.scripts]
+kodiak = "kodiak.cli:main"
 
 [build-system]
 requires = ["poetry-core"]

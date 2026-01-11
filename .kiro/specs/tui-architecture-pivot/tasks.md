@@ -12,22 +12,22 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
   - Verify Textual installation works
   - _Requirements: 2.1_
 
-- [-] 2. Project structure reorganization
-  - [ ] 2.1 Move backend code to root
+- [x] 2. Project structure reorganization
+  - [x] 2.1 Move backend code to root
     - Move `backend/kodiak/` to root `kodiak/`
     - Move `backend/pyproject.toml` to root
     - Move `backend/poetry.lock` to root
     - Update all import paths in moved files
     - _Requirements: 17.1, 17.2, 17.3, 17.4_
   
-  - [ ] 2.2 Create TUI directory structure
+  - [x] 2.2 Create TUI directory structure
     - Create `kodiak/tui/` directory
     - Create `kodiak/tui/views/` directory
     - Create `kodiak/tui/widgets/` directory
     - Create `kodiak/tui/__init__.py` files
     - _Requirements: 17.5, 17.6, 17.7, 17.8_
   
-  - [ ] 2.3 Update entry points
+  - [x] 2.3 Update entry points
     - Create `kodiak/__main__.py` for `python -m kodiak`
     - Create `kodiak/cli.py` for CLI commands
     - Update `pyproject.toml` with `[tool.poetry.scripts]` entry
