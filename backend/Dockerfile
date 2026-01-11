@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONDONTWRITEBYTECODE=1
 # Install system dependencies and Tools (Nmap, etc.)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
