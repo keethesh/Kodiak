@@ -1,5 +1,5 @@
 # Builder stage for Go tools
-FROM golang:1.21-alpine AS go-builder
+FROM golang:alpine AS go-builder
 RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
