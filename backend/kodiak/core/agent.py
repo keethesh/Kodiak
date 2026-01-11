@@ -7,11 +7,12 @@ class KodiakAgent:
     The Brain. 
     Decoupled from the loop. It just takes state in, and outputs actions.
     """
-    def __init__(self, agent_id: str, model_name: str = settings.KODIAK_MODEL, session: Any = None, role: str = "generalist"):
+    def __init__(self, agent_id: str, model_name: str = settings.KODIAK_MODEL, session: Any = None, role: str = "generalist", project_id: Any = None):
         self.agent_id = agent_id
         self.model_name = model_name
         self.session = session
         self.role = role
+        self.project_id = project_id
         self.inbox: List[Dict[str, Any]] = [] # Priority Message Queue
 
     def receive_message(self, content: str, sender: str = "Commander"):
@@ -59,6 +60,11 @@ class KodiakAgent:
         # 2. Rolling Summaries: Compress history if too long
         optimized_history = await self._summarize_history(history)
         
+        # 3. Context Injection (The Blackboard)
+        context_str = ""
+        if self.session and self.project_id:
+            context_str = await self._load_context(self.session, self.project_id)
+
         # System Prompt Selection based on Role
         base_prompt = system_prompt
         if not base_prompt:
@@ -88,14 +94,10 @@ class KodiakAgent:
 
         content = base_prompt + (
             " Efficiency Rule: OUTPUT COMPACT JSON. Do not be verbose. "
-            "Result format: Always call a tool or provide a final summary."
+            "Result format: Always call a tool or provide a final summary.\n"
+            f"{context_str}"
         )
         
-        # Injection
-        if self.session and history and isinstance(history[0]["content"], str) and "MISSION:" in history[0]["content"]:
-             # Context loading logic (placeholder)
-             pass
-             
         system_msg = {
             "role": "system",
             "content": content

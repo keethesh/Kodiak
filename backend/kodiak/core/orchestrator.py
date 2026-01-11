@@ -163,7 +163,7 @@ class Orchestrator:
             goal = directive.get("goal", "Execute assigned task.")
             
             # Instantiate Agent with Role
-            agent = KodiakAgent(agent_id=task.assigned_agent_id, session=session, role=role) 
+            agent = KodiakAgent(agent_id=task.assigned_agent_id, session=session, role=role, project_id=project_id) 
             
             # Initial Memory
             history = [{"role": "user", "content": f"MISSION: {goal}"}]
