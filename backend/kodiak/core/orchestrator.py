@@ -36,12 +36,92 @@ class Orchestrator:
             
             # Start the background tasks
             # We treat these as "Subagents" running in parallel
+            manager_task = asyncio.create_task(self._manager_worker(scan_id))
             discovery_task = asyncio.create_task(self._discovery_worker(scan_id))
             exploit_task = asyncio.create_task(self._exploit_worker(scan_id))
             
-            self._active_scans[scan_id] = [discovery_task, exploit_task]
-            logger.info(f"Started Subagent Swarm for {scan_id}")
+            self._active_scans[scan_id] = [manager_task, discovery_task, exploit_task]
+            logger.info(f"Started Subagent Swarm (Manager + Workers) for {scan_id}")
             break # Only need one session from generator
+
+    async def _manager_worker(self, scan_id: UUID):
+        """
+        The Boss.
+        Decides the HIGH LEVEL STRATEGY.
+        Can stop/start workers (logically) or change their instructions.
+        """
+        from kodiak.core.agent import KodiakAgent
+        logger.info(f"Manager Agent started for {scan_id}")
+        
+        agent = KodiakAgent(agent_id=f"manager-{scan_id}")
+        
+        try:
+             async for session in get_session():
+                scan = await crud_scan.get(session, scan_id)
+                target = scan.config.get("target") if scan else None
+                if not target: return
+                
+                # The Manager sees the BIG PICTURE
+                history = [{"role": "user", "content": f"You are the Mission Manager for {target}. Orchestrate the Scout and Attacker to complete the pentest."}]
+                
+                # Main Loop
+                while True:
+                    # 1. Refresh Context (What have we found?)
+                    # Simplification: Manager just ensures workers are running with correct instructions for now
+                    # Future: Query DB stats
+                    
+                    tools = ["manage_mission"]
+                    user_directives = scan.config.get("instructions", "")
+                    
+                    system_prompt = (
+                        "You are KODIAK MANAGER. You control the swarm."
+                        "You have two workers: 'scout' (Discovery) and 'attacker' (Exploitation)."
+                        "Use 'manage_mission' to set their instructions based on the User's Goal."
+                        f"\n\nUSER GOAL: {user_directives}"
+                    )
+                    
+                    response = await agent.think(history, allowed_tools=tools, system_prompt=system_prompt)
+                    
+                    if response.tool_calls:
+                         for tool_call in response.tool_calls:
+                            fn_name = tool_call.function.name
+                            fn_args = json.loads(tool_call.function.arguments)
+                            
+                            logger.info(f"[Manager] Command: {fn_name} -> {fn_args}")
+                            
+                            # EXECUTE: Update Config in DB
+                            if fn_name == "manage_mission":
+                                role = fn_args.get("role")
+                                action = fn_args.get("action")
+                                new_instr = fn_args.get("instructions")
+                                
+                                # Update Scan Config
+                                # We need to be careful with concurrent DB updates here?
+                                # SQLModel/SQLAlchemy handle simple updates well usually
+                                
+                                # Re-fetch to be safe
+                                s = await crud_scan.get(session, scan_id)
+                                current_config = dict(s.config) # copy
+                                directives = current_config.get("directives", {})
+                                
+                                directives[role] = {"action": action, "instructions": new_instr}
+                                current_config["directives"] = directives
+                                
+                                s.config = current_config
+                                session.add(s)
+                                await session.commit()
+                                await session.refresh(s)
+                                
+                                history.append({
+                                    "role": "tool", 
+                                    "tool_call_id": tool_call.id,
+                                    "content": "Directives updated in database."
+                                })
+                    
+                    await asyncio.sleep(10) # Manager thinks every 10s
+                    
+        except Exception as e:
+            logger.exception(f"Manager Worker failed: {e}")
 
     async def _discovery_worker(self, scan_id: UUID):
         """
@@ -57,7 +137,16 @@ class Orchestrator:
                 target = scan.config.get("target") if scan else None
                 if not target: return
                 
-                # Instructions
+                # Instructions from Manager (via Config)
+                directives = scan.config.get("directives", {}).get("scout", {})
+                manager_instr = directives.get("instructions", "")
+                action = directives.get("action", "start")
+                
+                if action == "stop":
+                    logger.info("[Scout] Paused by Manager.")
+                    await asyncio.sleep(5)
+                    continue
+
                 user_instructions = scan.config.get("instructions", "")
                 
                 agent = KodiakAgent(agent_id=f"scout-{scan_id}")
@@ -70,7 +159,8 @@ class Orchestrator:
                     "1. Find subdomains."
                     "2. Verify they are alive."
                     "3. Do NOT run active scans (nmap/nuclei)."
-                    f"\n\nContext: {user_instructions}"
+                    f"\n\nUser Context: {user_instructions}"
+                    f"\nMANAGER ORDERS: {manager_instr}"
                 )
                 
                 for _ in range(10): # Max steps for recon
@@ -147,11 +237,24 @@ class Orchestrator:
                         target_host = asset.value
                         logger.info(f"[Attacker] Picked up target: {target_host}")
                         
+                        # Check Manager Directives
+                        directives = scan.config.get("directives", {}).get("attacker", {})
+                        manager_instr = directives.get("instructions", "")
+                        action = directives.get("action", "start")
+                        
+                        if action == "stop":
+                             logger.info("[Attacker] Paused by Manager.")
+                             await asyncio.sleep(5)
+                             continue
+                        
                         # Attack it!
                         # We create a mini-session for this target
                         history = [{"role": "user", "content": f"Scan {target_host} for vulnerabilities."}]
                         tools = ["nmap", "nuclei_scan"] # Focused set
-                        system_prompt = "You are the ATTACKER. Find vulnerabilities. High impact only."
+                        system_prompt = (
+                            "You are the ATTACKER. Find vulnerabilities. High impact only."
+                            f"\nMANAGER ORDERS: {manager_instr}"
+                        )
                         
                         # Quick exploit loop (3 steps max per asset)
                         for _ in range(3):
