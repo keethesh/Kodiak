@@ -18,13 +18,16 @@ export async function stopScan(scanId: string) {
     return res.json();
 }
 
-export async function createScan(name: string, target: string) {
+export async function createScan(name: string, target: string, instructions: string = "") {
     const res = await fetch(`${API_BASE}/scans/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             name,
-            config: { target } // Simple config for now
+            config: {
+                target,
+                instructions
+            }
         })
     });
     if (!res.ok) throw new Error('Failed to create scan');

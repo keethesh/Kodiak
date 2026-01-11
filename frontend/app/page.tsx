@@ -11,9 +11,9 @@ import { startScan, createScan } from '@/lib/api';
 export default function Home() {
   const [logs, setLogs] = useState<LogMessage[]>([]);
 
-  // Hardcoded for demo - in reality, we'd create a scan first
-  const [scanId, setScanId] = useState<string>("demo-scan-1");
-  const [isStarted, setIsStarted] = useState(false);
+  // State for user inputs
+  const [target, setTarget] = useState("scanme.nmap.org");
+  const [instructions, setInstructions] = useState("");
 
   // Connect to WS
   const { isConnected, sendMessage } = useWebSocket({
@@ -22,9 +22,7 @@ export default function Home() {
     onMessage: (msg) => {
       // If we receive a log message
       if (msg.type === 'log') {
-        const payload = msg.payload as LogMessage; // or whatever the backend sends
-        // Backend actually sends 'log' type for logs.
-        // Let's assume payload matches LogMessage or map it
+        const payload = msg.payload as LogMessage;
         setLogs(prev => [...prev, payload]);
       }
     }
@@ -32,14 +30,19 @@ export default function Home() {
 
   const handleStart = async () => {
     setIsStarted(true);
-    // In a real app, calls POST /api/v1/scans/{id}/start
-    // For demo, effectively doing nothing but UI state
 
-    // Simulate some local logs for effect if offline
-    if (!isConnected) {
-      addLog("SYSTEM", "WARNING", "Backend Disconnected. Running Demo Mode.");
-      setTimeout(() => addLog("ORCH", "INFO", "Initializing Scan..."), 500);
-      setTimeout(() => addLog("NMAP", "INFO", "Scanning 192.168.1.1..."), 1200);
+    // Create the scan with custom config
+    try {
+      const newScan = await createScan(`Scan-${Date.now()}`, target, instructions);
+      setScanId(newScan.id);
+      addLog("SYSTEM", "INFO", `Created Scan ID: ${newScan.id}`);
+
+      // Start it
+      await startScan(newScan.id);
+      addLog("SYSTEM", "INFO", "Scan Started Successfully.");
+    } catch (e) {
+      addLog("SYSTEM", "ERROR", `Failed to start: ${e}`);
+      setIsStarted(false);
     }
   };
 
@@ -78,18 +81,27 @@ export default function Home() {
 
         {/* Controls */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Card 1: Target */}
+          {/* Card 1: Target Input */}
           <div className="bg-zinc-900/50 border border-white/5 rounded-xl p-6">
             <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Target Scope</label>
-            <div className="mt-2 text-2xl font-mono text-white">scanme.nmap.org</div>
+            <input
+              type="text"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              className="mt-2 w-full bg-black/50 border border-white/10 rounded px-3 py-2 text-white font-mono focus:border-green-500 focus:outline-none"
+              placeholder="example.com"
+            />
           </div>
 
-          {/* Card 2: Status */}
+          {/* Card 2: Instructions Input */}
           <div className="bg-zinc-900/50 border border-white/5 rounded-xl p-6">
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Operation Status</label>
-            <div className="mt-2 text-2xl font-mono text-white flex items-center gap-2">
-              {isStarted ? <span className="text-green-400">RUNNING</span> : <span className="text-zinc-500">IDLE</span>}
-            </div>
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Mission Directives</label>
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              className="mt-2 w-full bg-black/50 border border-white/10 rounded px-3 py-2 text-white font-mono text-sm focus:border-green-500 focus:outline-none h-[50px] resize-none"
+              placeholder="e.g. Focus on XSS, ignore admin panel..."
+            />
           </div>
 
           {/* Card 3: Action */}

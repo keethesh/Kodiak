@@ -86,12 +86,17 @@ class Orchestrator:
                             "content": f"Begin RECON phase for {target}. Find subdomains and live hosts. Do NOT run active scans yet."
                         })
                         
+                        # Prepare Instructions
+                        user_instructions = scan.config.get("instructions", "")
+                        instruction_suffix = f"\n\nUSER DIRECTIVES: {user_instructions}" if user_instructions else ""
+
                         recon_tools = ["subfinder_enumerate", "httpx_probe", "terminal_execute"]
                         recon_prompt = (
                             "You are KODIAK (Phase: RECON). Focus ONLY on discovery. "
                             "1. Use subfinder to find subdomains. "
                             "2. Use httpx to check which ones are alive. "
                             "3. Stop when you have a list of live targets."
+                            f"{instruction_suffix}"
                         )
                         
                         # Run Recon Loop (Short)
@@ -151,6 +156,7 @@ class Orchestrator:
                             "1. Run Nmap on identified live hosts. "
                             "2. Run Nuclei on web endpoints. "
                             "3. Report critical findings."
+                            f"{instruction_suffix}"
                         )
                         
                         for step in range(10):

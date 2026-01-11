@@ -39,7 +39,8 @@ class Settings(BaseSettings):
 
     # LLM
     OPENAI_API_KEY: str | None = None
-    KODIAK_MODEL: str = "gpt-4-turbo-preview"
+    GEMINI_API_KEY: str | None = None
+    KODIAK_MODEL: str = "gemini/gemini-1.5-pro-latest"
 
     model_config = SettingsConfigDict(case_sensitive=True, env_file=".env")
 
