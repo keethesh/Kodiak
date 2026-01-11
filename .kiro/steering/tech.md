@@ -4,9 +4,8 @@
 - **Language**: Python 3.11+
 - **Framework**: FastAPI with async/await support
 - **Database**: PostgreSQL with SQLModel (SQLAlchemy 2.0)
-- **LLM Integration**: LiteLLM for multi-provider support
+- **LLM Integration**: LiteLLM for multi-provider support (Gemini, OpenAI, Claude, Ollama, etc.)
 - **WebSocket**: Real-time communication with frontend
-- **Authentication**: python-jose with cryptography (planned)
 - **Browser Automation**: Playwright for web application testing
 - **HTTP Client**: httpx with async support
 - **Configuration**: Pydantic settings with environment variables
@@ -54,6 +53,13 @@
 
 ### Development Setup
 ```bash
+# Configure your LLM (interactive)
+python configure_llm.py
+
+# Or manually create .env file
+cp .env.example .env
+# Edit .env with your API keys and preferences
+
 # Start full stack
 docker-compose up --build
 
@@ -70,6 +76,24 @@ npm run dev
 # Run implementation tests
 cd backend
 python test_implementation.py
+```
+
+### LLM Configuration Examples
+```bash
+# Gemini 1.5 Pro (Recommended)
+export KODIAK_LLM_PROVIDER=gemini
+export KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+export GOOGLE_API_KEY=your_google_api_key
+
+# OpenAI GPT-4
+export KODIAK_LLM_PROVIDER=openai
+export KODIAK_LLM_MODEL=openai/gpt-4
+export OPENAI_API_KEY=your_openai_api_key
+
+# Claude 3.5 Sonnet
+export KODIAK_LLM_PROVIDER=claude
+export KODIAK_LLM_MODEL=claude-3-5-sonnet-20241022
+export ANTHROPIC_API_KEY=your_anthropic_api_key
 ```
 
 ### Code Quality
@@ -112,9 +136,28 @@ curl http://localhost:8000/api/v1/skills/sql_injection
 ```
 
 ## Environment Variables
-- `OPENAI_API_KEY`: Required for LLM functionality
-- `KODIAK_MODEL`: LLM model to use (default: gpt-3.5-turbo)
+
+### LLM Configuration
+- `KODIAK_LLM_PROVIDER`: LLM provider (gemini, openai, claude, ollama)
+- `KODIAK_LLM_MODEL`: Specific model to use (e.g., gemini/gemini-1.5-pro)
+- `GOOGLE_API_KEY`: Google API key for Gemini models
+- `OPENAI_API_KEY`: OpenAI API key for GPT models
+- `ANTHROPIC_API_KEY`: Anthropic API key for Claude models
+- `KODIAK_LLM_TEMPERATURE`: Model temperature (default: 0.1)
+- `KODIAK_LLM_MAX_TOKENS`: Maximum tokens per response (default: 4096)
+
+### Database Configuration
 - `POSTGRES_*`: Database connection settings (handled by docker-compose)
+
+### Application Settings
+- `KODIAK_DEBUG`: Enable debug mode (default: false)
+- `KODIAK_LOG_LEVEL`: Logging level (default: INFO)
+- `KODIAK_ENABLE_SAFETY`: Enable safety checks (default: true)
+- `KODIAK_MAX_AGENTS`: Maximum concurrent agents (default: 5)
+- `KODIAK_TOOL_TIMEOUT`: Tool execution timeout in seconds (default: 300)
+- `KODIAK_ENABLE_HIVE_MIND`: Enable hive mind coordination (default: true)
+
+### Frontend Configuration
 - `NEXT_PUBLIC_WS_URL`: WebSocket URL for frontend (defaults to localhost:8000)
 
 ## Implementation Status
