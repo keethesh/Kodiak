@@ -35,7 +35,8 @@ RUN pip install poetry==1.7.1
 WORKDIR /app
 
 # Copy dependency files first (for caching)
-COPY pyproject.toml poetry.lock ./
+# Copy dependency files first (for caching)
+COPY pyproject.toml ./
 
 # Install dependencies
 RUN poetry config virtualenvs.create false \
