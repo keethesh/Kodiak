@@ -122,8 +122,14 @@ class Orchestrator:
                                     
                                     logger.info(f"Agent executing: {fn_name}({fn_args})")
                                     
-                                    # Execute
-                                    result = await agent.act(fn_name, fn_args)
+                                    # Execute with Persistence Context
+                                    # scan.project_id available from loaded scan object
+                                    result = await agent.act(
+                                        fn_name, 
+                                        fn_args, 
+                                        session=session, 
+                                        project_id=scan.project_id
+                                    )
                                     
                                     # Append result
                                     history.append({
