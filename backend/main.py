@@ -38,7 +38,8 @@ if settings.BACKEND_CORS_ORIGINS:
 def health_check():
     return {"status": "ok", "version": settings.VERSION}
 
-# app.include_router(api_router, prefix=settings.API_V1_STR)
+from kodiak.api.api import api_router
+app.include_router(api_router, prefix=settings.API_V1_STR)
 
 if __name__ == "__main__":
     import uvicorn
