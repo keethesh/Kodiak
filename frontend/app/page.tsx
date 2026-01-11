@@ -1,64 +1,112 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Terminal } from '@/components/Terminal';
+import { useWebSocket } from '@/lib/useWebSocket';
+import { LogMessage } from '@/types';
+import { Play, Pause } from 'lucide-react';
 
 export default function Home() {
+  const [logs, setLogs] = useState<LogMessage[]>([]);
+
+  // Hardcoded for demo - in reality, we'd create a scan first
+  const [scanId, setScanId] = useState<string>("demo-scan-1");
+  const [isStarted, setIsStarted] = useState(false);
+
+  // Connect to WS
+  const { isConnected, sendMessage } = useWebSocket({
+    scanId,
+    enabled: true,
+    onMessage: (msg) => {
+      // If we receive a log message
+      if (msg.type === 'log') {
+        const payload = msg.payload as LogMessage; // or whatever the backend sends
+        // Backend actually sends 'log' type for logs.
+        // Let's assume payload matches LogMessage or map it
+        setLogs(prev => [...prev, payload]);
+      }
+    }
+  });
+
+  const handleStart = async () => {
+    setIsStarted(true);
+    // In a real app, calls POST /api/v1/scans/{id}/start
+    // For demo, effectively doing nothing but UI state
+
+    // Simulate some local logs for effect if offline
+    if (!isConnected) {
+      addLog("SYSTEM", "WARNING", "Backend Disconnected. Running Demo Mode.");
+      setTimeout(() => addLog("ORCH", "INFO", "Initializing Scan..."), 500);
+      setTimeout(() => addLog("NMAP", "INFO", "Scanning 192.168.1.1..."), 1200);
+    }
+  };
+
+  const addLog = (source: string, level: any, message: string) => {
+    setLogs(prev => [...prev, {
+      scan_id: scanId,
+      level,
+      message,
+      source,
+      timestamp: new Date().toISOString()
+    }]);
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-black text-gray-200 p-8 font-sans selection:bg-green-500/30">
+      <main className="max-w-6xl mx-auto space-y-8">
+
+        {/* Hero Section */}
+        <div className="flex justify-between items-end border-b border-green-900/30 pb-6">
+          <div>
+            <h1 className="text-4xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-green-500 to-emerald-700">
+              KODIAK
+            </h1>
+            <p className="text-green-500/50 mt-2 font-mono text-sm">
+              AI-POWERED OFFENSIVE SECURITY SUITE
+            </p>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${isConnected ? 'bg-green-500/20 text-green-500' : 'bg-red-500/20 text-red-500'}`}>
+              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+              {isConnected ? 'HIVE MIND: ONLINE' : 'HIVE MIND: OFFLINE'}
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+
+        {/* Controls */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Card 1: Target */}
+          <div className="bg-zinc-900/50 border border-white/5 rounded-xl p-6">
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Target Scope</label>
+            <div className="mt-2 text-2xl font-mono text-white">scanme.nmap.org</div>
+          </div>
+
+          {/* Card 2: Status */}
+          <div className="bg-zinc-900/50 border border-white/5 rounded-xl p-6">
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Operation Status</label>
+            <div className="mt-2 text-2xl font-mono text-white flex items-center gap-2">
+              {isStarted ? <span className="text-green-400">RUNNING</span> : <span className="text-zinc-500">IDLE</span>}
+            </div>
+          </div>
+
+          {/* Card 3: Action */}
+          <button
+            onClick={handleStart}
+            disabled={isStarted}
+            className="group bg-gradient-to-br from-green-600 to-green-800 hover:from-green-500 hover:to-green-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl p-6 flex items-center justify-center transition-all shadow-[0_0_20px_rgba(34,197,94,0.2)] hover:shadow-[0_0_30px_rgba(34,197,94,0.4)]"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            {isStarted ? (
+              <Pause className="w-8 h-8 text-white fill-current" />
+            ) : (
+              <Play className="w-8 h-8 text-white fill-current" />
+            )}
+          </button>
         </div>
+
+        {/* Terminal */}
+        <Terminal logs={logs} className="h-[500px]" />
+
       </main>
     </div>
   );
