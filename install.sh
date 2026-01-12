@@ -8,6 +8,7 @@ KODIAK_VERSION="${KODIAK_VERSION:-latest}"
 INSTALL_DIR="$HOME/.kodiak"
 BIN_DIR="$HOME/.local/bin"
 UV_VERSION="0.5.11"
+FORCE_INSTALL="${FORCE_INSTALL:-false}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -174,6 +175,27 @@ install_kodiak() {
     mkdir -p "$INSTALL_DIR"
     mkdir -p "$BIN_DIR"
     
+    # Check if already installed and handle accordingly
+    if command_exists kodiak && [[ "$FORCE_INSTALL" != "true" ]]; then
+        local current_version
+        current_version=$(kodiak --version 2>/dev/null | grep -o 'v[0-9.]*' || echo "unknown")
+        print_warning "Kodiak $current_version is already installed"
+        print_status "Use --force to reinstall or run 'kodiak --help' to use existing installation"
+        
+        # Skip installation but still run verification
+        return 0
+    elif command_exists kodiak && [[ "$FORCE_INSTALL" == "true" ]]; then
+        local current_version
+        current_version=$(kodiak --version 2>/dev/null | grep -o 'v[0-9.]*' || echo "unknown")
+        print_status "Force reinstalling Kodiak $current_version..."
+        
+        # Remove existing installation
+        if command_exists uv; then
+            uv tool uninstall kodiak-pentest 2>/dev/null || true
+            uv tool uninstall kodiak 2>/dev/null || true
+        fi
+    fi
+    
     # Try PyPI installation first
     print_status "Attempting PyPI installation..."
     if uv tool install kodiak-pentest[full] 2>/dev/null; then
@@ -202,6 +224,13 @@ install_from_source() {
         rm -rf "$source_dir"
     fi
     
+    # Remove existing UV tool installation if it exists
+    if command_exists uv && uv tool list | grep -q "kodiak"; then
+        print_status "Removing existing Kodiak installation..."
+        uv tool uninstall kodiak-pentest 2>/dev/null || true
+        uv tool uninstall kodiak 2>/dev/null || true
+    fi
+    
     # Clone repository
     print_status "Cloning Kodiak repository..."
     if ! git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
@@ -225,9 +254,9 @@ install_from_source() {
         fi
     fi
     
-    # Install using UV
+    # Install using UV with force flag to overwrite existing installation
     print_status "Installing dependencies and Kodiak..."
-    if ! uv tool install --editable ".[full]"; then
+    if ! uv tool install --force --editable ".[full]"; then
         print_error "Failed to install Kodiak from source"
         exit 1
     fi
@@ -414,6 +443,7 @@ handle_arguments() {
                 echo "Options:"
                 echo "  --help, -h         Show this help message"
                 echo "  --version VERSION  Install specific version/branch"
+                echo "  --force, -f        Force reinstall even if already installed"
                 echo "  --verbose, -v      Enable verbose output"
                 echo
                 echo "Environment variables:"
@@ -422,6 +452,7 @@ handle_arguments() {
                 echo "Examples:"
                 echo "  $0                 Install latest version"
                 echo "  $0 --version v1.0  Install version v1.0"
+                echo "  $0 --force         Force reinstall"
                 echo
                 exit 0
                 ;;
@@ -433,6 +464,10 @@ handle_arguments() {
                     print_error "--version requires a version number"
                     exit 1
                 fi
+                ;;
+            --force|-f)
+                FORCE_INSTALL=true
+                shift
                 ;;
             --verbose|-v)
                 set -x
