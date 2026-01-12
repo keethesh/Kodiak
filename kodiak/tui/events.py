@@ -312,19 +312,22 @@ class ErrorOccurred(KodiakMessage):
         error_type: str, 
         error_message: str,
         details: Optional[Dict[str, Any]] = None,
-        source: Optional[str] = None
+        source: Optional[str] = None,
+        recoverable: bool = True
     ) -> None:
         super().__init__(
             data={
                 "error_type": error_type,
                 "error_message": error_message,
-                "details": details or {}
+                "details": details or {},
+                "recoverable": recoverable
             },
             source=source
         )
         self.error_type = error_type
         self.error_message = error_message
         self.details = details or {}
+        self.recoverable = recoverable
 
 
 # Event type constants for easy reference

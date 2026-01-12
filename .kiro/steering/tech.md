@@ -1,25 +1,14 @@
 # Technology Stack
 
-## Backend
+## TUI Application
 - **Language**: Python 3.11+
-- **Framework**: FastAPI with async/await support
+- **TUI Framework**: Textual for modern terminal interfaces with async support
 - **Database**: PostgreSQL with SQLModel (SQLAlchemy 2.0)
 - **LLM Integration**: LiteLLM for multi-provider support (Gemini, OpenAI, Claude, Ollama, etc.)
-- **WebSocket**: Real-time communication with frontend
 - **Browser Automation**: Playwright for web application testing
 - **HTTP Client**: httpx with async support
 - **Configuration**: Pydantic settings with environment variables
 - **Task Queue**: Custom orchestrator with database-backed persistence
-
-## Frontend
-- **Framework**: Next.js 16+ with React 19
-- **Language**: TypeScript 5+
-- **Styling**: TailwindCSS 4
-- **Visualization**: vis-network for graph rendering
-- **Animation**: Framer Motion
-- **Icons**: Lucide React
-- **Build Tool**: Next.js built-in bundler
-- **State Management**: React hooks with WebSocket integration
 
 ## Security Tools (Implemented)
 - **Network Discovery**: nmap with advanced parsing and vulnerability assessment
@@ -46,36 +35,31 @@
 - **Database**: PostgreSQL 15 (Alpine)
 - **Orchestration**: Docker Compose for development and deployment
 - **Development**: Poetry for Python dependency management
-- **Code Quality**: Black, isort, mypy, ruff for Python; ESLint for TypeScript
-- **Testing**: pytest with async support, custom implementation test suite
+- **Code Quality**: Black, isort, mypy, ruff for Python
+- **Testing**: pytest with async support, Hypothesis for property-based testing
 
 ## Common Commands
 
 ### Development Setup
 ```bash
 # Configure your LLM (interactive)
-python configure_llm.py
+kodiak config
 
 # Or manually create .env file
 cp .env.example .env
 # Edit .env with your API keys and preferences
 
-# Start full stack
-docker-compose up --build
+# Initialize database
+kodiak init
 
-# Backend only (requires PostgreSQL running)
-cd backend
-poetry install
-poetry run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# Start TUI application
+kodiak
 
-# Frontend only
-cd frontend
-npm install
-npm run dev
+# Or explicitly launch TUI
+kodiak tui
 
-# Run implementation tests
-cd backend
-python test_implementation.py
+# Run with debug mode
+kodiak tui --debug
 ```
 
 ### LLM Configuration Examples
@@ -98,41 +82,43 @@ export ANTHROPIC_API_KEY=your_anthropic_api_key
 
 ### Code Quality
 ```bash
-# Backend linting and formatting
-cd backend
+# Python linting and formatting
 poetry run black kodiak/
 poetry run isort kodiak/
 poetry run ruff check kodiak/
 poetry run mypy kodiak/
 
-# Frontend linting
-cd frontend
-npm run lint
+# Run tests
+poetry run pytest
+
+# Run tests with coverage
+poetry run pytest --cov=kodiak
 ```
 
 ### Database Operations
 ```bash
+# Initialize database
+kodiak init
+
+# Force reinitialize
+kodiak init --force
+
 # Access PostgreSQL in Docker
 docker-compose exec db psql -U kodiak -d kodiak_db
 
-# Backend database migrations (when implemented)
-cd backend
+# Database migrations (when implemented)
 poetry run alembic upgrade head
 ```
 
 ### Skills Management
 ```bash
-# Test skills system
-curl http://localhost:8000/api/v1/skills/
-
-# Get skill categories
-curl http://localhost:8000/api/v1/skills/categories
-
-# Search skills
-curl http://localhost:8000/api/v1/skills/search/sql
-
-# Get skill details
-curl http://localhost:8000/api/v1/skills/sql_injection
+# Test skills system (via Python)
+python -c "
+from kodiak.skills.skill_registry import SkillRegistry
+registry = SkillRegistry()
+registry.load_all_skills()
+print('Available skills:', list(registry.skills.keys()))
+"
 ```
 
 ## Environment Variables
@@ -147,7 +133,11 @@ curl http://localhost:8000/api/v1/skills/sql_injection
 - `KODIAK_LLM_MAX_TOKENS`: Maximum tokens per response (default: 4096)
 
 ### Database Configuration
-- `POSTGRES_*`: Database connection settings (handled by docker-compose)
+- `POSTGRES_SERVER`: Database server hostname (default: localhost)
+- `POSTGRES_PORT`: Database port (default: 5432)
+- `POSTGRES_DB`: Database name (default: kodiak_db)
+- `POSTGRES_USER`: Database user (default: kodiak)
+- `POSTGRES_PASSWORD`: Database password (required)
 
 ### Application Settings
 - `KODIAK_DEBUG`: Enable debug mode (default: false)
@@ -157,15 +147,17 @@ curl http://localhost:8000/api/v1/skills/sql_injection
 - `KODIAK_TOOL_TIMEOUT`: Tool execution timeout in seconds (default: 300)
 - `KODIAK_ENABLE_HIVE_MIND`: Enable hive mind coordination (default: true)
 
-### Frontend Configuration
-- `NEXT_PUBLIC_WS_URL`: WebSocket URL for frontend (defaults to localhost:8000)
+### TUI Configuration
+- `KODIAK_TUI_COLOR_THEME`: Color theme (default: dark)
+- `KODIAK_TUI_REFRESH_RATE`: UI refresh rate in Hz (default: 10)
 
 ## Implementation Status
+- **TUI Architecture**: ✅ Complete (Textual-based terminal interface)
 - **Core Architecture**: ✅ Complete (Multi-agent, Hive Mind, Orchestrator)
-- **Security Tools**: ✅ Complete (9 tools fully implemented)
+- **Security Tools**: ✅ Complete (20+ tools fully implemented)
 - **Skills System**: ✅ Complete (Dynamic loading, 8+ skills)
 - **Database Schema**: ✅ Complete (Full graph-based persistence)
-- **API Endpoints**: ✅ Complete (REST + WebSocket + Skills management)
-- **Frontend Dashboard**: ✅ Core features (Mission HUD, graph visualization)
+- **CLI Interface**: ✅ Complete (init, config, tui commands)
+- **Error Handling**: ✅ Complete (Comprehensive error management)
 - **Database Migrations**: ⚠️ Needed (Alembic setup required)
-- **Production Deployment**: ⚠️ Basic (Docker Compose ready, needs hardening)
+- **Production Deployment**: ✅ Ready (Docker Compose + systemd support)

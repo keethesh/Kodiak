@@ -1,131 +1,304 @@
 # Kodiak 🐻
 
-> **Advanced LLM-based Penetration Testing Suite with Multi-Agent Coordination**
+> **Advanced LLM-Powered Penetration Testing Suite with Terminal Interface**
 
-Kodiak is an advanced LLM-based penetration testing suite that uses AI agents with a "Hive Mind" architecture to intelligently orchestrate security assessments. It features multi-agent coordination, persistent state management, and real-time collaboration capabilities.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-## 🎯 Key Features
+Kodiak is an advanced LLM-powered penetration testing suite that uses AI agents with intelligent coordination to automate security assessments. Built with a modern Terminal User Interface (TUI), Kodiak provides a seamless, keyboard-driven experience for security professionals.
+
+## ✨ Features
+
+### 🖥️ Modern Terminal Interface
+- **Rich TUI**: Built with [Textual](https://textual.textualize.io/) for a modern terminal experience
+- **Keyboard Navigation**: Complete keyboard-driven workflow for efficiency
+- **Real-time Updates**: Live monitoring of agent activities and scan progress
+- **Multi-view Dashboard**: Dedicated screens for projects, scans, findings, and agent communication
+
+### 🤖 Intelligent Multi-Agent System
+- **Coordinated Agents**: Multiple AI agents work together to perform comprehensive security testing
+- **Hive Mind Architecture**: Agents share knowledge and coordinate to prevent duplicate work
+- **Persistent State**: Database-backed execution allows pausing, resuming, and replaying scans
+- **Real-time Collaboration**: Agents communicate findings and coordinate next steps automatically
 
 ### 🛠️ Comprehensive Security Toolkit
-- **Full HTTP Proxy**: Complete request/response manipulation and analysis
-- **Browser Automation**: Multi-tab browser testing for XSS, CSRF, and auth flows  
-- **Terminal Environments**: Interactive shells for command execution and testing
-- **Python Runtime**: Custom exploit development and validation
-- **Reconnaissance**: Automated OSINT and attack surface mapping
-
-### 🧠 Enhanced Multi-Agent Architecture
-- **Hive Mind Coordination**: Multiple agents share tool output streams and coordinate execution to prevent duplicate work
-- **Persistent State**: Database-backed execution allows pausing, resuming, and replaying scans across sessions
-- **Graph-Based Workflow**: Uses deterministic state machines combined with LLM reasoning for structured penetration testing
-- **Real-time UI**: Next.js dashboard provides live visualization of the attack surface and agent activities
+- **Network Discovery**: nmap, subfinder, httpx for reconnaissance
+- **Vulnerability Scanning**: nuclei, sqlmap, commix for automated testing
+- **Web Application Testing**: Browser automation with Playwright
+- **Custom Exploitation**: HTTP proxy system and Python runtime for custom payloads
+- **OSINT Capabilities**: Web search and information gathering
 
 ### 🎯 Advanced Vulnerability Detection
-- **Injection Attacks**: SQL, NoSQL, command injection with validation
-- **Server-Side**: SSRF, XXE, deserialization flaws
-- **Client-Side**: XSS, prototype pollution, DOM vulnerabilities
-- **Authentication**: JWT vulnerabilities, session management
-- **Infrastructure**: Misconfigurations, exposed services
+- **Injection Attacks**: SQL, NoSQL, command injection with intelligent validation
+- **Web Vulnerabilities**: XSS, CSRF, authentication bypasses, business logic flaws
+- **Infrastructure Issues**: Misconfigurations, exposed services, privilege escalation
+- **API Security**: REST/GraphQL testing, JWT vulnerabilities, rate limiting bypasses
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Docker & Docker Compose
-- LLM API Key (Gemini, OpenAI, Claude, or others)
+- **Python 3.11+**
+- **PostgreSQL** (or Docker for easy setup)
+- **LLM API Key** (Gemini, OpenAI, Claude, or others)
 
-### 1. Configure Your LLM
-Choose your preferred AI provider:
+### Installation
 
-**Option A: Interactive Configuration (Recommended)**
+#### Option 1: Using Poetry (Recommended)
 ```bash
 git clone https://github.com/yourusername/kodiak.git
 cd kodiak
-python configure_llm.py
+poetry install
 ```
 
-**Option B: Manual Configuration**
+#### Option 2: Using pip
 ```bash
-# Copy the example environment file
+git clone https://github.com/yourusername/kodiak.git
+cd kodiak
+pip install -e .
+```
+
+### Setup
+
+#### 1. Configure Your LLM Provider
+```bash
+# Interactive configuration (recommended)
+kodiak config
+
+# Or manually create .env file
 cp .env.example .env
-
-# Edit .env with your preferred settings
-# For Gemini (recommended):
-KODIAK_LLM_PROVIDER=gemini
-KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
-GOOGLE_API_KEY=your_google_api_key_here
+# Edit .env with your API keys
 ```
 
-### 2. Launch Kodiak
+#### 2. Initialize Database
 ```bash
-docker-compose up --build
+# Start PostgreSQL (using Docker)
+docker-compose up -d db
+
+# Initialize Kodiak database
+kodiak init
 ```
 
-### 3. Access the Dashboard
-- **Frontend**: http://localhost:3000
-- **API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
+#### 3. Launch Kodiak
+```bash
+# Start the TUI interface
+kodiak
+
+# Or explicitly launch TUI
+kodiak tui
+```
+
+## 🎮 Usage
+
+### Navigation
+- **Global Shortcuts**:
+  - `q` - Quit application
+  - `h` - Return to home screen
+  - `?` - Show help overlay
+  - `Ctrl+C` - Force quit
+
+### Home Screen
+- **`n`** - Create new scan
+- **`Enter`** - Select project/scan
+- **`d`** - Delete selected item
+- **`r`** - Resume paused scan
+
+### Mission Control
+- **`Tab`** - Cycle between panels (agents, graph, logs)
+- **`g`** - View full attack surface graph
+- **`f`** - View findings report
+- **`p`** - Pause/resume current scan
+
+### Agent Chat
+- **`Left/Right`** - Switch between agents
+- **`Enter`** - Send message to agent
+- **`Escape`** - Return to mission control
 
 ## 🤖 Supported LLM Providers
 
-Kodiak supports multiple LLM providers through LiteLLM:
+Kodiak supports multiple LLM providers through [LiteLLM](https://docs.litellm.ai/):
 
-| Provider | Models | Configuration |
-|----------|--------|---------------|
-| **Google Gemini** | `gemini-1.5-pro`, `gemini-1.5-flash` | `GOOGLE_API_KEY` |
-| **OpenAI** | `gpt-4`, `gpt-4-turbo`, `gpt-3.5-turbo` | `OPENAI_API_KEY` |
+| Provider | Recommended Models | API Key |
+|----------|-------------------|---------|
+| **Google Gemini** ⭐ | `gemini-1.5-pro`, `gemini-1.5-flash` | `GOOGLE_API_KEY` |
 | **Anthropic Claude** | `claude-3-5-sonnet`, `claude-3-opus` | `ANTHROPIC_API_KEY` |
-| **Others** | Ollama, Azure, Cohere, HuggingFace | See [LiteLLM docs](https://docs.litellm.ai/) |
+| **OpenAI** | `gpt-4`, `gpt-4-turbo` | `OPENAI_API_KEY` |
+| **Local (Ollama)** | `llama2`, `codellama` | No API key needed |
 
-### Recommended Models for Security Testing
-- **Gemini 1.5 Pro**: Excellent reasoning and code analysis capabilities
-- **Claude 3.5 Sonnet**: Outstanding for security analysis and vulnerability assessment
-- **GPT-4**: Proven performance for complex security tasks
+### Configuration Examples
 
-## 🛠️ Security Tools Included
+**Gemini (Recommended)**:
+```bash
+export KODIAK_LLM_PROVIDER=gemini
+export KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+export GOOGLE_API_KEY=your_api_key_here
+```
 
-Kodiak includes 20+ integrated security tools:
+**Claude**:
+```bash
+export KODIAK_LLM_PROVIDER=claude
+export KODIAK_LLM_MODEL=claude-3-5-sonnet-20241022
+export ANTHROPIC_API_KEY=your_api_key_here
+```
 
-- **Network**: nmap, nuclei, subfinder, httpx
-- **Web Application**: sqlmap, commix, browser automation
-- **Custom Development**: HTTP proxy, terminal environments, Python runtime
-- **OSINT**: Web search and reconnaissance capabilities
+**OpenAI**:
+```bash
+export KODIAK_LLM_PROVIDER=openai
+export KODIAK_LLM_MODEL=openai/gpt-4
+export OPENAI_API_KEY=your_api_key_here
+```
 
 ## 🏗️ Architecture
 
+### TUI Architecture
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Kodiak TUI Application                   │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   Textual   │  │    Core     │  │      Services       │  │
+│  │    Views    │◄─┤   Engine    │◄─┤  (Agents, Tools,    │  │
+│  │             │  │             │  │   LLM, Hive Mind)   │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ SQL (asyncpg)
+                       ┌──────────┐
+                       │ Postgres │
+                       │    DB    │
+                       └──────────┘
+```
+
+### Key Components
+- **TUI Layer**: Modern terminal interface built with Textual
+- **Core Engine**: Multi-agent coordination and state management
+- **Services Layer**: Security tools, LLM integration, and hive mind
+- **Database**: PostgreSQL for persistent state and audit trails
+
 ### Multi-Agent Coordination
-- Agents specialize in different aspects of security testing
-- Hive Mind prevents duplicate tool execution across agents
-- Real-time coordination through WebSocket updates
+- **Specialized Agents**: Each agent focuses on specific security domains
+- **Hive Mind**: Shared knowledge base prevents duplicate work
+- **Real-time Updates**: Agents communicate findings instantly
+- **Persistent Sessions**: Resume scans across application restarts
 
-### Persistent State Management
-- Database-backed execution state
-- Pause and resume scans across sessions
-- Complete audit trail of all agent actions
+## 🛠️ Development
 
-### Skills System
-- Dynamic loading of specialized knowledge
-- 8+ pre-built skills for different vulnerability classes
-- Framework-specific testing capabilities (Django, Node.js, etc.)
+### Project Structure
+```
+kodiak/
+├── kodiak/
+│   ├── tui/                 # Terminal User Interface
+│   │   ├── app.py          # Main TUI application
+│   │   ├── views/          # Screen implementations
+│   │   └── widgets/        # Reusable UI components
+│   ├── core/               # Core business logic
+│   │   ├── agent.py        # LLM agent implementation
+│   │   ├── orchestrator.py # Multi-agent coordination
+│   │   └── tools/          # Security tool integrations
+│   ├── database/           # Data persistence layer
+│   └── services/           # External service integrations
+├── tests/                  # Test suite
+├── docs/                   # Documentation
+└── pyproject.toml         # Project configuration
+```
 
-### Security Model
-- No authentication required - designed as a security tool
-- Configurable access controls for production deployments
-- Secure credential storage for LLM API keys and target credentials
+### Running Tests
+```bash
+# Run all tests
+poetry run pytest
+
+# Run with coverage
+poetry run pytest --cov=kodiak
+
+# Run specific test file
+poetry run pytest tests/test_tui.py
+```
+
+### Code Quality
+```bash
+# Format code
+poetry run black kodiak/
+poetry run isort kodiak/
+
+# Lint code
+poetry run ruff check kodiak/
+poetry run mypy kodiak/
+```
 
 ## 📚 Documentation
 
-- [Architecture Overview](docs/ARCHITECTURE.md)
-- [API Documentation](http://localhost:8000/docs) (when running)
-- [Skills System Guide](docs/SKILLS.md)
-- [Contributing Guide](docs/CONTRIBUTING.md)
+- **[Installation Guide](docs/INSTALLATION.md)** - Detailed setup instructions
+- **[User Guide](docs/USER_GUIDE.md)** - Complete usage documentation
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - Technical architecture overview
+- **[API Reference](docs/API.md)** - Core API documentation
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to Kodiak
+- **[Security Policy](SECURITY.md)** - Security guidelines and reporting
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](docs/CONTRIBUTING.md) for details.
+We welcome contributions from the security community! Here's how you can help:
 
-## 📄 License
+### Ways to Contribute
+- 🐛 **Bug Reports**: Found an issue? [Open an issue](https://github.com/yourusername/kodiak/issues)
+- 💡 **Feature Requests**: Have an idea? [Start a discussion](https://github.com/yourusername/kodiak/discussions)
+- 🔧 **Code Contributions**: Submit pull requests for bug fixes or new features
+- 📖 **Documentation**: Help improve our docs and guides
+- 🧪 **Testing**: Add test cases or test on different environments
 
-Apache 2.0 - see [LICENSE](LICENSE) for details.
+### Development Setup
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes and add tests
+4. Ensure all tests pass: `poetry run pytest`
+5. Submit a pull request
+
+### Code Standards
+- Follow [PEP 8](https://pep8.org/) style guidelines
+- Add type hints for all functions
+- Write comprehensive tests for new features
+- Update documentation for user-facing changes
 
 ## 🔒 Security
 
-For security issues, please see our [Security Policy](docs/SECURITY.md).
+### Responsible Disclosure
+If you discover a security vulnerability, please follow our [Security Policy](SECURITY.md):
+- **DO NOT** open a public issue
+- Email security issues to: security@kodiak-project.org
+- Include detailed reproduction steps and impact assessment
+
+### Security Considerations
+- Kodiak is designed for authorized security testing only
+- Always obtain proper authorization before testing targets
+- Use in isolated environments when possible
+- Keep LLM API keys secure and rotate regularly
+
+## 📄 License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+### Third-Party Licenses
+- [Textual](https://github.com/Textualize/textual) - MIT License
+- [LiteLLM](https://github.com/BerriAI/litellm) - MIT License
+- [SQLModel](https://github.com/tiangolo/sqlmodel) - MIT License
+
+## 🙏 Acknowledgments
+
+- **[Textual](https://textual.textualize.io/)** - For the amazing TUI framework
+- **[LiteLLM](https://docs.litellm.ai/)** - For unified LLM provider support
+- **Security Community** - For inspiration and feedback
+- **Contributors** - Thank you for making Kodiak better!
+
+## 📊 Project Status
+
+- ✅ **Core TUI Interface** - Complete
+- ✅ **Multi-Agent System** - Complete  
+- ✅ **Security Tools Integration** - Complete
+- ✅ **Database Persistence** - Complete
+- 🚧 **Advanced Reporting** - In Progress
+- 📋 **Plugin System** - Planned
+- 📋 **Distributed Scanning** - Planned
+
+---
+
+**Made with ❤️ by the security community, for the security community.**
+
+[⭐ Star us on GitHub](https://github.com/yourusername/kodiak) | [📖 Read the Docs](https://kodiak-docs.org) | [💬 Join Discussions](https://github.com/yourusername/kodiak/discussions)

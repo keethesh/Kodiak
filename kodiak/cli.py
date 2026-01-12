@@ -84,31 +84,327 @@ def run_tui(debug: bool = False) -> int:
 async def run_init(force: bool = False) -> int:
     """Initialize database schema"""
     try:
-        from kodiak.database.engine import init_db
+        from kodiak.database.engine import init_db, verify_database_connectivity
+        from kodiak.core.config import settings
+        from sqlalchemy.exc import SQLAlchemyError
+        import asyncpg
         
-        print("Initializing Kodiak database...")
-        await init_db()
-        print("✅ Database initialized successfully")
-        return 0
+        print("Kodiak Database Initialization")
+        print("=" * 30)
+        
+        # Display database configuration
+        print(f"Database Server: {settings.postgres_server}:{settings.postgres_port}")
+        print(f"Database Name: {settings.postgres_db}")
+        print(f"Database User: {settings.postgres_user}")
+        print()
+        
+        if force:
+            print("⚠️  Force mode enabled - will recreate existing tables")
+        
+        print("Initializing database schema...")
+        
+        try:
+            # Test basic connectivity first
+            print("🔍 Testing database connectivity...")
+            await verify_database_connectivity()
+            print("✅ Database connection successful")
+            
+            # Initialize the database
+            print("📋 Creating database tables...")
+            await init_db()
+            print("✅ Database tables created successfully")
+            
+            # Verify initialization
+            print("🔍 Verifying database initialization...")
+            from kodiak.database.models import Project, Scan, Node, Finding, AgentLog, Task
+            from kodiak.database.engine import get_session
+            
+            async for session in get_session():
+                # Try to query each main table to verify they exist
+                from sqlalchemy import text
+                tables_to_check = ['projects', 'scans', 'nodes', 'findings', 'agent_logs', 'tasks']
+                
+                for table in tables_to_check:
+                    try:
+                        result = await session.execute(text(f"SELECT COUNT(*) FROM {table}"))
+                        count = result.scalar()
+                        print(f"  ✅ Table '{table}' exists (contains {count} records)")
+                    except Exception as e:
+                        print(f"  ❌ Table '{table}' check failed: {e}")
+                        return 1
+                break
+            
+            print()
+            print("🎉 Database initialization completed successfully!")
+            print()
+            print("Next steps:")
+            print("  1. Configure your LLM settings: kodiak config")
+            print("  2. Launch the TUI interface: kodiak")
+            print()
+            
+            return 0
+            
+        except asyncpg.InvalidCatalogNameError:
+            print(f"❌ Database '{settings.postgres_db}' does not exist")
+            print(f"Please create the database first:")
+            print(f"  createdb -h {settings.postgres_server} -p {settings.postgres_port} -U {settings.postgres_user} {settings.postgres_db}")
+            return 1
+            
+        except asyncpg.InvalidPasswordError:
+            print("❌ Invalid database credentials")
+            print("Please check your database configuration:")
+            print("  - POSTGRES_USER")
+            print("  - POSTGRES_PASSWORD")
+            return 1
+            
+        except asyncpg.ConnectionDoesNotExistError:
+            print(f"❌ Cannot connect to database server at {settings.postgres_server}:{settings.postgres_port}")
+            print("Please ensure PostgreSQL is running and accessible")
+            print("If using Docker: docker-compose up -d db")
+            return 1
+            
     except ImportError as e:
-        print(f"Error: Failed to import database components: {e}", file=sys.stderr)
+        print(f"❌ Failed to import required components: {e}", file=sys.stderr)
+        print("Make sure all dependencies are installed: poetry install", file=sys.stderr)
+        return 1
+    except SQLAlchemyError as e:
+        print(f"❌ Database error: {e}", file=sys.stderr)
         return 1
     except Exception as e:
-        print(f"Error initializing database: {e}", file=sys.stderr)
+        print(f"❌ Unexpected error: {e}", file=sys.stderr)
         return 1
 
 
 def run_config(interactive: bool = True) -> int:
     """Configure LLM settings"""
     try:
-        # For now, just point to the existing configure script
-        print("LLM Configuration")
-        print("=================")
-        print("Please run: python configure_llm.py")
-        print("This will be integrated into the CLI in a future update.")
-        return 0
+        from kodiak.core.config import LLM_PRESETS, settings
+        from pathlib import Path
+        import os
+        
+        print("Kodiak LLM Configuration")
+        print("=" * 25)
+        print()
+        
+        if not interactive:
+            print("Non-interactive mode not yet implemented.")
+            print("Please run: kodiak config --interactive")
+            return 1
+        
+        # Check if .env file exists
+        env_file = Path(".env")
+        env_exists = env_file.exists()
+        
+        if env_exists:
+            print(f"📄 Found existing .env file")
+            response = input("Do you want to update the existing configuration? (y/N): ").strip().lower()
+            if response not in ['y', 'yes']:
+                print("Configuration cancelled.")
+                return 0
+        else:
+            print("📄 No .env file found. Creating new configuration...")
+        
+        print()
+        print("Available LLM Providers:")
+        print("-" * 25)
+        
+        # Display available providers
+        providers = {}
+        for i, (key, preset) in enumerate(LLM_PRESETS.items(), 1):
+            providers[str(i)] = key
+            print(f"{i}. {preset['description']}")
+        
+        print()
+        
+        # Get provider selection
+        while True:
+            choice = input(f"Select LLM provider (1-{len(providers)}): ").strip()
+            if choice in providers:
+                selected_preset = providers[choice]
+                preset_config = LLM_PRESETS[selected_preset]
+                break
+            else:
+                print("Invalid selection. Please try again.")
+        
+        print()
+        print(f"Selected: {preset_config['description']}")
+        print()
+        
+        # Get API key
+        provider = preset_config['provider']
+        model = preset_config['model']
+        
+        # Determine which API key to request
+        if provider == "gemini":
+            api_key_name = "Google API Key"
+            api_key_env = "GOOGLE_API_KEY"
+            api_key_help = "Get your API key from: https://makersuite.google.com/app/apikey"
+        elif provider == "openai":
+            api_key_name = "OpenAI API Key"
+            api_key_env = "OPENAI_API_KEY"
+            api_key_help = "Get your API key from: https://platform.openai.com/api-keys"
+        elif provider == "claude":
+            api_key_name = "Anthropic API Key"
+            api_key_env = "ANTHROPIC_API_KEY"
+            api_key_help = "Get your API key from: https://console.anthropic.com/"
+        else:
+            api_key_name = "API Key"
+            api_key_env = "KODIAK_LLM_API_KEY"
+            api_key_help = "Check your provider's documentation for API key instructions"
+        
+        print(f"🔑 {api_key_name} Required")
+        print(f"   {api_key_help}")
+        print()
+        
+        # Check if API key already exists in environment
+        existing_key = os.getenv(api_key_env)
+        if existing_key:
+            masked_key = existing_key[:8] + "..." + existing_key[-4:] if len(existing_key) > 12 else "***"
+            print(f"Found existing API key: {masked_key}")
+            use_existing = input("Use existing API key? (Y/n): ").strip().lower()
+            if use_existing in ['', 'y', 'yes']:
+                api_key = existing_key
+            else:
+                api_key = input(f"Enter your {api_key_name}: ").strip()
+        else:
+            api_key = input(f"Enter your {api_key_name}: ").strip()
+        
+        if not api_key:
+            print("❌ API key is required. Configuration cancelled.")
+            return 1
+        
+        print()
+        
+        # Get database configuration
+        print("🗄️  Database Configuration")
+        print("-" * 25)
+        
+        # Use current settings as defaults
+        db_server = input(f"Database server [{settings.postgres_server}]: ").strip() or settings.postgres_server
+        db_port = input(f"Database port [{settings.postgres_port}]: ").strip() or str(settings.postgres_port)
+        db_name = input(f"Database name [{settings.postgres_db}]: ").strip() or settings.postgres_db
+        db_user = input(f"Database user [{settings.postgres_user}]: ").strip() or settings.postgres_user
+        
+        # Only ask for password if not already set or if user wants to change it
+        existing_password = os.getenv("POSTGRES_PASSWORD")
+        if existing_password:
+            change_password = input("Change database password? (y/N): ").strip().lower()
+            if change_password in ['y', 'yes']:
+                db_password = input("Database password: ").strip()
+            else:
+                db_password = existing_password
+        else:
+            db_password = input("Database password: ").strip()
+        
+        print()
+        
+        # Optional advanced settings
+        print("⚙️  Advanced Settings (optional)")
+        print("-" * 30)
+        
+        temperature = input(f"Temperature (0.0-2.0) [{settings.llm_temperature}]: ").strip()
+        if temperature:
+            try:
+                temperature = float(temperature)
+                if not 0.0 <= temperature <= 2.0:
+                    print("Warning: Temperature should be between 0.0 and 2.0")
+            except ValueError:
+                print("Warning: Invalid temperature value, using default")
+                temperature = settings.llm_temperature
+        else:
+            temperature = settings.llm_temperature
+        
+        max_tokens = input(f"Max tokens [{settings.llm_max_tokens}]: ").strip()
+        if max_tokens:
+            try:
+                max_tokens = int(max_tokens)
+                if max_tokens <= 0:
+                    print("Warning: Max tokens should be positive")
+                    max_tokens = settings.llm_max_tokens
+            except ValueError:
+                print("Warning: Invalid max tokens value, using default")
+                max_tokens = settings.llm_max_tokens
+        else:
+            max_tokens = settings.llm_max_tokens
+        
+        print()
+        
+        # Generate .env content
+        env_content = []
+        
+        # Add header
+        env_content.append("# Kodiak Configuration")
+        env_content.append("# Generated by 'kodiak config'")
+        env_content.append("")
+        
+        # LLM Configuration
+        env_content.append("# LLM Configuration")
+        env_content.append(f"KODIAK_LLM_PROVIDER={provider}")
+        env_content.append(f"KODIAK_LLM_MODEL={model}")
+        env_content.append(f"{api_key_env}={api_key}")
+        env_content.append(f"KODIAK_LLM_TEMPERATURE={temperature}")
+        env_content.append(f"KODIAK_LLM_MAX_TOKENS={max_tokens}")
+        env_content.append("")
+        
+        # Database Configuration
+        env_content.append("# Database Configuration")
+        env_content.append(f"POSTGRES_SERVER={db_server}")
+        env_content.append(f"POSTGRES_PORT={db_port}")
+        env_content.append(f"POSTGRES_DB={db_name}")
+        env_content.append(f"POSTGRES_USER={db_user}")
+        env_content.append(f"POSTGRES_PASSWORD={db_password}")
+        env_content.append("")
+        
+        # Application Configuration
+        env_content.append("# Application Configuration")
+        env_content.append("KODIAK_DEBUG=false")
+        env_content.append("KODIAK_LOG_LEVEL=INFO")
+        env_content.append("KODIAK_ENABLE_SAFETY=true")
+        env_content.append("KODIAK_MAX_AGENTS=5")
+        env_content.append("KODIAK_TOOL_TIMEOUT=300")
+        env_content.append("KODIAK_ENABLE_HIVE_MIND=true")
+        env_content.append("")
+        
+        # TUI Configuration
+        env_content.append("# TUI Configuration")
+        env_content.append("KODIAK_TUI_COLOR_THEME=dark")
+        env_content.append("KODIAK_TUI_REFRESH_RATE=10")
+        
+        # Show configuration summary
+        print("📋 Configuration Summary")
+        print("-" * 20)
+        print(f"LLM Provider: {provider}")
+        print(f"LLM Model: {model}")
+        print(f"Database: {db_user}@{db_server}:{db_port}/{db_name}")
+        print(f"Temperature: {temperature}")
+        print(f"Max Tokens: {max_tokens}")
+        print()
+        
+        # Confirm before writing
+        confirm = input("Save this configuration? (Y/n): ").strip().lower()
+        if confirm in ['', 'y', 'yes']:
+            # Write .env file
+            with open(".env", "w") as f:
+                f.write("\n".join(env_content))
+            
+            print()
+            print("✅ Configuration saved to .env file")
+            print()
+            print("Next steps:")
+            print("  1. Initialize the database: kodiak init")
+            print("  2. Launch Kodiak: kodiak")
+            print()
+            
+            return 0
+        else:
+            print("Configuration cancelled.")
+            return 0
+            
+    except KeyboardInterrupt:
+        print("\nConfiguration cancelled by user.")
+        return 130
     except Exception as e:
-        print(f"Error configuring LLM: {e}", file=sys.stderr)
+        print(f"❌ Configuration error: {e}", file=sys.stderr)
         return 1
 
 

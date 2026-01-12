@@ -15,6 +15,10 @@ from kodiak.database.crud import project as crud_project, scan_job as crud_scan
 from kodiak.database.models import Project, ScanJob, Finding, Node
 from kodiak.core.orchestrator import orchestrator
 from kodiak.core.config import settings
+from kodiak.core.error_handling import (
+    ErrorHandler, DatabaseError, KodiakError, ErrorCategory, ErrorSeverity,
+    handle_errors
+)
 from kodiak.api.events import event_manager as core_event_manager
 
 from kodiak.tui.state import app_state, AgentStatus, ScanStatus
@@ -38,16 +42,19 @@ class CoreBridge:
     def __init__(self, app):
         self.app = app
         self.initialized = False
+        self.database_healthy = False
         self._event_subscriptions = []
+        self._health_check_task = None
+        self._health_check_interval = 30.0  # seconds
         logger.info("CoreBridge initialized")
     
     async def initialize(self):
-        """Initialize the core bridge"""
+        """Initialize the core bridge with comprehensive error handling"""
         try:
             logger.info("Initializing CoreBridge...")
             
-            # Initialize database
-            await self._init_database()
+            # Initialize database with retry logic
+            await self._init_database_with_retry()
             
             # Load initial data
             await self._load_initial_data()
@@ -55,17 +62,43 @@ class CoreBridge:
             # Set up event subscriptions
             self._setup_event_subscriptions()
             
+            # Start background health monitoring
+            self._start_health_monitoring()
+            
             self.initialized = True
             logger.info("CoreBridge initialization complete")
             
+        except DatabaseError as e:
+            logger.error(f"Database initialization failed: {e.message}")
+            # Send error to TUI
+            error_message = ErrorOccurred(
+                error_type="database_init_failed",
+                error_message=f"Database initialization failed: {e.message}",
+                details=e.details,
+                source="core_bridge",
+                recoverable=e.recoverable
+            )
+            self.app.post_message(error_message)
+            raise
         except Exception as e:
             logger.error(f"Failed to initialize CoreBridge: {e}")
+            # Send generic error to TUI
+            error_message = ErrorOccurred(
+                error_type="core_bridge_init_failed",
+                error_message=f"Core bridge initialization failed: {str(e)}",
+                source="core_bridge",
+                recoverable=False
+            )
+            self.app.post_message(error_message)
             raise
     
     async def shutdown(self):
-        """Shutdown the core bridge"""
+        """Shutdown the core bridge with error handling"""
         try:
             logger.info("Shutting down CoreBridge...")
+            
+            # Stop health monitoring
+            self._stop_health_monitoring()
             
             # Clean up event subscriptions
             self._cleanup_event_subscriptions()
@@ -73,39 +106,161 @@ class CoreBridge:
             # Stop orchestrator if running
             # TODO: Add orchestrator shutdown if needed
             
+            self.initialized = False
+            self.database_healthy = False
             logger.info("CoreBridge shutdown complete")
             
         except Exception as e:
             logger.error(f"Error during CoreBridge shutdown: {e}")
+            # Don't raise during shutdown - log and continue
     
+    def _start_health_monitoring(self):
+        """Start background health monitoring task"""
+        if self._health_check_task is None:
+            self._health_check_task = asyncio.create_task(self._health_monitor_loop())
+            logger.info("Health monitoring started")
+    
+    def _stop_health_monitoring(self):
+        """Stop background health monitoring task"""
+        if self._health_check_task:
+            self._health_check_task.cancel()
+            self._health_check_task = None
+            logger.info("Health monitoring stopped")
+    
+    async def _health_monitor_loop(self):
+        """Background health monitoring loop"""
+        try:
+            while True:
+                await asyncio.sleep(self._health_check_interval)
+                
+                # Perform health check without blocking UI
+                try:
+                    await self.check_database_health()
+                except Exception as e:
+                    logger.warning(f"Health check failed: {e}")
+                    # Health check failure is already handled in check_database_health
+                
+        except asyncio.CancelledError:
+            logger.info("Health monitoring cancelled")
+        except Exception as e:
+            logger.error(f"Health monitoring error: {e}")
+    
+    async def perform_async_operation(self, operation_name: str, operation_func, *args, **kwargs):
+        """
+        Perform an async operation without blocking the UI
+        Shows loading indicator and handles errors gracefully
+        """
+        try:
+            # Send loading start message
+            loading_message = LogMessage(
+                level="info",
+                message=f"Starting {operation_name}...",
+                source="core_bridge"
+            )
+            self.app.post_message(loading_message)
+            
+            # Perform the operation
+            result = await operation_func(*args, **kwargs)
+            
+            # Send success message
+            success_message = LogMessage(
+                level="info",
+                message=f"{operation_name} completed successfully",
+                source="core_bridge"
+            )
+            self.app.post_message(success_message)
+            
+            return result
+            
+        except Exception as e:
+            # Send error message
+            error_message = ErrorOccurred(
+                error_type=f"{operation_name.lower().replace(' ', '_')}_failed",
+                error_message=f"{operation_name} failed: {str(e)}",
+                source="core_bridge",
+                recoverable=True
+            )
+            self.app.post_message(error_message)
+            raise
+    
+    async def _init_database_with_retry(self, max_retries: int = 3, retry_delay: float = 2.0):
+        """Initialize database with retry logic and detailed error handling"""
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Database initialization attempt {attempt + 1}/{max_retries}")
+                await self._init_database()
+                self.database_healthy = True
+                return
+                
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Database initialization attempt {attempt + 1} failed: {e}")
+                
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 1.5  # Exponential backoff
+        
+        # All retries failed
+        if last_error:
+            db_error = ErrorHandler.handle_database_error(
+                operation="database_initialization",
+                error=last_error,
+                context={
+                    "max_retries": max_retries,
+                    "database_url": settings.postgres_server
+                }
+            )
+            raise db_error
+    
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
     async def _init_database(self):
-        """Initialize the database"""
+        """Initialize the database with error handling"""
         try:
             logger.info("Initializing database...")
             await init_db()
             logger.info("Database initialized successfully")
         except Exception as e:
-            logger.error(f"Database initialization failed: {e}")
+            # Let the decorator handle the error
             raise
     
     async def _load_initial_data(self):
-        """Load initial data into state"""
+        """Load initial data into state with error handling"""
         try:
             logger.info("Loading initial data...")
             
             async for session in get_session():
-                # Load projects
-                projects = await crud_project.get_all(session)
-                for project in projects:
-                    app_state.add_project(project)
-                
-                # Load scans
-                scans = await crud_scan.get_all(session)
-                for scan in scans:
-                    app_state.add_scan(scan)
-                
-                logger.info(f"Loaded {len(projects)} projects and {len(scans)} scans")
-                break
+                try:
+                    # Load projects
+                    projects = await crud_project.get_all(session)
+                    for project in projects:
+                        app_state.add_project(project)
+                    
+                    # Load scans
+                    scans = await crud_scan.get_all(session)
+                    for scan in scans:
+                        app_state.add_scan(scan)
+                    
+                    logger.info(f"Loaded {len(projects)} projects and {len(scans)} scans")
+                    break
+                    
+                except Exception as e:
+                    db_error = ErrorHandler.handle_database_error(
+                        operation="load_initial_data",
+                        error=e
+                    )
+                    # Send error to TUI but don't fail initialization
+                    error_message = ErrorOccurred(
+                        error_type="data_load_failed",
+                        error_message=f"Failed to load initial data: {db_error.message}",
+                        details=db_error.details,
+                        source="core_bridge",
+                        recoverable=True
+                    )
+                    self.app.post_message(error_message)
+                    break
                 
         except Exception as e:
             logger.error(f"Failed to load initial data: {e}")
@@ -128,6 +283,14 @@ class CoreBridge:
             
         except Exception as e:
             logger.error(f"Failed to set up event subscriptions: {e}")
+            # Send error to TUI
+            error_message = ErrorOccurred(
+                error_type="event_subscription_failed",
+                error_message=f"Failed to set up event subscriptions: {str(e)}",
+                source="core_bridge",
+                recoverable=False
+            )
+            self.app.post_message(error_message)
     
     def _cleanup_event_subscriptions(self):
         """Clean up event subscriptions"""
@@ -147,6 +310,44 @@ class CoreBridge:
         except Exception as e:
             logger.error(f"Failed to clean up event subscriptions: {e}")
     
+    async def check_database_health(self) -> bool:
+        """Check database health and update status"""
+        try:
+            async for session in get_session():
+                # Simple health check query
+                from sqlalchemy import text
+                result = await session.execute(text("SELECT 1"))
+                result.fetchone()
+                
+                if not self.database_healthy:
+                    self.database_healthy = True
+                    logger.info("Database health restored")
+                    
+                    # Notify TUI of recovery
+                    recovery_message = LogMessage(
+                        level="info",
+                        message="Database connection restored",
+                        source="core_bridge"
+                    )
+                    self.app.post_message(recovery_message)
+                
+                return True
+                
+        except Exception as e:
+            if self.database_healthy:
+                self.database_healthy = False
+                logger.error(f"Database health check failed: {e}")
+                
+                # Notify TUI of database issues
+                error_message = ErrorOccurred(
+                    error_type="database_unhealthy",
+                    error_message=f"Database connection lost: {str(e)}",
+                    source="core_bridge",
+                    recoverable=True
+                )
+                self.app.post_message(error_message)
+            
+            return False
     # Event handlers - convert core events to TUI messages
     async def _on_tool_start(self, event):
         """Handle tool start event from core"""
@@ -342,8 +543,19 @@ class CoreBridge:
     
     # Public API methods for TUI to interact with core
     async def create_project(self, name: str, description: str = "", target: str = "") -> Optional[str]:
-        """Create a new project"""
-        try:
+        """Create a new project with error handling and non-blocking UI"""
+        async def _create_project():
+            # Check database health first
+            if not await self.check_database_health():
+                error_message = ErrorOccurred(
+                    error_type="database_unavailable",
+                    error_message="Cannot create project: database is unavailable",
+                    source="core_bridge",
+                    recoverable=True
+                )
+                self.app.post_message(error_message)
+                return None
+            
             async for session in get_session():
                 project = await crud_project.create(
                     session,
@@ -354,8 +566,13 @@ class CoreBridge:
                 app_state.add_project(project)
                 logger.info(f"Created project: {project.name} (ID: {project.id})")
                 return str(project.id)
-        except Exception as e:
-            logger.error(f"Failed to create project: {e}")
+        
+        try:
+            return await self.perform_async_operation(
+                f"Create project '{name}'",
+                _create_project
+            )
+        except Exception:
             return None
     
     async def create_scan(
@@ -366,8 +583,19 @@ class CoreBridge:
         agent_count: int = 1,
         instructions: str = ""
     ) -> Optional[str]:
-        """Create a new scan"""
-        try:
+        """Create a new scan with error handling and non-blocking UI"""
+        async def _create_scan():
+            # Check database health first
+            if not await self.check_database_health():
+                error_message = ErrorOccurred(
+                    error_type="database_unavailable",
+                    error_message="Cannot create scan: database is unavailable",
+                    source="core_bridge",
+                    recoverable=True
+                )
+                self.app.post_message(error_message)
+                return None
+            
             async for session in get_session():
                 scan = await crud_scan.create(
                     session,
@@ -380,66 +608,109 @@ class CoreBridge:
                 app_state.add_scan(scan)
                 logger.info(f"Created scan: {scan.name} (ID: {scan.id})")
                 return str(scan.id)
-        except Exception as e:
-            logger.error(f"Failed to create scan: {e}")
+        
+        try:
+            return await self.perform_async_operation(
+                f"Create scan '{name}'",
+                _create_scan
+            )
+        except Exception:
             return None
     
     async def start_scan(self, scan_id: str) -> bool:
-        """Start a scan"""
-        try:
+        """Start a scan with error handling and non-blocking UI"""
+        async def _start_scan():
+            # Check database health first
+            if not await self.check_database_health():
+                error_message = ErrorOccurred(
+                    error_type="database_unavailable",
+                    error_message="Cannot start scan: database is unavailable",
+                    source="core_bridge",
+                    recoverable=True
+                )
+                self.app.post_message(error_message)
+                return False
+            
             # TODO: Integrate with orchestrator to actually start the scan
             logger.info(f"Starting scan: {scan_id}")
             
             # For now, just update the status
             app_state.update_scan_status(scan_id, ScanStatus.RUNNING)
-            
             return True
-        except Exception as e:
-            logger.error(f"Failed to start scan: {e}")
+        
+        try:
+            return await self.perform_async_operation(
+                f"Start scan {scan_id}",
+                _start_scan
+            )
+        except Exception:
             return False
     
     async def stop_scan(self, scan_id: str) -> bool:
-        """Stop a scan"""
-        try:
+        """Stop a scan with error handling and non-blocking UI"""
+        async def _stop_scan():
             # TODO: Integrate with orchestrator to actually stop the scan
             logger.info(f"Stopping scan: {scan_id}")
             
             # For now, just update the status
             app_state.update_scan_status(scan_id, ScanStatus.CANCELLED)
-            
             return True
-        except Exception as e:
-            logger.error(f"Failed to stop scan: {e}")
+        
+        try:
+            return await self.perform_async_operation(
+                f"Stop scan {scan_id}",
+                _stop_scan
+            )
+        except Exception:
             return False
     
     async def get_projects(self) -> List[Project]:
-        """Get all projects from database"""
-        try:
+        """Get all projects from database with error handling and non-blocking UI"""
+        async def _get_projects():
+            # Check database health first
+            if not await self.check_database_health():
+                return []
+            
             async for session in get_session():
                 projects = await crud_project.get_all(session)
                 return projects
-        except Exception as e:
-            logger.error(f"Failed to get projects: {e}")
+        
+        try:
+            return await self.perform_async_operation(
+                "Load projects",
+                _get_projects
+            )
+        except Exception:
             return []
     
     async def get_scans_for_project(self, project_id: str) -> List[ScanJob]:
-        """Get all scans for a project"""
-        try:
+        """Get all scans for a project with error handling and non-blocking UI"""
+        async def _get_scans():
+            # Check database health first
+            if not await self.check_database_health():
+                return []
+            
             async for session in get_session():
                 scans = await crud_scan.get_by_project_id(session, int(project_id))
                 return scans
-        except Exception as e:
-            logger.error(f"Failed to get scans for project {project_id}: {e}")
+        
+        try:
+            return await self.perform_async_operation(
+                f"Load scans for project {project_id}",
+                _get_scans
+            )
+        except Exception:
             return []
     
     def get_health_status(self) -> Dict[str, Any]:
         """Get health status of the core bridge"""
         return {
             "initialized": self.initialized,
-            "database_connected": True,  # TODO: Add actual database health check
+            "database_healthy": self.database_healthy,
             "orchestrator_status": "ready",  # TODO: Add actual orchestrator status
             "event_subscriptions": len(self._event_subscriptions),
-            "app_state_stats": app_state.get_stats()
+            "app_state_stats": app_state.get_stats(),
+            "database_url": f"{settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}"
         }
 
 

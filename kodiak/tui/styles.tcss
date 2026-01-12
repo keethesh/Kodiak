@@ -79,6 +79,129 @@ Footer {
     height: 1;
 }
 
+/* Error Screen */
+#error-container {
+    align: center middle;
+    height: 100%;
+    max-width: 80;
+    padding: 2;
+}
+
+#error-header {
+    text-align: center;
+    text-style: bold;
+    color: $error;
+    margin-bottom: 1;
+    background: $surface;
+    padding: 1;
+    border: solid $error;
+}
+
+#error-content {
+    background: $surface;
+    padding: 1;
+    border: solid $overlay;
+    margin-bottom: 1;
+    height: auto;
+    max-height: 70%;
+    overflow-y: auto;
+}
+
+#error-buttons {
+    align: center middle;
+    height: auto;
+    margin-top: 1;
+}
+
+#error-buttons Button {
+    margin: 0 1;
+    min-width: 15;
+}
+
+#retry-button {
+    background: $accent;
+    color: $background;
+}
+
+#continue-button {
+    background: $warning;
+    color: $background;
+}
+
+#quit-button {
+    background: $error;
+    color: $text;
+}
+
+/* Loading Indicators */
+.loading-indicator {
+    align: center middle;
+    height: auto;
+    width: auto;
+}
+
+#loading-container {
+    align: center middle;
+    height: auto;
+    width: auto;
+    background: $surface;
+    border: solid $overlay;
+    padding: 1;
+}
+
+#loading-content {
+    align: center middle;
+    height: auto;
+    width: auto;
+}
+
+#spinner {
+    color: $accent;
+    margin-right: 1;
+    text-style: bold;
+}
+
+#loading-message {
+    color: $text;
+}
+
+.progress-indicator {
+    align: center middle;
+    height: auto;
+    width: auto;
+}
+
+#progress-container {
+    align: center middle;
+    height: auto;
+    width: auto;
+    background: $surface;
+    border: solid $overlay;
+    padding: 1;
+}
+
+#progress-message {
+    color: $text;
+    text-align: center;
+    margin-bottom: 1;
+}
+
+#progress-bar {
+    color: $accent;
+    text-align: center;
+    margin-bottom: 1;
+}
+
+#progress-percentage {
+    color: $text-muted;
+    text-align: center;
+}
+
+.async-operation {
+    height: 100%;
+    width: 100%;
+}
+
 /* Color scheme - Dark theme */
 $background: #1e1e2e;
 $surface: #313244;

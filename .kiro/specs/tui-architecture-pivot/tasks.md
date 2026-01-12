@@ -107,13 +107,13 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 2: Database Operations Work Without HTTP**
     - **Validates: Requirements 2.4, 13.2, 13.3**
 
-- [ ] 7. Implement reusable widgets
-  - [ ] 7.1 Create StatusBar widget
+- [x] 7. Implement reusable widgets
+  - [x] 7.1 Create StatusBar widget
     - Display app name, current context, scan status
     - Update dynamically based on state
     - _Requirements: 2.7, 5.10_
   
-  - [ ] 7.2 Create AgentPanel widget
+  - [x] 7.2 Create AgentPanel widget
     - Display list of agents with status icons
     - Support selection and navigation
     - Implement status icon mapping (🟢, 🟡, 🔴, ⏸)
@@ -123,7 +123,7 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 6: Agent Status Visual Mapping**
     - **Validates: Requirements 6.2**
   
-  - [ ] 7.4 Create GraphTree widget
+  - [x] 7.4 Create GraphTree widget
     - Render attack surface as tree with icons
     - Support expand/collapse
     - Support navigation and selection
@@ -134,13 +134,13 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 9: Graph Node Icon Mapping**
     - **Validates: Requirements 8.2**
   
-  - [ ] 7.6 Create ActivityLog widget
+  - [x] 7.6 Create ActivityLog widget
     - Scrolling log display
     - Auto-scroll on new entries
     - Timestamp formatting
     - _Requirements: 5.3_
   
-  - [ ] 7.7 Create FindingsList widget
+  - [x] 7.7 Create FindingsList widget
     - Group findings by severity
     - Display summary counts
     - Support filtering
@@ -151,18 +151,18 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 11: Findings Grouped By Severity**
     - **Validates: Requirements 9.1, 9.2**
   
-  - [ ] 7.9 Create ChatHistory widget
+  - [x] 7.9 Create ChatHistory widget
     - Display messages with timestamps and sender
     - Support scrolling
     - _Requirements: 7.1, 7.2_
 
-- [ ] 8. Checkpoint - Verify widgets
+- [x] 8. Checkpoint - Verify widgets
   - Ensure all widget tests pass
   - Verify widgets render correctly in isolation
   - Ask user if questions arise
 
-- [ ] 9. Implement views
-  - [ ] 9.1 Create HomeScreen view
+- [-] 9. Implement views
+  - [x] 9.1 Create HomeScreen view
     - Display project list using DataTable
     - Show recent activity
     - Implement keyboard shortcuts (n, d, r, Enter)
@@ -172,7 +172,7 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 3: Project List Displays All Required Fields**
     - **Validates: Requirements 3.2**
   
-  - [ ] 9.3 Create NewScanScreen view
+  - [x] 9.3 Create NewScanScreen view
     - Input fields for name, target, instructions
     - Agent count selector (1-5)
     - Validation logic
@@ -183,7 +183,7 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 5: Target Validation Rejects Invalid Inputs**
     - **Validates: Requirements 4.6, 4.7**
   
-  - [ ] 9.5 Create MissionControlScreen view
+  - [x] 9.5 Create MissionControlScreen view
     - Split layout: agents panel, graph, activity log
     - Tab navigation between panels
     - Keyboard shortcuts (g, f, p)
@@ -194,7 +194,7 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 7: Event Propagation Updates UI**
     - **Validates: Requirements 5.4, 6.4, 8.8, 9.7, 11.2, 11.3, 11.4**
   
-  - [ ] 9.7 Create AgentChatScreen view
+  - [x] 9.7 Create AgentChatScreen view
     - Chat history display
     - Message input field
     - Agent switching (left/right arrows)
@@ -205,7 +205,7 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 8: Chat Message Round-Trip**
     - **Validates: Requirements 7.1, 7.2, 7.4, 7.5**
   
-  - [ ] 9.9 Create GraphScreen view (expanded)
+  - [x] 9.9 Create GraphScreen view (expanded)
     - Full-screen tree view
     - Search functionality
     - Navigation to finding details
@@ -215,13 +215,13 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 10: Severity Color Coding**
     - **Validates: Requirements 8.3**
   
-  - [ ] 9.11 Create FindingsScreen view
+  - [x] 9.11 Create FindingsScreen view
     - Findings list with grouping
     - Export functionality
     - Navigation to details
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7_
   
-  - [ ] 9.12 Create FindingDetailScreen view
+  - [x] 9.12 Create FindingDetailScreen view
     - Display all finding fields
     - Copy PoC functionality
     - Re-test trigger
@@ -231,26 +231,26 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 12: Finding Detail Contains All Fields**
     - **Validates: Requirements 10.1, 10.2, 10.3, 10.4**
 
-- [ ] 10. Checkpoint - Verify views
+- [x] 10. Checkpoint - Verify views
   - Ensure all view tests pass
   - Test navigation flow between views
   - Ask user if questions arise
 
-- [ ] 11. Implement keyboard navigation
-  - [ ] 11.1 Global shortcuts
+- [x] 11. Implement keyboard navigation
+  - [x] 11.1 Global shortcuts
     - Implement 'q' to quit
     - Implement 'h' to go home
     - Implement '?' to show help overlay
     - _Requirements: 12.1, 12.7_
   
-  - [ ] 11.2 View-specific shortcuts
+  - [x] 11.2 View-specific shortcuts
     - Implement Tab for panel cycling
     - Implement arrow keys for navigation
     - Implement Enter for selection
     - Implement Escape for back
     - _Requirements: 12.2, 12.3, 12.4, 12.5_
   
-  - [ ] 11.3 Footer shortcut display
+  - [x] 11.3 Footer shortcut display
     - Display available shortcuts in footer
     - Update footer based on current view
     - _Requirements: 12.6_
@@ -259,13 +259,13 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 13: Keyboard Bindings Registered**
     - **Validates: Requirements 12.1, 12.2, 12.3, 12.4, 12.5**
 
-- [ ] 12. Implement CLI commands
-  - [ ] 12.1 Create kodiak init command
+- [x] 12. Implement CLI commands
+  - [x] 12.1 Create kodiak init command
     - Initialize database schema
     - Create tables if not exist
     - _Requirements: 14.5_
   
-  - [ ] 12.2 Create kodiak config command
+  - [x] 12.2 Create kodiak config command
     - Interactive LLM configuration
     - Save to .env file
     - _Requirements: 14.6, 15.5_
@@ -274,8 +274,8 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 14: Configuration Loading**
     - **Validates: Requirements 15.1, 15.2**
 
-- [ ] 13. Error handling implementation
-  - [ ] 13.1 Database error handling
+- [x] 13. Error handling implementation
+  - [x] 13.1 Database error handling
     - Graceful connection failure handling
     - User-friendly error messages
     - Clean exit on fatal errors
@@ -285,7 +285,7 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 2: Database Operations Work Without HTTP** (error cases)
     - **Validates: Requirements 13.4**
   
-  - [ ] 13.3 Async non-blocking verification
+  - [x] 13.3 Async non-blocking verification
     - Ensure UI remains responsive during operations
     - Implement loading indicators
     - _Requirements: 11.5, 11.6_
@@ -294,42 +294,42 @@ This implementation plan transforms Kodiak from a frontend-backend architecture 
     - **Property 15: Non-Blocking UI**
     - **Validates: Requirements 2.3, 11.5**
 
-- [ ] 14. Checkpoint - Full integration test
+- [x] 14. Checkpoint - Full integration test
   - Run complete user flow: create project → start scan → view findings
   - Verify all keyboard shortcuts work
   - Test error handling scenarios
   - Ask user if questions arise
 
-- [ ] 15. Documentation updates
-  - [ ] 15.1 Update README.md
+- [x] 15. Documentation updates
+  - [x] 15.1 Update README.md
     - New installation instructions
     - TUI usage guide
     - Screenshot/demo
     - _Requirements: 16.2_
   
-  - [ ] 15.2 Update docs/DEPLOYMENT.md
+  - [x] 15.2 Update docs/DEPLOYMENT.md
     - Remove frontend deployment
     - Add TUI deployment instructions
     - Update Docker instructions
     - _Requirements: 16.1_
   
-  - [ ] 15.3 Update steering documents
+  - [x] 15.3 Update steering documents
     - Update `.kiro/steering/tech.md` - remove Next.js, add Textual
     - Update `.kiro/steering/structure.md` - new project structure
     - Update `.kiro/steering/product.md` - TUI description
     - Update `.kiro/steering/implementation.md` - TUI status
     - _Requirements: 16.3, 16.4, 16.5, 16.6_
   
-  - [ ] 15.4 Add TUI documentation
+  - [x] 15.4 Add TUI documentation
     - Create keyboard shortcuts reference
     - Create view navigation guide
     - _Requirements: 16.8_
   
-  - [ ] 15.5 Archive frontend documentation
+  - [x] 15.5 Archive frontend documentation
     - Move or delete frontend-specific docs
     - _Requirements: 16.7_
 
-- [ ] 16. Final checkpoint
+- [x] 16. Final checkpoint
   - All tests pass
   - Documentation complete
   - Ready for merge to main
