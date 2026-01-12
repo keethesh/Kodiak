@@ -9,7 +9,8 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    TERM=xterm-256color
+    TERM=xterm-256color \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Install system dependencies and Tools (Nmap, etc.)
 RUN apt-get update \
@@ -24,6 +25,18 @@ RUN apt-get update \
         bash \
         less \
         vim \
+        # Playwright dependencies
+        libnss3 \
+        libnspr4 \
+        libatk-bridge2.0-0 \
+        libdrm2 \
+        libxkbcommon0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxrandr2 \
+        libgbm1 \
+        libxss1 \
+        libasound2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -55,11 +68,14 @@ RUN if [ ! -f poetry.lock ]; then \
 # Copy application code
 COPY . .
 
-# Install the app itself (now that code is copied)
+# Install Playwright Browsers (using python -m since playwright is installed via poetry)
+# Set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 during poetry install to avoid conflicts
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN poetry install --only main
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 
-# Install Playwright Browsers
-RUN playwright install --with-deps chromium
+# Now install Playwright browsers
+RUN python -m playwright install --with-deps chromium
 
 # Default command provides shell access for TUI usage
 # Use: docker-compose run --rm kodiak python -m kodiak
