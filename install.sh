@@ -224,11 +224,23 @@ install_from_source() {
         rm -rf "$source_dir"
     fi
     
-    # Remove existing UV tool installation if it exists
-    if command_exists uv && uv tool list | grep -q "kodiak"; then
-        print_status "Removing existing Kodiak installation..."
+    # Remove existing UV tool installation if it exists (try multiple package names)
+    if command_exists uv; then
+        print_status "Cleaning up any existing Kodiak installations..."
         uv tool uninstall kodiak-pentest 2>/dev/null || true
         uv tool uninstall kodiak 2>/dev/null || true
+    fi
+    
+    # Also remove pipx installation if it exists
+    if command_exists pipx; then
+        pipx uninstall kodiak-pentest 2>/dev/null || true
+        pipx uninstall kodiak 2>/dev/null || true
+    fi
+    
+    # Remove any existing kodiak binary in ~/.local/bin
+    if [[ -f "$BIN_DIR/kodiak" ]]; then
+        print_status "Removing existing kodiak binary..."
+        rm -f "$BIN_DIR/kodiak"
     fi
     
     # Clone repository
@@ -254,7 +266,7 @@ install_from_source() {
         fi
     fi
     
-    # Install using UV with force flag to overwrite existing installation
+    # Install using UV with force flag to always overwrite
     print_status "Installing dependencies and Kodiak..."
     if ! uv tool install --force --editable ".[full]"; then
         print_error "Failed to install Kodiak from source"
