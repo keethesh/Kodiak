@@ -224,24 +224,28 @@ install_from_source() {
         rm -rf "$source_dir"
     fi
     
-    # Remove existing UV tool installation if it exists (try multiple package names)
+    # Aggressively clean up ALL existing Kodiak installations
+    print_status "Cleaning up any existing Kodiak installations..."
+    
+    # Remove UV tool installations
     if command_exists uv; then
-        print_status "Cleaning up any existing Kodiak installations..."
         uv tool uninstall kodiak-pentest 2>/dev/null || true
         uv tool uninstall kodiak 2>/dev/null || true
     fi
     
-    # Also remove pipx installation if it exists
+    # Remove pipx installations
     if command_exists pipx; then
         pipx uninstall kodiak-pentest 2>/dev/null || true
         pipx uninstall kodiak 2>/dev/null || true
     fi
     
-    # Remove any existing kodiak binary in ~/.local/bin
-    if [[ -f "$BIN_DIR/kodiak" ]]; then
-        print_status "Removing existing kodiak binary..."
-        rm -f "$BIN_DIR/kodiak"
-    fi
+    # Remove any existing kodiak binary in common locations
+    rm -f "$HOME/.local/bin/kodiak" 2>/dev/null || true
+    rm -f "/usr/local/bin/kodiak" 2>/dev/null || true
+    
+    # Remove UV tool directory for kodiak
+    rm -rf "$HOME/.local/share/uv/tools/kodiak-pentest" 2>/dev/null || true
+    rm -rf "$HOME/.local/share/uv/tools/kodiak" 2>/dev/null || true
     
     # Clone repository
     print_status "Cloning Kodiak repository..."
@@ -270,7 +274,13 @@ install_from_source() {
     print_status "Installing dependencies and Kodiak..."
     if ! uv tool install --force --editable ".[full]"; then
         print_error "Failed to install Kodiak from source"
-        exit 1
+        print_status "Trying alternative installation method..."
+        
+        # Fallback: try without --editable
+        if ! uv tool install --force ".[full]"; then
+            print_error "Alternative installation also failed"
+            exit 1
+        fi
     fi
     
     print_success "Kodiak installed from source"
