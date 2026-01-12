@@ -1,5 +1,17 @@
 /* Kodiak TUI Styles */
 
+/* Color scheme - Dark theme */
+$background: #1e1e2e;
+$surface: #313244;
+$overlay: #6c7086;
+$text: #cdd6f4;
+$text-muted: #9399b2;
+$primary: #89b4fa;
+$secondary: #f38ba8;
+$accent: #a6e3a1;
+$warning: #f9e2af;
+$error: #f38ba8;
+
 /* Global styles */
 Screen {
     background: $background;
@@ -201,15 +213,3 @@ Footer {
     height: 100%;
     width: 100%;
 }
-
-/* Color scheme - Dark theme */
-$background: #1e1e2e;
-$surface: #313244;
-$overlay: #6c7086;
-$text: #cdd6f4;
-$text-muted: #9399b2;
-$primary: #89b4fa;
-$secondary: #f38ba8;
-$accent: #a6e3a1;
-$warning: #f9e2af;
-$error: #f38ba8;

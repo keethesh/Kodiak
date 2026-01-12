@@ -23,7 +23,7 @@ from kodiak.tui.core_bridge import CoreBridge, set_core_bridge
 class KodiakApp(App):
     """Main Kodiak TUI Application"""
     
-    CSS_PATH = "styles.tcss"
+    CSS_PATH = Path(__file__).parent / "styles.tcss"
     TITLE = "Kodiak - LLM Penetration Testing Suite"
     SUB_TITLE = f"v{settings.VERSION}"
     
