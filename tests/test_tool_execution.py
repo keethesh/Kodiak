@@ -71,16 +71,16 @@ class TestToolExecutionProperties:
 
     def create_test_fixtures(self):
         """Create test fixtures for each test run."""
-        # Mock WebSocket manager
-        mock_websocket_manager = MagicMock()
-        mock_websocket_manager.send_tool_update = AsyncMock()
-        mock_websocket_manager.send_agent_update = AsyncMock()
-        mock_websocket_manager.send_finding_update = AsyncMock()
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
         
         # Event manager
-        event_manager = EventManager(mock_websocket_manager)
+        event_manager = EventManager(mock_tui_bridge)
         
-        return event_manager, mock_websocket_manager
+        return event_manager, mock_tui_bridge
 
     @pytest.mark.asyncio
     async def test_tool_execution_returns_structured_results(self):
@@ -91,7 +91,7 @@ class TestToolExecutionProperties:
         
         **Validates: Requirements 1.1**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create tool with event manager
         tool = MockTool(event_manager)
@@ -120,8 +120,8 @@ class TestToolExecutionProperties:
         assert result.error is None
         
         # Verify events were emitted
-        assert mock_websocket_manager.send_tool_update.call_count == 2  # start and complete
-        assert mock_websocket_manager.send_agent_update.call_count == 1  # executing status
+        assert mock_tui_bridge.send_tool_update.call_count == 2  # start and complete
+        assert mock_tui_bridge.send_agent_update.call_count == 1  # executing status
 
     @pytest.mark.asyncio
     async def test_tool_execution_without_event_manager(self):
@@ -158,7 +158,7 @@ class TestToolExecutionProperties:
         
         **Validates: Requirements 1.1**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create tool that returns dict
         tool = MockDictTool(event_manager)
@@ -189,7 +189,7 @@ class TestToolExecutionProperties:
         
         **Validates: Requirements 1.1**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create failing tool
         tool = MockFailingTool(event_manager)
@@ -211,7 +211,7 @@ class TestToolExecutionProperties:
         assert result.error == "Mock tool failure"
         
         # Verify error events were emitted
-        assert mock_websocket_manager.send_tool_update.call_count == 2  # start and complete (with error)
+        assert mock_tui_bridge.send_tool_update.call_count == 2  # start and complete (with error)
 
     @pytest.mark.asyncio
     async def test_tool_execution_multiple_calls(self):
@@ -221,7 +221,7 @@ class TestToolExecutionProperties:
         
         **Validates: Requirements 1.1**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create tool
         tool = MockTool(event_manager)
@@ -246,8 +246,8 @@ class TestToolExecutionProperties:
             assert result.error is None
         
         # Verify events were emitted for all executions
-        assert mock_websocket_manager.send_tool_update.call_count == 6  # 2 events per execution
-        assert mock_websocket_manager.send_agent_update.call_count == 3  # 1 per execution
+        assert mock_tui_bridge.send_tool_update.call_count == 6  # 2 events per execution
+        assert mock_tui_bridge.send_agent_update.call_count == 3  # 1 per execution
 
     @pytest.mark.asyncio
     async def test_tool_execution_parameter_validation(self):
@@ -257,7 +257,7 @@ class TestToolExecutionProperties:
         
         **Validates: Requirements 1.1**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create tool
         tool = MockTool(event_manager)

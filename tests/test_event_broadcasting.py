@@ -10,7 +10,6 @@ import time
 from unittest.mock import AsyncMock, MagicMock, call
 
 from kodiak.api.events import EventManager
-from kodiak.services.websocket_manager import ConnectionManager
 
 
 class TestEventBroadcastingProperties:
@@ -18,16 +17,19 @@ class TestEventBroadcastingProperties:
 
     def create_test_fixtures(self):
         """Create test fixtures for each test run."""
-        # Mock WebSocket manager
-        mock_websocket_manager = MagicMock(spec=ConnectionManager)
-        mock_websocket_manager.send_tool_update = AsyncMock()
-        mock_websocket_manager.send_agent_update = AsyncMock()
-        mock_websocket_manager.send_finding_update = AsyncMock()
-        mock_websocket_manager.broadcast = AsyncMock()
-        mock_websocket_manager.broadcast_global = AsyncMock()
+        # Create event manager (no arguments needed)
+        event_manager = EventManager()
+        
+        # Mock TUI bridge for verification
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+        mock_tui_bridge.broadcast = AsyncMock()
+        mock_tui_bridge.broadcast_global = AsyncMock()
         
         # Event manager
-        event_manager = EventManager(mock_websocket_manager)
+        event_manager = EventManager()
         
         # Sample tool result class
         class MockToolResult:
@@ -37,18 +39,29 @@ class TestEventBroadcastingProperties:
                 self.error = error
                 self.data = data or {}
         
-        return event_manager, mock_websocket_manager, MockToolResult
+        return event_manager, mock_tui_bridge, MockToolResult
 
     @pytest.mark.asyncio
     async def test_event_broadcasting_completeness_basic(self):
         """
         Property 2: Event broadcasting completeness
         For any tool execution, the Event_Manager should broadcast start, progress, 
-        and completion events in the correct sequence to all connected WebSocket clients.
+        and completion events in the correct sequence to all connected TUI clients.
         
         **Validates: Requirements 1.2, 4.1**
         """
-        event_manager, mock_websocket_manager, MockToolResult = self.create_test_fixtures()
+        event_manager, mock_tui_bridge, MockToolResult = self.create_test_fixtures()
+        
+        # Set up event capture
+        captured_events = []
+        
+        def capture_event(event):
+            captured_events.append(event)
+        
+        # Subscribe to events
+        event_manager.subscribe("tool_start", capture_event)
+        event_manager.subscribe("tool_progress", capture_event)
+        event_manager.subscribe("tool_complete", capture_event)
         
         # Test data
         tool_name = "nmap"
@@ -65,53 +78,41 @@ class TestEventBroadcastingProperties:
         await event_manager.emit_tool_progress(tool_name, progress_data, scan_id)
         await event_manager.emit_tool_complete(tool_name, result, scan_id)
         
-        # Verify all three events were broadcast
-        assert mock_websocket_manager.send_tool_update.call_count == 3
-        
-        # Verify the calls were made in the correct order
-        calls = mock_websocket_manager.send_tool_update.call_args_list
+        # Verify all three events were captured
+        assert len(captured_events) == 3
         
         # Check start event
-        start_call = calls[0]
-        assert start_call[1]['scan_id'] == scan_id
-        assert start_call[1]['tool_name'] == tool_name
-        assert start_call[1]['status'] == "started"
-        assert start_call[1]['data']['target'] == target
-        assert start_call[1]['data']['agent_id'] == agent_id
+        start_event = captured_events[0]
+        assert start_event.type == "tool_start"
+        assert start_event.data['tool_name'] == tool_name
+        assert start_event.data['target'] == target
+        assert start_event.data['agent_id'] == agent_id
+        assert start_event.data['status'] == "started"
         
         # Check progress event
-        progress_call = calls[1]
-        assert progress_call[1]['scan_id'] == scan_id
-        assert progress_call[1]['tool_name'] == tool_name
-        assert progress_call[1]['status'] == "progress"
-        assert progress_call[1]['data']['progress'] == progress_data
+        progress_event = captured_events[1]
+        assert progress_event.type == "tool_progress"
+        assert progress_event.data['tool_name'] == tool_name
+        assert progress_event.data['progress'] == progress_data
         
         # Check completion event
-        complete_call = calls[2]
-        assert complete_call[1]['scan_id'] == scan_id
-        assert complete_call[1]['tool_name'] == tool_name
-        assert complete_call[1]['status'] == "completed"
-        assert complete_call[1]['data']['success'] == True
-        assert complete_call[1]['data']['output'] == "test output"
-        
-        # Verify agent update was also sent for tool start
-        mock_websocket_manager.send_agent_update.assert_called_once_with(
-            scan_id=scan_id,
-            agent_id=agent_id,
-            status="executing",
-            message_text=f"Executing {tool_name} on {target}"
-        )
+        complete_event = captured_events[2]
+        assert complete_event.type == "tool_complete"
+        assert complete_event.data['tool_name'] == tool_name
+        assert complete_event.data['status'] == "completed"
+        assert complete_event.data['success'] == True
+        assert complete_event.data['output'] == "test output"
 
     @pytest.mark.asyncio
     async def test_event_broadcasting_with_failures(self):
         """
         Property 2 (Error case): Event broadcasting completeness for failed tools
         For any tool execution that fails, the Event_Manager should broadcast start 
-        and failure events to all connected WebSocket clients.
+        and failure events to all connected TUI clients.
         
         **Validates: Requirements 1.2, 4.1**
         """
-        event_manager, mock_websocket_manager, MockToolResult = self.create_test_fixtures()
+        event_manager, mock_tui_bridge, MockToolResult = self.create_test_fixtures()
         
         # Test data
         tool_name = "sqlmap"
@@ -128,9 +129,9 @@ class TestEventBroadcastingProperties:
         await event_manager.emit_tool_complete(tool_name, result, scan_id)
         
         # Verify start and failure events were broadcast
-        assert mock_websocket_manager.send_tool_update.call_count == 2
+        assert mock_tui_bridge.send_tool_update.call_count == 2
         
-        calls = mock_websocket_manager.send_tool_update.call_args_list
+        calls = mock_tui_bridge.send_tool_update.call_args_list
         
         # Check start event
         start_call = calls[0]
@@ -153,7 +154,7 @@ class TestEventBroadcastingProperties:
         
         **Validates: Requirements 1.2, 4.1**
         """
-        event_manager, mock_websocket_manager, MockToolResult = self.create_test_fixtures()
+        event_manager, mock_tui_bridge, MockToolResult = self.create_test_fixtures()
         
         tool_name = "nuclei"
         target = "example.com"
@@ -165,19 +166,19 @@ class TestEventBroadcastingProperties:
         await event_manager.emit_tool_start(tool_name, target, agent_id, scan_id=None)
         await event_manager.emit_tool_complete(tool_name, result, scan_id=None)
         
-        # Verify no WebSocket calls were made (since no scan_id)
-        mock_websocket_manager.send_tool_update.assert_not_called()
-        mock_websocket_manager.send_agent_update.assert_not_called()
+        # Verify no TUI calls were made (since no scan_id)
+        mock_tui_bridge.send_tool_update.assert_not_called()
+        mock_tui_bridge.send_agent_update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_discovery_event_broadcasting(self):
         """
         Property 2 (Discovery): Discovery events should be broadcast correctly
-        For any discovery event, the Event_Manager should broadcast it to WebSocket clients.
+        For any discovery event, the Event_Manager should broadcast it to TUI clients.
         
         **Validates: Requirements 1.2, 4.1**
         """
-        event_manager, mock_websocket_manager, MockToolResult = self.create_test_fixtures()
+        event_manager, mock_tui_bridge, MockToolResult = self.create_test_fixtures()
         
         discovery_data = {
             "type": "service",
@@ -190,7 +191,7 @@ class TestEventBroadcastingProperties:
         await event_manager.emit_discovery(discovery_data, scan_id)
         
         # Verify discovery was broadcast
-        mock_websocket_manager.send_finding_update.assert_called_once_with(
+        mock_tui_bridge.send_finding_update.assert_called_once_with(
             scan_id=scan_id,
             finding=discovery_data
         )
@@ -203,7 +204,7 @@ class TestEventBroadcastingProperties:
         
         **Validates: Requirements 1.2, 4.1**
         """
-        event_manager, mock_websocket_manager, MockToolResult = self.create_test_fixtures()
+        event_manager, mock_tui_bridge, MockToolResult = self.create_test_fixtures()
         
         # Test concurrent tool executions
         tools = [
@@ -220,7 +221,7 @@ class TestEventBroadcastingProperties:
             await event_manager.emit_tool_complete(tool_name, result, scan_id)
         
         # Verify all events were broadcast (2 events per tool = 6 total)
-        assert mock_websocket_manager.send_tool_update.call_count == 6
+        assert mock_tui_bridge.send_tool_update.call_count == 6
         
         # Verify all agent updates were sent (1 per tool = 3 total)
-        assert mock_websocket_manager.send_agent_update.call_count == 3
+        assert mock_tui_bridge.send_agent_update.call_count == 3

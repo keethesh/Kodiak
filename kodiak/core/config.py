@@ -1,8 +1,8 @@
 """
 Configuration management for Kodiak
 
-Supports multiple LLM providers including OpenAI, Gemini, Claude, and others
-through LiteLLM with flexible environment-based configuration.
+Supports any LiteLLM-compatible model string with automatic provider inference
+and simplified configuration validation.
 """
 
 import os
@@ -12,15 +12,61 @@ from pydantic import Field
 from enum import Enum
 
 
-class LLMProvider(str, Enum):
-    """Supported LLM providers"""
-    OPENAI = "openai"
-    GEMINI = "gemini"
-    CLAUDE = "claude"
-    OLLAMA = "ollama"
-    AZURE = "azure"
-    COHERE = "cohere"
-    HUGGINGFACE = "huggingface"
+# Error message templates for consistent error handling
+ERROR_MESSAGES = {
+    "missing_model": "KODIAK_LLM_MODEL is required. Example: gemini/gemini-3-pro-preview",
+    "missing_api_key": "API key required for provider '{provider}': set {env_var}",
+    "inference_failed": "Cannot infer provider from '{model}'. Set KODIAK_LLM_PROVIDER explicitly or use format 'provider/model'",
+    "invalid_format": "Invalid model format '{model}'. Check LiteLLM documentation for supported formats: https://docs.litellm.ai/docs/providers"
+}
+
+
+def infer_provider_from_model(model_string: str) -> str:
+    """Infer provider from LiteLLM model string format"""
+    if "/" in model_string:
+        prefix = model_string.split("/")[0]
+        return prefix
+    else:
+        # Handle models without prefix (legacy or special cases)
+        if model_string.startswith("gpt"):
+            return "openai"
+        elif model_string.startswith("claude"):
+            return "anthropic"
+        elif model_string.startswith("gemini"):
+            return "gemini"
+        else:
+            raise ValueError(ERROR_MESSAGES["inference_failed"].format(model=model_string))
+
+
+def get_api_key_for_provider(provider: str, settings_obj) -> Optional[str]:
+    """Get the appropriate API key for the provider"""
+    key_mapping = {
+        "openai": settings_obj.openai_api_key,
+        "gemini": settings_obj.google_api_key,
+        "anthropic": settings_obj.anthropic_api_key,
+        "vertex_ai": settings_obj.google_api_key,
+        "azure": settings_obj.openai_api_key,  # Azure uses OpenAI format
+        "cohere": None,  # Add when supported
+        "huggingface": None,  # Add when supported
+        "ollama": None,  # Local models don't need API keys
+    }
+    return key_mapping.get(provider)
+
+
+def get_required_api_key_env_var(provider: str) -> str:
+    """Get the required environment variable name for the provider"""
+    env_var_mapping = {
+        "openai": "OPENAI_API_KEY",
+        "gemini": "GOOGLE_API_KEY", 
+        "anthropic": "ANTHROPIC_API_KEY",
+        "vertex_ai": "GOOGLE_API_KEY",
+        "azure": "OPENAI_API_KEY",
+        "cohere": "COHERE_API_KEY",
+        "huggingface": "HUGGINGFACE_API_KEY",
+        "ollama": None,  # Local models don't need API keys
+    }
+    return env_var_mapping.get(provider, "KODIAK_LLM_API_KEY")
+
 
 
 class KodiakSettings(BaseSettings):
@@ -42,7 +88,6 @@ class KodiakSettings(BaseSettings):
     postgres_port: int = Field(default=5432, env="POSTGRES_PORT")
     
     # LLM Configuration
-    llm_provider: LLMProvider = Field(default=LLMProvider.GEMINI, env="KODIAK_LLM_PROVIDER")
     llm_model: str = Field(default="gemini/gemini-1.5-pro", env="KODIAK_LLM_MODEL")
     llm_api_key: Optional[str] = Field(default=None, env="KODIAK_LLM_API_KEY")
     llm_base_url: Optional[str] = Field(default=None, env="KODIAK_LLM_BASE_URL")
@@ -69,6 +114,7 @@ class KodiakSettings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # Allow extra environment variables
 
     @property
     def database_url(self) -> str:
@@ -89,14 +135,26 @@ class KodiakSettings(BaseSettings):
         }
         
         # Determine API key based on provider
-        api_key = self.llm_api_key
-        if not api_key:
-            if self.llm_provider == LLMProvider.OPENAI:
-                api_key = self.openai_api_key
-            elif self.llm_provider == LLMProvider.GEMINI:
-                api_key = self.google_api_key
-            elif self.llm_provider == LLMProvider.CLAUDE:
-                api_key = self.anthropic_api_key
+        # Use provider-specific API key resolution
+        provider = infer_provider_from_model(self.llm_model)
+        api_key_env = get_required_api_key_env_var(provider)
+        
+        api_key = None
+        if api_key_env:
+            # Map environment variable names to class attributes
+            env_to_attr = {
+                "GOOGLE_API_KEY": "google_api_key",
+                "OPENAI_API_KEY": "openai_api_key", 
+                "ANTHROPIC_API_KEY": "anthropic_api_key"
+            }
+            
+            attr_name = env_to_attr.get(api_key_env)
+            if attr_name and hasattr(self, attr_name):
+                api_key = getattr(self, attr_name)
+            
+            # Fallback to environment variable
+            if not api_key:
+                api_key = os.getenv(api_key_env)
         
         if api_key:
             config["api_key"] = api_key
@@ -119,17 +177,79 @@ class KodiakSettings(BaseSettings):
         }
         return model_map.get(self.llm_model, self.llm_model)
     
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get current model configuration info"""
+        try:
+            # Infer or use explicit provider
+            if hasattr(self, 'llm_provider') and self.llm_provider:
+                if hasattr(self.llm_provider, 'value'):
+                    provider = self.llm_provider.value
+                else:
+                    provider = str(self.llm_provider)
+                provider_source = "explicit"
+            else:
+                provider = infer_provider_from_model(self.llm_model)
+                provider_source = "inferred"
+            
+            api_key_configured = bool(get_api_key_for_provider(provider, self))
+            
+            return {
+                "model": self.llm_model,
+                "provider": provider,
+                "provider_source": provider_source,
+                "api_key_configured": api_key_configured,
+                "temperature": self.llm_temperature,
+                "max_tokens": self.llm_max_tokens
+            }
+        except Exception as e:
+            return {
+                "model": self.llm_model,
+                "error": str(e),
+                "api_key_configured": False
+            }
+    
+    def validate_llm_config(self) -> List[str]:
+        """Validate LLM configuration with new simplified logic"""
+        errors = []
+        
+        if not self.llm_model:
+            errors.append(ERROR_MESSAGES["missing_model"])
+            return errors
+        
+        try:
+            # Infer provider from model string or use explicit provider
+            if hasattr(self, 'llm_provider') and self.llm_provider:
+                # Handle both string and enum values for backward compatibility
+                if hasattr(self.llm_provider, 'value'):
+                    provider = self.llm_provider.value
+                else:
+                    provider = str(self.llm_provider)
+            else:
+                provider = infer_provider_from_model(self.llm_model)
+            
+            # Check for API key (skip for local models like ollama)
+            if provider != "ollama":
+                api_key = get_api_key_for_provider(provider, self)
+                if not api_key:
+                    required_key = get_required_api_key_env_var(provider)
+                    if required_key:  # Some providers might not need API keys
+                        errors.append(ERROR_MESSAGES["missing_api_key"].format(
+                            provider=provider, 
+                            env_var=required_key
+                        ))
+        
+        except ValueError as e:
+            errors.append(str(e))
+        
+        return errors
+    
     def validate_required_config(self) -> List[str]:
         """Validate required configuration values and return list of missing items"""
         missing = []
         
-        # Check for required API keys based on provider
-        if self.llm_provider == LLMProvider.OPENAI and not self.openai_api_key and not self.llm_api_key:
-            missing.append("OPENAI_API_KEY or KODIAK_LLM_API_KEY")
-        elif self.llm_provider == LLMProvider.GEMINI and not self.google_api_key and not self.llm_api_key:
-            missing.append("GOOGLE_API_KEY or KODIAK_LLM_API_KEY")
-        elif self.llm_provider == LLMProvider.CLAUDE and not self.anthropic_api_key and not self.llm_api_key:
-            missing.append("ANTHROPIC_API_KEY or KODIAK_LLM_API_KEY")
+        # Validate LLM configuration
+        llm_errors = self.validate_llm_config()
+        missing.extend(llm_errors)
         
         # Check database configuration
         if not self.postgres_server:
@@ -166,37 +286,35 @@ def validate_startup_config():
                 details={
                     "missing_keys": missing_config,
                     "env_file_path": ".env",
-                    "documentation_url": "https://github.com/your-org/kodiak/docs/configuration.md"
+                    "documentation_url": "https://docs.litellm.ai/docs/providers"
                 }
             )
         
-        # Validate LLM configuration
+        # Additional LLM configuration validation
         try:
-            llm_config = settings.get_llm_config()
-            if not llm_config.get("api_key"):
-                provider_key_map = {
-                    "gemini": "GOOGLE_API_KEY",
-                    "openai": "OPENAI_API_KEY", 
-                    "claude": "ANTHROPIC_API_KEY"
+            # Test provider inference and API key resolution
+            if hasattr(settings, 'llm_provider') and settings.llm_provider:
+                if hasattr(settings.llm_provider, 'value'):
+                    provider = settings.llm_provider.value
+                else:
+                    provider = str(settings.llm_provider)
+            else:
+                provider = infer_provider_from_model(settings.llm_model)
+            
+            # Log successful provider inference
+            from loguru import logger
+            logger.info(f"✅ LLM Provider inferred/configured: {provider}")
+            logger.info(f"🧠 LLM Model: {settings.llm_model}")
+            
+        except ValueError as e:
+            raise ConfigurationError(
+                message=str(e),
+                config_key="llm_model",
+                details={
+                    "model": settings.llm_model,
+                    "suggestion": "Use format 'provider/model' or set KODIAK_LLM_PROVIDER explicitly"
                 }
-                suggested_key = provider_key_map.get(settings.llm_provider, "KODIAK_LLM_API_KEY")
-                raise ConfigurationError(
-                    message=f"No API key found for LLM provider '{settings.llm_provider}'. Please set {suggested_key}.",
-                    config_key=suggested_key,
-                    details={
-                        "provider": settings.llm_provider,
-                        "model": settings.llm_model,
-                        "suggested_env_var": suggested_key
-                    }
-                )
-        except Exception as e:
-            if not isinstance(e, ConfigurationError):
-                raise ConfigurationError(
-                    message=f"LLM configuration validation failed: {str(e)}",
-                    config_key="llm_config",
-                    details={"provider": settings.llm_provider, "model": settings.llm_model}
-                )
-            raise
+            )
         
         # Validate database configuration
         try:
@@ -223,8 +341,24 @@ def validate_startup_config():
         # Log successful configuration
         from loguru import logger
         logger.info(f"✅ Configuration validation completed successfully")
-        logger.info(f"🤖 LLM Provider: {settings.llm_provider}")
-        logger.info(f"🧠 LLM Model: {settings.get_model_display_name()}")
+        
+        # Get provider info for logging
+        try:
+            if hasattr(settings, 'llm_provider') and settings.llm_provider:
+                if hasattr(settings.llm_provider, 'value'):
+                    provider = settings.llm_provider.value
+                else:
+                    provider = str(settings.llm_provider)
+                provider_source = "explicit"
+            else:
+                provider = infer_provider_from_model(settings.llm_model)
+                provider_source = "inferred"
+            
+            logger.info(f"🤖 LLM Provider: {provider} ({provider_source})")
+        except Exception:
+            logger.info(f"🤖 LLM Provider: unknown")
+        
+        logger.info(f"🧠 LLM Model: {settings.llm_model}")
         logger.info(f"🗄️  Database: {settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}")
         logger.info(f"🐛 Debug Mode: {settings.debug}")
         logger.info(f"🛡️  Safety Checks: {settings.enable_safety_checks}")
@@ -253,56 +387,6 @@ def validate_startup_config():
             message=f"Unexpected error during configuration validation: {str(e)}",
             details={"error_type": type(e).__name__}
         )
-
-
-# LLM Model presets for easy configuration
-LLM_PRESETS = {
-    # Gemini Models
-    "gemini-pro": {
-        "provider": LLMProvider.GEMINI,
-        "model": "gemini/gemini-1.5-pro",
-        "description": "Google Gemini 1.5 Pro - Excellent for complex reasoning and code analysis"
-    },
-    "gemini-flash": {
-        "provider": LLMProvider.GEMINI,
-        "model": "gemini/gemini-1.5-flash",
-        "description": "Google Gemini 1.5 Flash - Fast and efficient for most tasks"
-    },
-    
-    # OpenAI Models
-    "gpt-4": {
-        "provider": LLMProvider.OPENAI,
-        "model": "openai/gpt-4",
-        "description": "OpenAI GPT-4 - High-quality reasoning and analysis"
-    },
-    "gpt-4-turbo": {
-        "provider": LLMProvider.OPENAI,
-        "model": "openai/gpt-4-turbo",
-        "description": "OpenAI GPT-4 Turbo - Faster GPT-4 with larger context"
-    },
-    "gpt-3.5-turbo": {
-        "provider": LLMProvider.OPENAI,
-        "model": "openai/gpt-3.5-turbo",
-        "description": "OpenAI GPT-3.5 Turbo - Fast and cost-effective"
-    },
-    
-    # Claude Models
-    "claude-sonnet": {
-        "provider": LLMProvider.CLAUDE,
-        "model": "claude-3-5-sonnet-20241022",
-        "description": "Anthropic Claude 3.5 Sonnet - Excellent for security analysis"
-    },
-    "claude-opus": {
-        "provider": LLMProvider.CLAUDE,
-        "model": "claude-3-opus-20240229",
-        "description": "Anthropic Claude 3 Opus - Most capable Claude model"
-    },
-}
-
-
-def get_available_models() -> Dict[str, Dict[str, Any]]:
-    """Get all available model presets"""
-    return LLM_PRESETS
 
 
 def get_configuration_troubleshooting_guide() -> Dict[str, Any]:
@@ -337,10 +421,10 @@ def get_configuration_troubleshooting_guide() -> Dict[str, Any]:
                 "symptoms": ["Model not found", "Invalid model configuration"],
                 "solutions": [
                     "Use supported model formats:",
-                    "  - Gemini: gemini/gemini-1.5-pro",
-                    "  - OpenAI: openai/gpt-4",
-                    "  - Claude: claude-3-5-sonnet-20241022",
-                    "Check available models with get_available_models()"
+                    "  - Gemini: gemini/gemini-3-pro-preview",
+                    "  - OpenAI: openai/gpt-5",
+                    "  - Claude: anthropic/claude-4.5-sonnet",
+                    "See LiteLLM documentation: https://docs.litellm.ai/docs/providers"
                 ]
             }
         },

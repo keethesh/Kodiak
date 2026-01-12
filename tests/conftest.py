@@ -6,25 +6,24 @@ from unittest.mock import AsyncMock, MagicMock
 from typing import Dict, Any
 
 from kodiak.api.events import EventManager
-from kodiak.services.websocket_manager import ConnectionManager
 
 
 @pytest.fixture
-def mock_websocket_manager():
-    """Create a mock WebSocket manager for testing."""
-    manager = MagicMock(spec=ConnectionManager)
-    manager.send_tool_update = AsyncMock()
-    manager.send_agent_update = AsyncMock()
-    manager.send_finding_update = AsyncMock()
-    manager.broadcast = AsyncMock()
-    manager.broadcast_global = AsyncMock()
-    return manager
+def mock_tui_bridge():
+    """Create a mock TUI bridge for testing."""
+    bridge = MagicMock()
+    bridge.send_tool_update = AsyncMock()
+    bridge.send_agent_update = AsyncMock()
+    bridge.send_finding_update = AsyncMock()
+    bridge.broadcast = AsyncMock()
+    bridge.broadcast_global = AsyncMock()
+    return bridge
 
 
 @pytest.fixture
-def event_manager(mock_websocket_manager):
-    """Create an EventManager instance with mocked WebSocket manager."""
-    return EventManager(mock_websocket_manager)
+def event_manager(mock_tui_bridge):
+    """Create an EventManager instance with mocked TUI bridge."""
+    return EventManager(mock_tui_bridge)
 
 
 @pytest.fixture

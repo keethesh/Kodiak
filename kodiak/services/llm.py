@@ -2,7 +2,7 @@
 LLM Service for Kodiak
 
 Provides a unified interface for interacting with different LLM providers
-through LiteLLM, with support for Gemini, OpenAI, Claude, and others.
+through LiteLLM, with support for any LiteLLM-compatible model string.
 """
 
 import asyncio
@@ -14,17 +14,82 @@ from litellm import acompletion, completion
 from kodiak.core.config import settings
 
 
+def infer_provider_from_model(model_string: str) -> str:
+    """Infer provider from LiteLLM model string format"""
+    if "/" in model_string:
+        prefix = model_string.split("/")[0]
+        return prefix
+    else:
+        # Handle models without prefix (legacy or special cases)
+        if model_string.startswith("gpt"):
+            return "openai"
+        elif model_string.startswith("claude"):
+            return "anthropic"
+        elif model_string.startswith("gemini"):
+            return "gemini"
+        else:
+            raise ValueError(f"Cannot infer provider from model string: {model_string}")
+
+
+def get_api_key_for_provider(provider: str) -> Optional[str]:
+    """Get the appropriate API key for the provider"""
+    key_mapping = {
+        "openai": settings.openai_api_key,
+        "gemini": settings.google_api_key,
+        "anthropic": settings.anthropic_api_key,
+        "vertex_ai": settings.google_api_key,
+        "azure": settings.openai_api_key,  # Azure uses OpenAI format
+        "cohere": None,  # Add when supported
+        "huggingface": None,  # Add when supported
+        "ollama": None,  # Local models don't need API keys
+    }
+    return key_mapping.get(provider)
+
+
+def get_required_api_key_env_var(provider: str) -> str:
+    """Get the required environment variable name for the provider"""
+    env_var_mapping = {
+        "openai": "OPENAI_API_KEY",
+        "gemini": "GOOGLE_API_KEY", 
+        "anthropic": "ANTHROPIC_API_KEY",
+        "vertex_ai": "GOOGLE_API_KEY",
+        "azure": "OPENAI_API_KEY",
+        "cohere": "COHERE_API_KEY",
+        "huggingface": "HUGGINGFACE_API_KEY",
+        "ollama": None,  # Local models don't need API keys
+    }
+    return env_var_mapping.get(provider, "KODIAK_LLM_API_KEY")
+
+
 class LLMService:
     """Service for interacting with LLM providers"""
     
     def __init__(self):
-        self.config = settings.get_llm_config()
         self.model = settings.llm_model
         
-        # Configure LiteLLM
+        # Infer or use explicit provider
+        if hasattr(settings, 'llm_provider') and settings.llm_provider:
+            # Handle both string and enum values for backward compatibility during transition
+            if hasattr(settings.llm_provider, 'value'):
+                self.provider = settings.llm_provider.value
+            else:
+                self.provider = str(settings.llm_provider)
+        else:
+            self.provider = infer_provider_from_model(self.model)
+        
+        # Get API key for provider
+        self.api_key = get_api_key_for_provider(self.provider)
+        
+        # Configure LiteLLM with minimal setup
         litellm.set_verbose = settings.debug
         
-        # Set API keys in LiteLLM environment
+        # Set API keys in environment for LiteLLM
+        self._configure_litellm_keys()
+        
+        logger.info(f"LLM Service initialized with model: {self.model} (provider: {self.provider})")
+    
+    def _configure_litellm_keys(self):
+        """Configure API keys for LiteLLM"""
         if settings.openai_api_key:
             litellm.openai_key = settings.openai_api_key
         if settings.google_api_key:
@@ -32,8 +97,6 @@ class LLMService:
             litellm.vertex_location = None
         if settings.anthropic_api_key:
             litellm.anthropic_key = settings.anthropic_api_key
-        
-        logger.info(f"LLM Service initialized with {settings.get_model_display_name()}")
     
     async def chat_completion(
         self,
@@ -57,9 +120,9 @@ class LLMService:
             LLM response dictionary
         """
         try:
-            # Prepare parameters
+            # Prepare parameters - pass model string directly to LiteLLM
             params = {
-                "model": self.model,
+                "model": self.model,  # Direct pass-through to LiteLLM
                 "messages": messages,
                 "temperature": temperature or settings.llm_temperature,
                 "max_tokens": max_tokens or settings.llm_max_tokens,
@@ -67,14 +130,7 @@ class LLMService:
                 **kwargs
             }
             
-            # Add API key if configured
-            if self.config.get("api_key"):
-                params["api_key"] = self.config["api_key"]
-            
-            if self.config.get("api_base"):
-                params["api_base"] = self.config["api_base"]
-            
-            # Make the request
+            # LiteLLM handles provider routing automatically based on model string
             if stream:
                 return await self._stream_completion(params)
             else:
@@ -82,6 +138,7 @@ class LLMService:
                 return response
                 
         except Exception as e:
+            # Propagate LiteLLM errors directly to user
             logger.error(f"LLM completion failed: {e}")
             raise
     
@@ -235,15 +292,24 @@ class LLMService:
     
     def get_model_info(self) -> Dict[str, Any]:
         """Get information about the current model configuration"""
-        return {
-            "provider": settings.llm_provider.value,
-            "model": settings.llm_model,
-            "display_name": settings.get_model_display_name(),
-            "temperature": settings.llm_temperature,
-            "max_tokens": settings.llm_max_tokens,
-            "api_key_configured": bool(self.config.get("api_key")),
-            "base_url": self.config.get("api_base")
-        }
+        try:
+            provider = self.provider
+            api_key_configured = bool(self.api_key)
+            
+            return {
+                "model": self.model,
+                "provider": provider,
+                "provider_source": "explicit" if (hasattr(settings, 'llm_provider') and settings.llm_provider) else "inferred",
+                "api_key_configured": api_key_configured,
+                "temperature": settings.llm_temperature,
+                "max_tokens": settings.llm_max_tokens
+            }
+        except Exception as e:
+            return {
+                "model": self.model,
+                "error": str(e),
+                "api_key_configured": False
+            }
 
 
 # Global LLM service instance

@@ -38,6 +38,37 @@
 - **Code Quality**: Black, isort, mypy, ruff for Python
 - **Testing**: pytest with async support, Hypothesis for property-based testing
 
+## LLM Integration
+
+Kodiak uses [LiteLLM](https://docs.litellm.ai/) for unified access to multiple LLM providers. This allows seamless switching between different models and providers using a consistent interface.
+
+### Supported Providers
+- **Google Gemini**: Latest models including Gemini 3 Pro Preview
+- **OpenAI**: GPT-5, GPT-4 Turbo, and other GPT models
+- **Anthropic**: Claude 4.5 Sonnet, Claude 3.5 Sonnet
+- **Ollama**: Local models for privacy and offline usage
+- **Azure OpenAI**: Enterprise deployments
+- **Many others**: See [LiteLLM providers documentation](https://docs.litellm.ai/docs/providers)
+
+### Model Selection Guidelines
+- **Security Analysis**: Gemini 3 Pro Preview, Claude 4.5 Sonnet
+- **General Purpose**: GPT-5, Gemini 1.5 Pro
+- **Fast Operations**: Gemini 1.5 Flash, GPT-4 Turbo
+- **Privacy/Offline**: Ollama models (llama3.1:70b, codellama:34b)
+- **Cost Optimization**: Gemini 1.5 Flash, smaller Ollama models
+
+### Configuration Format
+Use the LiteLLM format: `provider/model-name`
+```bash
+# Examples
+KODIAK_LLM_MODEL=gemini/gemini-3-pro-preview
+KODIAK_LLM_MODEL=openai/gpt-5
+KODIAK_LLM_MODEL=anthropic/claude-4.5-sonnet
+KODIAK_LLM_MODEL=ollama/llama3.1:70b
+```
+
+For complete model lists and configuration options, see the [LiteLLM documentation](https://docs.litellm.ai/docs/providers).
+
 ## Common Commands
 
 ### Development Setup
@@ -64,20 +95,24 @@ kodiak tui --debug
 
 ### LLM Configuration Examples
 ```bash
-# Gemini 1.5 Pro (Recommended)
-export KODIAK_LLM_PROVIDER=gemini
+# Gemini 3 Pro Preview (Recommended - Latest model with best security analysis)
+export KODIAK_LLM_MODEL=gemini/gemini-3-pro-preview
+export GOOGLE_API_KEY=your_google_api_key
+
+# Gemini 1.5 Pro (Stable - Excellent for complex reasoning)
 export KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
 export GOOGLE_API_KEY=your_google_api_key
 
-# OpenAI GPT-4
-export KODIAK_LLM_PROVIDER=openai
-export KODIAK_LLM_MODEL=openai/gpt-4
+# GPT-5 (Latest OpenAI - Excellent reasoning capabilities)
+export KODIAK_LLM_MODEL=openai/gpt-5
 export OPENAI_API_KEY=your_openai_api_key
 
-# Claude 3.5 Sonnet
-export KODIAK_LLM_PROVIDER=claude
-export KODIAK_LLM_MODEL=claude-3-5-sonnet-20241022
+# Claude 4.5 Sonnet (Latest Anthropic - Best for security analysis)
+export KODIAK_LLM_MODEL=anthropic/claude-4.5-sonnet
 export ANTHROPIC_API_KEY=your_anthropic_api_key
+
+# Ollama Local (Privacy-focused - No API key required)
+export KODIAK_LLM_MODEL=ollama/llama3.1:70b
 ```
 
 ### Code Quality
@@ -124,8 +159,7 @@ print('Available skills:', list(registry.skills.keys()))
 ## Environment Variables
 
 ### LLM Configuration
-- `KODIAK_LLM_PROVIDER`: LLM provider (gemini, openai, claude, ollama)
-- `KODIAK_LLM_MODEL`: Specific model to use (e.g., gemini/gemini-1.5-pro)
+- `KODIAK_LLM_MODEL`: LiteLLM model string (e.g., gemini/gemini-3-pro-preview, openai/gpt-5)
 - `GOOGLE_API_KEY`: Google API key for Gemini models
 - `OPENAI_API_KEY`: OpenAI API key for GPT models
 - `ANTHROPIC_API_KEY`: Anthropic API key for Claude models

@@ -178,7 +178,12 @@ async def run_init(force: bool = False) -> int:
 def run_config(interactive: bool = True) -> int:
     """Configure LLM settings"""
     try:
-        from kodiak.core.config import LLM_PRESETS, settings
+        from kodiak.core.config import (
+            infer_provider_from_model, 
+            get_required_api_key_env_var,
+            ERROR_MESSAGES,
+            settings
+        )
         from pathlib import Path
         import os
         
@@ -205,73 +210,112 @@ def run_config(interactive: bool = True) -> int:
             print("📄 No .env file found. Creating new configuration...")
         
         print()
-        print("Available LLM Providers:")
-        print("-" * 25)
-        
-        # Display available providers
-        providers = {}
-        for i, (key, preset) in enumerate(LLM_PRESETS.items(), 1):
-            providers[str(i)] = key
-            print(f"{i}. {preset['description']}")
-        
+        print("🤖 LLM Model Configuration")
+        print("-" * 30)
+        print()
+        print("Enter your LLM model in LiteLLM format:")
+        print("Examples:")
+        print("  • gemini/gemini-3-pro-preview")
+        print("  • openai/gpt-5")
+        print("  • anthropic/claude-4.5-sonnet")
+        print("  • ollama/llama2")
+        print()
+        print("For more models, see: https://docs.litellm.ai/docs/providers")
         print()
         
-        # Get provider selection
+        # Get model string with validation
         while True:
-            choice = input(f"Select LLM provider (1-{len(providers)}): ").strip()
-            if choice in providers:
-                selected_preset = providers[choice]
-                preset_config = LLM_PRESETS[selected_preset]
+            model_string = input("Model string: ").strip()
+            
+            if not model_string:
+                print("❌ Model string is required. Please try again.")
+                continue
+            
+            try:
+                # Test provider inference
+                provider = infer_provider_from_model(model_string)
+                print(f"✅ Detected provider: {provider}")
                 break
-            else:
-                print("Invalid selection. Please try again.")
+            except ValueError as e:
+                print(f"❌ {e}")
+                print("Please use format 'provider/model' or a recognized model name.")
+                continue
         
         print()
-        print(f"Selected: {preset_config['description']}")
-        print()
         
-        # Get API key
-        provider = preset_config['provider']
-        model = preset_config['model']
-        
-        # Determine which API key to request
-        if provider == "gemini":
-            api_key_name = "Google API Key"
-            api_key_env = "GOOGLE_API_KEY"
-            api_key_help = "Get your API key from: https://makersuite.google.com/app/apikey"
-        elif provider == "openai":
-            api_key_name = "OpenAI API Key"
-            api_key_env = "OPENAI_API_KEY"
-            api_key_help = "Get your API key from: https://platform.openai.com/api-keys"
-        elif provider == "claude":
-            api_key_name = "Anthropic API Key"
-            api_key_env = "ANTHROPIC_API_KEY"
-            api_key_help = "Get your API key from: https://console.anthropic.com/"
+        # Get API key based on inferred provider
+        if provider == "ollama":
+            print("🏠 Local model detected - no API key required")
+            api_key = None
+            api_key_env = None
         else:
-            api_key_name = "API Key"
-            api_key_env = "KODIAK_LLM_API_KEY"
-            api_key_help = "Check your provider's documentation for API key instructions"
+            api_key_env = get_required_api_key_env_var(provider)
+            
+            # Provider-specific help
+            api_key_help_map = {
+                "gemini": "Get your API key from: https://makersuite.google.com/app/apikey",
+                "openai": "Get your API key from: https://platform.openai.com/api-keys",
+                "anthropic": "Get your API key from: https://console.anthropic.com/",
+                "azure": "Get your API key from Azure OpenAI Service",
+                "vertex_ai": "Configure Google Cloud credentials for Vertex AI"
+            }
+            
+            api_key_help = api_key_help_map.get(provider, "Check your provider's documentation for API key instructions")
+            
+            print(f"🔑 {api_key_env} Required")
+            print(f"   {api_key_help}")
+            print()
+            
+            # Check if API key already exists in environment
+            existing_key = os.getenv(api_key_env)
+            if existing_key:
+                masked_key = existing_key[:8] + "..." + existing_key[-4:] if len(existing_key) > 12 else "***"
+                print(f"Found existing API key: {masked_key}")
+                use_existing = input("Use existing API key? (Y/n): ").strip().lower()
+                if use_existing in ['', 'y', 'yes']:
+                    api_key = existing_key
+                else:
+                    api_key = input(f"Enter your {api_key_env}: ").strip()
+            else:
+                api_key = input(f"Enter your {api_key_env}: ").strip()
+            
+            if not api_key:
+                print("❌ API key is required. Configuration cancelled.")
+                return 1
         
-        print(f"🔑 {api_key_name} Required")
-        print(f"   {api_key_help}")
         print()
         
-        # Check if API key already exists in environment
-        existing_key = os.getenv(api_key_env)
-        if existing_key:
-            masked_key = existing_key[:8] + "..." + existing_key[-4:] if len(existing_key) > 12 else "***"
-            print(f"Found existing API key: {masked_key}")
-            use_existing = input("Use existing API key? (Y/n): ").strip().lower()
-            if use_existing in ['', 'y', 'yes']:
-                api_key = existing_key
-            else:
-                api_key = input(f"Enter your {api_key_name}: ").strip()
-        else:
-            api_key = input(f"Enter your {api_key_name}: ").strip()
-        
-        if not api_key:
-            print("❌ API key is required. Configuration cancelled.")
-            return 1
+        # Test LiteLLM connection
+        print("🔍 Testing LLM connection...")
+        try:
+            # Import LiteLLM and test the configuration
+            import litellm
+            
+            # Set up the API key for testing
+            if api_key and api_key_env:
+                os.environ[api_key_env] = api_key
+            
+            # Test with a simple completion
+            test_messages = [{"role": "user", "content": "Hello"}]
+            
+            # Use a short timeout for testing
+            response = litellm.completion(
+                model=model_string,
+                messages=test_messages,
+                max_tokens=10,
+                timeout=30
+            )
+            
+            print("✅ LLM connection successful!")
+            
+        except Exception as e:
+            print(f"⚠️  LLM connection test failed: {e}")
+            print("Configuration will be saved, but please verify your API key and model string.")
+            
+            continue_anyway = input("Continue with configuration? (y/N): ").strip().lower()
+            if continue_anyway not in ['y', 'yes']:
+                print("Configuration cancelled.")
+                return 1
         
         print()
         
@@ -339,9 +383,9 @@ def run_config(interactive: bool = True) -> int:
         
         # LLM Configuration
         env_content.append("# LLM Configuration")
-        env_content.append(f"KODIAK_LLM_PROVIDER={provider}")
-        env_content.append(f"KODIAK_LLM_MODEL={model}")
-        env_content.append(f"{api_key_env}={api_key}")
+        env_content.append(f"KODIAK_LLM_MODEL={model_string}")
+        if api_key and api_key_env:
+            env_content.append(f"{api_key_env}={api_key}")
         env_content.append(f"KODIAK_LLM_TEMPERATURE={temperature}")
         env_content.append(f"KODIAK_LLM_MAX_TOKENS={max_tokens}")
         env_content.append("")
@@ -373,8 +417,13 @@ def run_config(interactive: bool = True) -> int:
         # Show configuration summary
         print("📋 Configuration Summary")
         print("-" * 20)
-        print(f"LLM Provider: {provider}")
-        print(f"LLM Model: {model}")
+        print(f"LLM Model: {model_string}")
+        print(f"LLM Provider: {provider} (inferred)")
+        if api_key:
+            masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+            print(f"API Key: {masked_key}")
+        else:
+            print("API Key: Not required (local model)")
         print(f"Database: {db_user}@{db_server}:{db_port}/{db_name}")
         print(f"Temperature: {temperature}")
         print(f"Max Tokens: {max_tokens}")

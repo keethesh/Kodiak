@@ -85,16 +85,16 @@ class TestErrorHandlingProperties:
 
     def create_test_fixtures(self):
         """Create test fixtures for each test run."""
-        # Mock WebSocket manager
-        mock_websocket_manager = MagicMock()
-        mock_websocket_manager.send_tool_update = AsyncMock()
-        mock_websocket_manager.send_agent_update = AsyncMock()
-        mock_websocket_manager.send_finding_update = AsyncMock()
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
         
         # Event manager
-        event_manager = EventManager(mock_websocket_manager)
+        event_manager = EventManager(mock_tui_bridge)
         
-        return event_manager, mock_websocket_manager
+        return event_manager, mock_tui_bridge
 
     @pytest.mark.asyncio
     async def test_error_handling_consistency_network_errors(self):
@@ -105,7 +105,7 @@ class TestErrorHandlingProperties:
         
         **Validates: Requirements 1.3, 2.3**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create tool that raises network errors
         tool = NetworkErrorTool(event_manager)
@@ -128,10 +128,10 @@ class TestErrorHandlingProperties:
         assert result.data == {}
         
         # Verify error events were emitted
-        assert mock_websocket_manager.send_tool_update.call_count == 2  # start and complete (with error)
+        assert mock_tui_bridge.send_tool_update.call_count == 2  # start and complete (with error)
         
         # Check that the completion event indicates failure
-        calls = mock_websocket_manager.send_tool_update.call_args_list
+        calls = mock_tui_bridge.send_tool_update.call_args_list
         complete_call = calls[1]
         assert complete_call[1]['status'] == 'failed'
 
@@ -144,7 +144,7 @@ class TestErrorHandlingProperties:
         
         **Validates: Requirements 1.3, 2.3**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create tool that raises validation errors
         tool = ValidationErrorTool(event_manager)
@@ -175,7 +175,7 @@ class TestErrorHandlingProperties:
         
         **Validates: Requirements 1.3, 2.3**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create tool that raises permission errors
         tool = PermissionErrorTool(event_manager)
@@ -234,7 +234,7 @@ class TestErrorHandlingProperties:
         
         **Validates: Requirements 1.3, 2.3**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Test different error types
         error_tools = [
@@ -270,7 +270,7 @@ class TestErrorHandlingProperties:
         
         **Validates: Requirements 1.3, 2.3**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create tool that raises errors
         tool = GenericErrorTool(event_manager, "Context preservation test")
@@ -292,11 +292,11 @@ class TestErrorHandlingProperties:
         assert result.error == "Context preservation test"
         
         # Verify events were emitted with correct context
-        assert mock_websocket_manager.send_tool_update.call_count == 2
-        assert mock_websocket_manager.send_agent_update.call_count == 1
+        assert mock_tui_bridge.send_tool_update.call_count == 2
+        assert mock_tui_bridge.send_agent_update.call_count == 1
         
         # Check that agent update was called with correct context
-        agent_call = mock_websocket_manager.send_agent_update.call_args
+        agent_call = mock_tui_bridge.send_agent_update.call_args
         assert agent_call[1]['scan_id'] == 'context_scan'
         assert agent_call[1]['agent_id'] == 'context_agent'
 
@@ -309,7 +309,7 @@ class TestErrorHandlingProperties:
         
         **Validates: Requirements 1.3, 2.3**
         """
-        event_manager, mock_websocket_manager = self.create_test_fixtures()
+        event_manager, mock_tui_bridge = self.create_test_fixtures()
         
         # Create multiple tools with different errors
         tools_and_errors = [
@@ -339,4 +339,4 @@ class TestErrorHandlingProperties:
             assert result.data == {}
         
         # Verify all events were emitted (2 per tool = 10 total)
-        assert mock_websocket_manager.send_tool_update.call_count == 10
+        assert mock_tui_bridge.send_tool_update.call_count == 10
