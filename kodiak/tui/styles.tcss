@@ -100,7 +100,7 @@ Footer {
 #error-content {
     background: $surface;
     padding: 1;
-    border: solid $overlay;
+    border: solid $primary;
     margin-bottom: 1;
     height: auto;
     max-height: 70%;
