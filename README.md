@@ -18,11 +18,11 @@ Kodiak is an advanced LLM-powered penetration testing suite that uses AI agents 
 ### Installation
 
 ```bash
-# Install Kodiak globally
+# Install Kodiak globally (recommended)
 curl -sSL https://raw.githubusercontent.com/keethesh/Kodiak/main/install.sh | bash
 
-# Or via pipx (recommended)
-pipx install kodiak-pentest[full]
+# Or via UV (modern Python package manager)
+uv tool install kodiak-pentest[full]
 
 # Or via pip
 pip install kodiak-pentest[full]
@@ -76,18 +76,21 @@ kodiak --target ./my-application
 ### Full Installation (Recommended)
 ```bash
 # All features including database, browser automation, API server
+uv tool install kodiak-pentest[full]
+
+# Or with pip
 pip install kodiak-pentest[full]
 ```
 
 ### Minimal Installation
 ```bash
 # Core CLI only
-pip install kodiak-pentest
+uv tool install kodiak-pentest
 
 # Add features as needed
-pip install kodiak-pentest[database]  # Database support
-pip install kodiak-pentest[browser]   # Browser automation
-pip install kodiak-pentest[api]       # API server mode
+uv tool install kodiak-pentest[database]  # Database support
+uv tool install kodiak-pentest[browser]   # Browser automation
+uv tool install kodiak-pentest[api]       # API server mode
 ```
 
 ### Development Installation

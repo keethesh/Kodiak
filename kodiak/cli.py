@@ -57,15 +57,16 @@ def show_installation_help():
     console.print("\n[bold yellow]Optional Dependencies Available:[/bold yellow]")
     
     if not HAS_DATABASE:
-        console.print("📊 Database support: [dim]pip install kodiak-pentest[database][/dim]")
+        console.print("📊 Database support: [dim]uv tool install kodiak-pentest[database][/dim]")
     
     if not HAS_BROWSER:
-        console.print("🌐 Browser automation: [dim]pip install kodiak-pentest[browser][/dim]")
+        console.print("🌐 Browser automation: [dim]uv tool install kodiak-pentest[browser][/dim]")
         
     if not HAS_API:
-        console.print("🔌 API server mode: [dim]pip install kodiak-pentest[api][/dim]")
+        console.print("🔌 API server mode: [dim]uv tool install kodiak-pentest[api][/dim]")
     
-    console.print("🚀 Full installation: [dim]pip install kodiak-pentest[full][/dim]")
+    console.print("🚀 Full installation: [dim]uv tool install kodiak-pentest[full][/dim]")
+    console.print("📦 Or use pip: [dim]pip install kodiak-pentest[full][/dim]")
     console.print()
 
 
@@ -111,7 +112,7 @@ def init(force: bool, docker: bool):
     """Initialize Kodiak database and configuration."""
     if not HAS_DATABASE and not docker:
         console.print("[red]Database dependencies not installed![/red]")
-        console.print("Install with: [dim]pip install kodiak-pentest[database][/dim]")
+        console.print("Install with: [dim]uv tool install kodiak-pentest[database][/dim]")
         console.print("Or use Docker: [dim]kodiak init --docker[/dim]")
         show_installation_help()
         sys.exit(1)
@@ -230,7 +231,7 @@ def config(interactive: bool):
             console.print(f"Debug Mode: {settings.debug}")
         except ImportError:
             console.print("[yellow]Configuration module not available[/yellow]")
-            console.print("Install database dependencies: [dim]pip install kodiak-pentest[database][/dim]")
+            console.print("Install database dependencies: [dim]uv tool install kodiak-pentest[database][/dim]")
 
 
 @main.command()
@@ -251,7 +252,7 @@ def tui(target: Optional[str], debug: bool):
         
     except ImportError as e:
         console.print(f"[red]❌ TUI dependencies missing: {e}[/red]")
-        console.print("Install with: [dim]pip install kodiak-pentest[full][/dim]")
+        console.print("Install with: [dim]uv tool install kodiak-pentest[full][/dim]")
         sys.exit(1)
     except Exception as e:
         console.print(f"[red]❌ Failed to launch TUI: {e}[/red]")
@@ -267,7 +268,7 @@ def api(port: int, host: str):
     """Launch Kodiak API server (requires api extras)."""
     if not HAS_API:
         console.print("[red]API dependencies not installed![/red]")
-        console.print("Install with: [dim]pip install kodiak-pentest[api][/dim]")
+        console.print("Install with: [dim]uv tool install kodiak-pentest[api][/dim]")
         show_installation_help()
         sys.exit(1)
     
