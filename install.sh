@@ -175,25 +175,52 @@ install_kodiak() {
     mkdir -p "$INSTALL_DIR"
     mkdir -p "$BIN_DIR"
     
-    # Check if already installed and handle accordingly
-    if command_exists kodiak && [[ "$FORCE_INSTALL" != "true" ]]; then
+    # Check if already installed and WORKING
+    local kodiak_works=false
+    if command_exists kodiak; then
+        if kodiak --version >/dev/null 2>&1; then
+            kodiak_works=true
+        fi
+    fi
+    
+    if [[ "$kodiak_works" == "true" ]] && [[ "$FORCE_INSTALL" != "true" ]]; then
         local current_version
         current_version=$(kodiak --version 2>/dev/null | grep -o 'v[0-9.]*' || echo "unknown")
-        print_warning "Kodiak $current_version is already installed"
+        print_warning "Kodiak $current_version is already installed and working"
         print_status "Use --force to reinstall or run 'kodiak --help' to use existing installation"
         
         # Skip installation but still run verification
         return 0
-    elif command_exists kodiak && [[ "$FORCE_INSTALL" == "true" ]]; then
-        local current_version
-        current_version=$(kodiak --version 2>/dev/null | grep -o 'v[0-9.]*' || echo "unknown")
-        print_status "Force reinstalling Kodiak $current_version..."
+    elif command_exists kodiak && [[ "$kodiak_works" != "true" ]]; then
+        print_warning "Found broken Kodiak installation, will reinstall..."
+        FORCE_INSTALL=true
+    fi
+    
+    if [[ "$FORCE_INSTALL" == "true" ]]; then
+        print_status "Force reinstalling Kodiak..."
         
-        # Remove existing installation
+        # Aggressively clean up ALL existing Kodiak installations
+        print_status "Cleaning up existing installations..."
+        
+        # Remove UV tool installations
         if command_exists uv; then
             uv tool uninstall kodiak-pentest 2>/dev/null || true
             uv tool uninstall kodiak 2>/dev/null || true
         fi
+        
+        # Remove pipx installations
+        if command_exists pipx; then
+            pipx uninstall kodiak-pentest 2>/dev/null || true
+            pipx uninstall kodiak 2>/dev/null || true
+        fi
+        
+        # Remove any existing kodiak binary in common locations
+        rm -f "$HOME/.local/bin/kodiak" 2>/dev/null || true
+        rm -f "/usr/local/bin/kodiak" 2>/dev/null || true
+        
+        # Remove UV tool directory for kodiak
+        rm -rf "$HOME/.local/share/uv/tools/kodiak-pentest" 2>/dev/null || true
+        rm -rf "$HOME/.local/share/uv/tools/kodiak" 2>/dev/null || true
     fi
     
     # Try PyPI installation first
