@@ -186,11 +186,23 @@ install_kodiak() {
     if [[ "$kodiak_works" == "true" ]] && [[ "$FORCE_INSTALL" != "true" ]]; then
         local current_version
         current_version=$(kodiak --version 2>/dev/null | grep -o 'v[0-9.]*' || echo "unknown")
-        print_warning "Kodiak $current_version is already installed and working"
-        print_status "Use --force to reinstall or run 'kodiak --help' to use existing installation"
         
-        # Skip installation but still run verification
-        return 0
+        # Check against target version if we can determine it
+        # For now, simplistic check: if versions match, skip. If not, upgrade.
+        # But source version is in pyproject.toml which we might not have here yet if curling.
+        
+        print_warning "Kodiak $current_version is already installed."
+        print_status "To force a reinstall/upgrade, run with --force"
+        
+        # Determine if we should auto-upgrade (e.g. if we are installing specific version)
+        if [[ "$KODIAK_VERSION" != "latest" ]] && [[ "v$KODIAK_VERSION" != "$current_version" ]]; then
+             print_status "Version mismatch detected. Upgrading to $KODIAK_VERSION..."
+             FORCE_INSTALL=true
+        else
+             print_status "Skipping installation. Use --force to reinstall."
+             # Skip installation but still run verification
+             return 0
+        fi
     elif command_exists kodiak && [[ "$kodiak_works" != "true" ]]; then
         print_warning "Found broken Kodiak installation, will reinstall..."
         FORCE_INSTALL=true

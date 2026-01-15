@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "kodiak-pentest"
-version = "0.1.0"
+version = "0.1.1"
 description = "Kodiak - AI-Powered Penetration Testing Suite with Terminal Interface"
 authors = ["Kodiak Team <team@kodiak-pentest.com>"]
 readme = "README.md"
