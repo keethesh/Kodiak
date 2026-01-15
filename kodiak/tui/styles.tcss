@@ -1,8 +1,9 @@
-/* Kodiak TUI Styles */
+/* Kodiak TUI Styles - Catppuccin Mocha Theme */
 
 /* Color scheme - Dark theme */
 $background: #1e1e2e;
 $surface: #313244;
+$surface-light: #45475a;
 $overlay: #6c7086;
 $text: #cdd6f4;
 $text-muted: #9399b2;
@@ -11,6 +12,7 @@ $secondary: #f38ba8;
 $accent: #a6e3a1;
 $warning: #f9e2af;
 $error: #f38ba8;
+$success: #a6e3a1;
 
 /* Global styles */
 Screen {
@@ -21,15 +23,100 @@ Screen {
 Header {
     dock: top;
     height: 3;
-    background: $primary;
-    color: $text;
+    background: $surface;
+    color: $primary;
 }
 
 Footer {
     dock: bottom;
     height: 3;
-    background: $primary;
+    background: $surface;
     color: $text;
+}
+
+/* Button styling */
+Button {
+    background: $surface-light;
+    color: $text;
+    border: none;
+    height: 3;
+    min-width: 12;
+}
+
+Button:hover {
+    background: $overlay;
+}
+
+Button:focus {
+    background: $primary;
+    color: $background;
+}
+
+Button.-primary {
+    background: $primary;
+    color: $background;
+}
+
+Button.-success {
+    background: $accent;
+    color: $background;
+}
+
+Button.-warning {
+    background: $warning;
+    color: $background;
+}
+
+Button.-error {
+    background: $error;
+    color: $background;
+}
+
+/* Input styling */
+Input {
+    background: $surface;
+    border: solid $overlay;
+    padding: 0 1;
+}
+
+Input:focus {
+    border: solid $primary;
+}
+
+Input.-invalid {
+    border: solid $error;
+}
+
+/* DataTable styling */
+DataTable {
+    background: $background;
+}
+
+DataTable > .datatable--header {
+    background: $surface-light;
+    color: $primary;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $primary;
+    color: $background;
+}
+
+/* Panel styling */
+.panel {
+    border: solid $surface-light;
+    background: $background;
+}
+
+.panel-title {
+    dock: top;
+    height: 1;
+    background: $surface-light;
+    color: $primary;
+    text-align: center;
+    text-style: bold;
+    padding: 0 1;
 }
 
 /* Home Screen */

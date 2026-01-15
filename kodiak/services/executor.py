@@ -89,27 +89,119 @@ class LocalExecutor(ServiceExecutor):
 
 class DockerExecutor(ServiceExecutor):
     """
-    Simplified Docker executor - since everything runs in one container,
-    this just delegates to LocalExecutor for simplicity and performance.
+    Runs commands inside Docker containers.
+    Used when Kodiak runs locally but needs to execute security tools in a containerized environment.
     """
     def __init__(self, image: str = "kalilinux/kali-rolling"):
         self.image = image
-        self.local_executor = LocalExecutor()
+        logger.info(f"DockerExecutor initialized with image: {self.image}")
 
     async def run_command(
         self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None
     ) -> CommandResult:
-        logger.info(f"DockerExec (local): {' '.join(command)}")
-        # Since we're already in the Docker container, just use local execution
-        return await self.local_executor.run_command(command, cwd, env)
+        """
+        Execute command inside Docker container.
+        Maps the working directory into the container and runs the command.
+        """
+        # Use absolute path for volume mounting
+        work_dir = os.path.abspath(cwd) if cwd else os.getcwd()
+        
+        # Build docker run command
+        docker_cmd = [
+            "docker", "run",
+            "--rm",  # Remove container after execution
+            "-v", f"{work_dir}:/workspace",  # Mount working directory
+            "-w", "/workspace",  # Set working directory inside container
+        ]
+        
+        # Add environment variables
+        if env:
+            for key, value in env.items():
+                docker_cmd.extend(["-e", f"{key}={value}"])
+        
+        # Add image and command
+        docker_cmd.append(self.image)
+        docker_cmd.extend(command)
+        
+        logger.info(f"DockerExec: {' '.join(docker_cmd)}")
+        
+        try:
+            # Execute docker run command
+            process = await asyncio.create_subprocess_exec(
+                *docker_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            return CommandResult(
+                exit_code=process.returncode or 0,
+                stdout=stdout.decode().strip(),
+                stderr=stderr.decode().strip(),
+            )
+            
+        except FileNotFoundError:
+            # Docker not installed or not in PATH
+            error_msg = "Docker is not installed or not available in PATH"
+            logger.error(error_msg)
+            return CommandResult(
+                exit_code=127,
+                stdout="",
+                stderr=error_msg
+            )
+        except Exception as e:
+            logger.error(f"Docker execution failed: {e}")
+            return CommandResult(
+                exit_code=1,
+                stdout="",
+                stderr=str(e)
+            )
 
     async def stream_command(
         self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None
     ) -> AsyncGenerator[str, None]:
-        logger.info(f"DockerExec Stream (local): {' '.join(command)}")
-        # Since we're already in the Docker container, just use local execution
-        async for line in self.local_executor.stream_command(command, cwd, env):
-            yield line
+        """
+        Stream command output from Docker container.
+        """
+        work_dir = os.path.abspath(cwd) if cwd else os.getcwd()
+        
+        docker_cmd = [
+            "docker", "run",
+            "--rm",
+            "-v", f"{work_dir}:/workspace",
+            "-w", "/workspace",
+        ]
+        
+        if env:
+            for key, value in env.items():
+                docker_cmd.extend(["-e", f"{key}={value}"])
+        
+        docker_cmd.append(self.image)
+        docker_cmd.extend(command)
+        
+        logger.info(f"DockerExec Stream: {' '.join(docker_cmd)}")
+        
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *docker_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            
+            if process.stdout:
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        break
+                    yield line.decode()
+            
+            await process.wait()
+            
+        except Exception as e:
+            logger.error(f"Docker stream failed: {e}")
+            yield f"Error: {str(e)}\n"
+
 
 class MockExecutor(ServiceExecutor):
     async def run_command(

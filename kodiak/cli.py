@@ -110,57 +110,57 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.option("--docker", is_flag=True, help="Use Docker for database")
 def init(force: bool, docker: bool):
     """Initialize Kodiak database and configuration."""
-    if not HAS_DATABASE and not docker:
-        console.print("[red]Database dependencies not installed![/red]")
-        console.print("Install with: [dim]uv tool install kodiak-pentest[database][/dim]")
-        console.print("Or use Docker: [dim]kodiak init --docker[/dim]")
-        show_installation_help()
-        sys.exit(1)
     
-    if docker or not HAS_DATABASE:
+    # Auto-detect if we should use Docker
+    if not docker and not HAS_DATABASE:
+        print_status("Database dependencies not available locally, using Docker...")
+        docker = True
+    
+    if docker:
         console.print("🐳 Using Docker for database initialization...")
-        # Use Docker Compose for database setup
+        
+        # Check if Docker is available
+        if not check_docker_available():
+            console.print("[red]Docker is not available![/red]")
+            console.print("Install Docker or use: [dim]uv tool install kodiak-pentest[database][/dim]")
+            sys.exit(1)
+        
+        # Ensure docker-compose.yml exists
         kodiak_dir = Path.home() / ".kodiak"
-        kodiak_dir.mkdir(exist_ok=True)
-        
-        # Create minimal docker-compose.yml if it doesn't exist
         compose_file = kodiak_dir / "docker-compose.yml"
-        if not compose_file.exists():
-            compose_content = """
-services:
-  db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: kodiak
-      POSTGRES_PASSWORD: kodiak_password
-      POSTGRES_DB: kodiak_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-volumes:
-  postgres_data:
-"""
-            compose_file.write_text(compose_content.strip())
         
-        os.system(f"docker-compose -f {compose_file} up -d db")
-        console.print("[green]✅ Database container started![/green]")
+        if not compose_file.exists():
+            console.print("Creating Docker Compose configuration...")
+            setup_docker_compose(kodiak_dir)
+        
+        # Start database container
+        os.chdir(kodiak_dir)
+        result = os.system("docker-compose up -d db")
+        if result != 0:
+            console.print("[red]Failed to start database container[/red]")
+            sys.exit(1)
+        
+        # Initialize database using Docker
+        result = os.system("docker-compose run --rm kodiak kodiak init")
+        if result == 0:
+            console.print("[green]✅ Database initialized successfully![/green]")
+        else:
+            console.print("[red]❌ Database initialization failed[/red]")
+            sys.exit(1)
         return
     
     # Local database initialization
     try:
         import asyncio
-        from kodiak.database.engine import init_database
-        from kodiak.core.config import get_settings
+        from kodiak.database.engine import init_db
+        from kodiak.core.config import settings
         
-        settings = get_settings()
         console.print(f"🔧 Initializing database at {settings.database_url}")
         
         if force:
             console.print("[yellow]Force mode: Dropping existing data[/yellow]")
         
-        asyncio.run(init_database(force=force))
+        asyncio.run(init_db())
         console.print("[green]✅ Database initialized successfully![/green]")
         
     except Exception as e:
@@ -169,12 +169,109 @@ volumes:
         sys.exit(1)
 
 
+def setup_docker_compose(kodiak_dir: Path):
+    """Create Docker Compose configuration for Kodiak."""
+    compose_content = """services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kodiak
+      POSTGRES_PASSWORD: kodiak_password
+      POSTGRES_DB: kodiak_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - kodiak_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kodiak -d kodiak_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kodiak Security Tools Container
+  kodiak-tools:
+    image: ghcr.io/keethesh/kodiak:latest
+    restart: unless-stopped
+    environment:
+      - POSTGRES_SERVER=db
+      - POSTGRES_USER=kodiak
+      - POSTGRES_PASSWORD=kodiak_password
+      - POSTGRES_DB=kodiak_db
+      - POSTGRES_PORT=5432
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./scans:/app/scans
+      - ./results:/app/results
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    ports:
+      - "8000:8000"  # API port for tool execution
+    command: ["python", "-m", "kodiak", "api", "--host", "0.0.0.0"]
+
+  # Optional: Nuclei Templates Update Service
+  nuclei-updater:
+    image: projectdiscovery/nuclei:latest
+    volumes:
+      - nuclei_templates:/root/nuclei-templates
+    command: ["nuclei", "-update-templates"]
+    restart: "no"
+
+volumes:
+  kodiak_postgres_data:
+  nuclei_templates:
+"""
+    
+    compose_file = kodiak_dir / "docker-compose.yml"
+    compose_file.write_text(compose_content.strip())
+    
+    # Create .env template if it doesn't exist
+    env_file = kodiak_dir / ".env"
+    if not env_file.exists():
+        env_content = """# Kodiak Configuration
+# LLM Configuration (choose one)
+KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+GOOGLE_API_KEY=your_google_api_key_here
+
+# Alternative LLM Providers
+# KODIAK_LLM_MODEL=openai/gpt-4
+# OPENAI_API_KEY=your_openai_api_key_here
+# KODIAK_LLM_MODEL=anthropic/claude-3-5-sonnet-20241022
+# ANTHROPIC_API_KEY=your_anthropic_api_key_here
+
+# Application Settings
+KODIAK_DEBUG=false
+KODIAK_LOG_LEVEL=INFO
+KODIAK_ENABLE_SAFETY=true
+KODIAK_MAX_AGENTS=5
+KODIAK_TOOL_TIMEOUT=300
+KODIAK_ENABLE_HIVE_MIND=true
+
+# TUI Settings
+KODIAK_TUI_COLOR_THEME=dark
+KODIAK_TUI_REFRESH_RATE=10
+"""
+        env_file.write_text(env_content.strip())
+
+
 @main.command()
-@click.option("--interactive", "-i", is_flag=True, help="Interactive configuration")
-def config(interactive: bool):
-    """Configure Kodiak settings and API keys."""
-    if interactive:
-        console.print("🔧 [bold]Kodiak Configuration[/bold]")
+@click.option("--interactive", "-i", is_flag=True, help="Force interactive TUI mode")
+@click.option("--basic", "-b", is_flag=True, help="Use basic CLI prompts instead of TUI")
+def config(interactive: bool, basic: bool):
+    """Configure Kodiak settings and API keys.
+    
+    By default, launches a TUI wizard for guided configuration.
+    Use --basic for simple CLI prompts (useful for scripts/SSH).
+    """
+    # Default to TUI wizard unless --basic is specified
+    if basic:
+        # Basic CLI mode (legacy behavior)
+        console.print("🔧 [bold]Kodiak Configuration (Basic Mode)[/bold]")
         console.print()
         
         # LLM Provider selection
@@ -189,7 +286,14 @@ def config(interactive: bool):
         config_file = Path.home() / ".kodiak" / "config.env"
         config_file.parent.mkdir(exist_ok=True)
         
-        config_lines = []
+        config_lines = [
+            "# Kodiak Configuration",
+            "# Generated by 'kodiak config --basic'",
+            "",
+            "# Database: SQLite by default (zero-config)",
+            "KODIAK_DB_TYPE=sqlite",
+            ""
+        ]
         
         if choice == 1:
             api_key = click.prompt("Google API Key", hide_input=True)
@@ -215,30 +319,62 @@ def config(interactive: bool):
         
         # Write configuration
         with open(config_file, "w") as f:
-            f.write("\n".join(config_lines))
+            f.write("\n".join(config_lines) + "\n")
+        
+        # Set restrictive permissions
+        try:
+            config_file.chmod(0o600)
+        except Exception:
+            pass
         
         console.print(f"[green]✅ Configuration saved to {config_file}[/green]")
-        console.print("Add this to your shell profile:")
-        console.print(f"[dim]export $(cat {config_file} | xargs)[/dim]")
+        console.print("\nTo apply configuration, run:")
+        console.print(f"[dim]  export $(cat {config_file} | xargs)[/dim]")
+        console.print("\nOr source it in your shell profile.")
     else:
-        # Show current configuration
+        # TUI Wizard mode (default)
         try:
-            from kodiak.core.config import get_settings
-            settings = get_settings()
-            console.print("📋 [bold]Current Configuration:[/bold]")
-            console.print(f"LLM Model: {settings.llm_model}")
-            console.print(f"Database: {settings.database_url}")
-            console.print(f"Debug Mode: {settings.debug}")
-        except ImportError:
-            console.print("[yellow]Configuration module not available[/yellow]")
-            console.print("Install database dependencies: [dim]uv tool install kodiak-pentest[database][/dim]")
+            from kodiak.tui.config_wizard import run_config_wizard
+            
+            console.print("🔧 Launching configuration wizard...\n")
+            result = run_config_wizard()
+            
+            if result:
+                console.print("\n[green]✅ Configuration complete![/green]")
+                console.print("\nNext steps:")
+                console.print("  [dim]kodiak init[/dim]    Initialize database")
+                console.print("  [dim]kodiak[/dim]         Launch TUI")
+            else:
+                console.print("\n[yellow]Configuration cancelled.[/yellow]")
+                
+        except ImportError as e:
+            console.print(f"[red]TUI dependencies not available: {e}[/red]")
+            console.print("Falling back to basic mode...\n")
+            # Recursively call with basic mode
+            import subprocess
+            subprocess.run([sys.executable, "-m", "kodiak", "config", "--basic"])
+        except Exception as e:
+            console.print(f"[red]Error launching wizard: {e}[/red]")
+            console.print("Try using: [dim]kodiak config --basic[/dim]")
 
 
 @main.command()
 @click.option("--target", "-t", help="Initial target to scan")
 @click.option("--debug", is_flag=True, help="Enable debug mode")
-def tui(target: Optional[str], debug: bool):
+@click.option("--docker", is_flag=True, default=True, help="Use Docker for security tools (default)")
+def tui(target: Optional[str], debug: bool, docker: bool):
     """Launch the Kodiak Terminal User Interface."""
+    
+    # Ensure Docker backend is ready if using Docker mode
+    if docker:
+        if not check_docker_available():
+            console.print("[red]❌ Docker is not available![/red]")
+            console.print("Install Docker or run: [dim]kodiak tui --no-docker[/dim]")
+            sys.exit(1)
+        
+        # Ensure Docker services are running
+        setup_docker_backend()
+    
     try:
         from kodiak.tui.app import KodiakApp
         
@@ -247,6 +383,10 @@ def tui(target: Optional[str], debug: bool):
         app = KodiakApp()
         if target:
             app.initial_target = target
+        
+        # Configure app to use Docker backend
+        if docker:
+            app.use_docker_backend = True
         
         app.run()
         
@@ -259,6 +399,34 @@ def tui(target: Optional[str], debug: bool):
         if debug:
             raise
         sys.exit(1)
+
+
+def setup_docker_backend():
+    """Ensure Docker backend services are running."""
+    kodiak_dir = Path.home() / ".kodiak"
+    kodiak_dir.mkdir(exist_ok=True)
+    
+    compose_file = kodiak_dir / "docker-compose.yml"
+    
+    # Create docker-compose.yml if it doesn't exist
+    if not compose_file.exists():
+        console.print("🐳 Setting up Docker backend...")
+        setup_docker_compose(kodiak_dir)
+    
+    # Start services
+    os.chdir(kodiak_dir)
+    
+    # Check if services are already running
+    result = os.system("docker-compose ps --services --filter status=running | grep -q db")
+    if result != 0:
+        console.print("🐳 Starting Docker services...")
+        result = os.system("docker-compose up -d")
+        if result != 0:
+            console.print("[red]❌ Failed to start Docker services[/red]")
+            sys.exit(1)
+        console.print("[green]✅ Docker services started[/green]")
+    else:
+        console.print("[green]✅ Docker services already running[/green]")
 
 
 @main.command()
@@ -285,39 +453,94 @@ def api(port: int, host: str):
 
 
 @main.command()
-def doctor():
-    """Check Kodiak installation and dependencies."""
-    console.print("🔍 [bold]Kodiak Installation Check[/bold]\n")
+@click.option("--action", type=click.Choice(['start', 'stop', 'restart', 'status', 'logs']), default='status', help="Docker backend action")
+@click.option("--service", help="Specific service to target")
+def docker(action: str, service: Optional[str]):
+    """Manage Kodiak Docker backend services."""
+    if not check_docker_available():
+        console.print("[red]❌ Docker is not available![/red]")
+        console.print("Please install Docker to use backend services")
+        sys.exit(1)
     
-    # Check Python version
-    python_version = sys.version_info
-    if python_version >= (3, 11):
-        console.print(f"✅ Python {python_version.major}.{python_version.minor}.{python_version.micro}")
-    else:
-        console.print(f"❌ Python {python_version.major}.{python_version.minor} (requires 3.11+)")
+    kodiak_dir = Path.home() / ".kodiak"
+    compose_file = kodiak_dir / "docker-compose.yml"
     
-    # Check core dependencies
-    console.print(f"✅ Core CLI: Available")
+    if not compose_file.exists():
+        console.print("🐳 Setting up Docker backend...")
+        setup_docker_compose(kodiak_dir)
     
-    # Check optional dependencies
-    console.print(f"{'✅' if HAS_DATABASE else '❌'} Database support: {'Available' if HAS_DATABASE else 'Missing'}")
-    console.print(f"{'✅' if HAS_BROWSER else '❌'} Browser automation: {'Available' if HAS_BROWSER else 'Missing'}")
-    console.print(f"{'✅' if HAS_API else '❌'} API server: {'Available' if HAS_API else 'Missing'}")
+    os.chdir(kodiak_dir)
     
-    # Check Docker
-    docker_available = check_docker_available()
-    console.print(f"{'✅' if docker_available else '❌'} Docker: {'Available' if docker_available else 'Missing'}")
+    service_arg = f" {service}" if service else ""
     
-    # Check external tools
-    console.print("\n🛠️  [bold]External Tools:[/bold]")
-    tools = ["nmap", "curl", "wget"]
-    for tool in tools:
-        available = os.system(f"which {tool} > /dev/null 2>&1") == 0
-        console.print(f"{'✅' if available else '❌'} {tool}: {'Available' if available else 'Missing'}")
+    if action == "start":
+        console.print("🐳 Starting Kodiak backend services...")
+        result = os.system(f"docker-compose up -d{service_arg}")
+        if result == 0:
+            console.print("[green]✅ Backend services started[/green]")
+        else:
+            console.print("[red]❌ Failed to start services[/red]")
     
-    if not (HAS_DATABASE and HAS_BROWSER and HAS_API):
-        console.print()
-        show_installation_help()
+    elif action == "stop":
+        console.print("🛑 Stopping Kodiak backend services...")
+        result = os.system(f"docker-compose down{service_arg}")
+        if result == 0:
+            console.print("[green]✅ Backend services stopped[/green]")
+        else:
+            console.print("[red]❌ Failed to stop services[/red]")
+    
+    elif action == "restart":
+        console.print("🔄 Restarting Kodiak backend services...")
+        os.system(f"docker-compose restart{service_arg}")
+    
+    elif action == "status":
+        console.print("📊 Kodiak backend status:")
+        os.system("docker-compose ps")
+    
+    elif action == "logs":
+        if service:
+            os.system(f"docker-compose logs -f {service}")
+        else:
+            os.system("docker-compose logs -f")
+
+
+@main.command()
+def services():
+    """Show status of all Kodiak services."""
+    console.print("🔍 [bold]Kodiak Services Status[/bold]\n")
+    
+    # Check global CLI
+    console.print("📱 [bold]Global CLI:[/bold]")
+    try:
+        from kodiak import __version__
+        console.print(f"  ✅ Kodiak CLI v{__version__} (global)")
+    except ImportError:
+        console.print("  ❌ Kodiak CLI not available")
+    
+    # Check Docker backend
+    console.print("\n🐳 [bold]Docker Backend:[/bold]")
+    if not check_docker_available():
+        console.print("  ❌ Docker not available")
+        return
+    
+    kodiak_dir = Path.home() / ".kodiak"
+    compose_file = kodiak_dir / "docker-compose.yml"
+    
+    if not compose_file.exists():
+        console.print("  ⚠️  Docker backend not configured")
+        console.print("  Run: [dim]kodiak docker start[/dim] to set up")
+        return
+    
+    os.chdir(kodiak_dir)
+    
+    # Check service status
+    result = os.system("docker-compose ps --format table")
+    
+    console.print("\n📋 [bold]Quick Commands:[/bold]")
+    console.print("  [dim]kodiak docker start[/dim]     Start backend services")
+    console.print("  [dim]kodiak docker stop[/dim]      Stop backend services")
+    console.print("  [dim]kodiak docker logs[/dim]      View service logs")
+    console.print("  [dim]kodiak init --docker[/dim]    Initialize database")
 
 
 if __name__ == "__main__":

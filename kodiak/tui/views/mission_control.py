@@ -42,15 +42,21 @@ class MissionControlScreen(Screen):
         layout: vertical;
     }
     
-    #status-bar {
+    #scan-info {
         dock: top;
-        height: 1;
-        background: $primary;
+        height: 2;
+        background: $surface;
+        padding: 0 1;
+        border-bottom: solid $primary;
+    }
+    
+    #scan-status {
+        text-style: bold;
     }
     
     #main-content {
         height: 1fr;
-        margin: 0 1;
+        margin: 1;
     }
     
     #left-panel {
@@ -67,32 +73,26 @@ class MissionControlScreen(Screen):
     #agents-container {
         height: 1fr;
         margin-bottom: 1;
+        border: solid $surface;
     }
     
     #graph-container {
         height: 1fr;
+        border: solid $surface;
+        margin-bottom: 1;
     }
     
     #activity-container {
-        height: 100%;
+        height: 1fr;
+        border: solid $surface;
     }
     
     .panel-title {
         dock: top;
         height: 1;
-        background: $primary;
-        text-align: center;
-        text-style: bold;
-    }
-    
-    #scan-info {
-        dock: top;
-        height: 2;
         background: $surface;
-        padding: 0 1;
-    }
-    
-    #scan-status {
+        color: $primary;
+        text-align: center;
         text-style: bold;
     }
     

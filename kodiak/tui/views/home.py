@@ -49,16 +49,39 @@ class HomeScreen(Screen):
         layout: vertical;
     }
     
-    #welcome-container {
-        height: 3;
+    #logo-container {
+        height: auto;
         align: center middle;
-        background: $primary;
+        padding: 1 0;
+        background: $surface;
+    }
+    
+    #ascii-logo {
+        text-align: center;
+        color: $accent;
+    }
+    
+    #tagline {
+        text-align: center;
+        color: $text-muted;
+        text-style: italic;
         margin-bottom: 1;
     }
     
-    #welcome-text {
-        text-align: center;
-        text-style: bold;
+    #quick-actions {
+        height: 3;
+        align: center middle;
+        margin-bottom: 1;
+    }
+    
+    #quick-actions Button {
+        margin: 0 1;
+        min-width: 18;
+    }
+    
+    #new-scan-btn {
+        background: $accent;
+        color: $background;
     }
     
     #main-content {
@@ -102,17 +125,34 @@ class HomeScreen(Screen):
         padding: 1;
     }
     
-    #empty-message {
+    #empty-state {
         height: 100%;
-        content-align: center middle;
+        align: center middle;
+    }
+    
+    #empty-message {
+        text-align: center;
         color: $text-muted;
         text-style: italic;
+    }
+    
+    #empty-hint {
+        text-align: center;
+        color: $accent;
+        margin-top: 1;
     }
     
     .status-running { color: $warning; }
     .status-completed { color: $success; }
     .status-failed { color: $error; }
     .status-paused { color: $primary; }
+    """
+    
+    # ASCII Logo for Kodiak
+    LOGO = """
+╔═╗┌─┐┌┬┐┬┌─┐┬┌─
+╠═╝│ │ │││├─┤├┴┐
+╩  └─┘─┴┘┴┴ ┴┴ ┴
     """
     
     def __init__(self, **kwargs):
@@ -123,16 +163,24 @@ class HomeScreen(Screen):
         """Compose the home screen layout"""
         yield Header()
         
-        with Container(id="welcome-container"):
-            yield Static("🐻 Welcome to Kodiak - LLM Penetration Testing Suite", id="welcome-text")
+        # Logo section
+        with Container(id="logo-container"):
+            yield Static(self.LOGO.strip(), id="ascii-logo")
+            yield Static("🐻 LLM-Powered Penetration Testing Suite", id="tagline")
+        
+        # Quick action buttons
+        with Horizontal(id="quick-actions"):
+            yield Button("🔍 New Scan", id="new-scan-btn", variant="success")
+            yield Button("📊 View Findings", id="findings-btn", variant="default")
+            yield Button("⚙️ Settings", id="settings-btn", variant="default")
         
         with Vertical(id="main-content"):
             with Container(id="projects-container"):
-                yield Static("Projects", id="projects-title")
+                yield Static("📁 Projects", id="projects-title")
                 yield DataTable(id="projects-table")
             
             with Container(id="activity-container"):
-                yield Static("Recent Activity", id="activity-title")
+                yield Static("📋 Recent Activity", id="activity-title")
                 yield Static("", id="activity-content")
         
         yield Footer()
@@ -343,3 +391,15 @@ class HomeScreen(Screen):
         """Refresh all data on the screen"""
         self._load_projects()
         self._load_recent_activity()
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses"""
+        button_id = event.button.id
+        
+        if button_id == "new-scan-btn":
+            self.action_new_scan()
+        elif button_id == "findings-btn":
+            from kodiak.tui.views.findings import FindingsScreen
+            self.app.push_screen(FindingsScreen())
+        elif button_id == "settings-btn":
+            self.notify("Settings coming soon", severity="information")

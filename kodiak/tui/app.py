@@ -98,7 +98,7 @@ class KodiakApp(App):
                 message=f"Failed to initialize Kodiak: {str(e)}",
                 details={
                     "error_type": type(e).__name__,
-                    "database_url": f"{settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}",
+                    "database_url": settings.database_url,
                     "debug_mode": self.debug
                 },
                 recoverable=False

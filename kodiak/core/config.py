@@ -81,6 +81,13 @@ class KodiakSettings(BaseSettings):
     tui_refresh_rate: int = Field(default=10, env="KODIAK_TUI_REFRESH_RATE")  # Hz
     
     # Database Configuration
+    # Database type: "sqlite" (default, zero-config) or "postgres" (production)
+    db_type: str = Field(default="sqlite", env="KODIAK_DB_TYPE")
+    
+    # SQLite Configuration (default, stored in ~/.kodiak/)
+    sqlite_path: Optional[str] = Field(default=None, env="KODIAK_SQLITE_PATH")
+    
+    # PostgreSQL Configuration (optional, for production deployments)
     postgres_server: str = Field(default="localhost", env="POSTGRES_SERVER")
     postgres_user: str = Field(default="kodiak", env="POSTGRES_USER")
     postgres_password: str = Field(default="kodiak_password", env="POSTGRES_PASSWORD")
@@ -111,20 +118,43 @@ class KodiakSettings(BaseSettings):
     tool_timeout: int = Field(default=300, env="KODIAK_TOOL_TIMEOUT")  # 5 minutes
     enable_hive_mind: bool = Field(default=True, env="KODIAK_ENABLE_HIVE_MIND")
     
+    # Toolbox Container Configuration
+    toolbox_image: str = Field(default="ghcr.io/keethesh/kodiak-toolbox:latest", env="KODIAK_TOOLBOX_IMAGE")
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
         extra = "ignore"  # Allow extra environment variables
 
+    def _get_default_sqlite_path(self) -> str:
+        """Get the default SQLite database path in ~/.kodiak/"""
+        from pathlib import Path
+        kodiak_dir = Path.home() / ".kodiak"
+        kodiak_dir.mkdir(exist_ok=True)
+        return str(kodiak_dir / "kodiak.db")
+
     @property
     def database_url(self) -> str:
-        """Get the database URL"""
-        return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_server}:{self.postgres_port}/{self.postgres_db}"
+        """Get the database URL (sync driver)"""
+        if self.db_type.lower() == "sqlite":
+            db_path = self.sqlite_path or self._get_default_sqlite_path()
+            return f"sqlite:///{db_path}"
+        else:
+            return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_server}:{self.postgres_port}/{self.postgres_db}"
     
     @property
     def async_database_url(self) -> str:
         """Get the async database URL"""
-        return f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}@{self.postgres_server}:{self.postgres_port}/{self.postgres_db}"
+        if self.db_type.lower() == "sqlite":
+            db_path = self.sqlite_path or self._get_default_sqlite_path()
+            return f"sqlite+aiosqlite:///{db_path}"
+        else:
+            return f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}@{self.postgres_server}:{self.postgres_port}/{self.postgres_db}"
+    
+    @property
+    def is_sqlite(self) -> bool:
+        """Check if using SQLite database"""
+        return self.db_type.lower() == "sqlite"
     
     def get_llm_config(self) -> Dict[str, Any]:
         """Get LLM configuration for LiteLLM"""
@@ -251,15 +281,16 @@ class KodiakSettings(BaseSettings):
         llm_errors = self.validate_llm_config()
         missing.extend(llm_errors)
         
-        # Check database configuration
-        if not self.postgres_server:
-            missing.append("POSTGRES_SERVER")
-        if not self.postgres_user:
-            missing.append("POSTGRES_USER")
-        if not self.postgres_password:
-            missing.append("POSTGRES_PASSWORD")
-        if not self.postgres_db:
-            missing.append("POSTGRES_DB")
+        # Check database configuration (only for PostgreSQL mode)
+        if not self.is_sqlite:
+            if not self.postgres_server:
+                missing.append("POSTGRES_SERVER")
+            if not self.postgres_user:
+                missing.append("POSTGRES_USER")
+            if not self.postgres_password:
+                missing.append("POSTGRES_PASSWORD")
+            if not self.postgres_db:
+                missing.append("POSTGRES_DB")
             
         return missing
 
@@ -316,27 +347,32 @@ def validate_startup_config():
                 }
             )
         
-        # Validate database configuration
-        try:
-            db_url = settings.database_url
-            if not all([settings.postgres_server, settings.postgres_user, settings.postgres_password, settings.postgres_db]):
-                raise ConfigurationError(
-                    message="Incomplete database configuration. All database settings are required.",
-                    config_key="database",
-                    details={
-                        "required_vars": ["POSTGRES_SERVER", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"],
-                        "current_server": settings.postgres_server,
-                        "current_db": settings.postgres_db
-                    }
-                )
-        except Exception as e:
-            if not isinstance(e, ConfigurationError):
-                raise ConfigurationError(
-                    message=f"Database configuration validation failed: {str(e)}",
-                    config_key="database",
-                    details={"database_url": settings.database_url}
-                )
-            raise
+        # Validate database configuration (only for PostgreSQL mode)
+        if not settings.is_sqlite:
+            try:
+                db_url = settings.database_url
+                if not all([settings.postgres_server, settings.postgres_user, settings.postgres_password, settings.postgres_db]):
+                    raise ConfigurationError(
+                        message="Incomplete database configuration. All database settings are required for PostgreSQL mode.",
+                        config_key="database",
+                        details={
+                            "required_vars": ["POSTGRES_SERVER", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"],
+                            "current_server": settings.postgres_server,
+                            "current_db": settings.postgres_db
+                        }
+                    )
+            except Exception as e:
+                if not isinstance(e, ConfigurationError):
+                    raise ConfigurationError(
+                        message=f"Database configuration validation failed: {str(e)}",
+                        config_key="database",
+                        details={"database_url": settings.database_url}
+                    )
+                raise
+        else:
+            # SQLite mode - just log the path
+            from loguru import logger
+            logger.info(f"📦 Using SQLite database (zero-config mode)")
         
         # Log successful configuration
         from loguru import logger
@@ -359,7 +395,7 @@ def validate_startup_config():
             logger.info(f"🤖 LLM Provider: unknown")
         
         logger.info(f"🧠 LLM Model: {settings.llm_model}")
-        logger.info(f"🗄️  Database: {settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}")
+        logger.info(f"🗄️  Database: {'SQLite' if settings.is_sqlite else 'PostgreSQL'} - {settings.database_url}")
         logger.info(f"🐛 Debug Mode: {settings.debug}")
         logger.info(f"🛡️  Safety Checks: {settings.enable_safety_checks}")
         logger.info(f"🐝 Hive Mind: {settings.enable_hive_mind}")

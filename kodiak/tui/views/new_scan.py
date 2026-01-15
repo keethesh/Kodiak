@@ -94,10 +94,34 @@ class NewScanScreen(Screen):
         background: $surface;
     }
     
+    #form-header {
+        height: auto;
+        margin-bottom: 2;
+    }
+    
     #form-title {
         text-align: center;
         text-style: bold;
-        margin-bottom: 2;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    
+    #form-subtitle {
+        text-align: center;
+        color: $text-muted;
+    }
+    
+    .form-section {
+        height: auto;
+        margin-bottom: 1;
+        border: solid $surface;
+        padding: 1;
+    }
+    
+    .section-title {
+        color: $primary;
+        text-style: bold;
+        margin-bottom: 1;
     }
     
     .form-row {
@@ -108,6 +132,7 @@ class NewScanScreen(Screen):
     .form-label {
         height: 1;
         margin-bottom: 0;
+        color: $text-muted;
     }
     
     .form-input {
@@ -119,6 +144,25 @@ class NewScanScreen(Screen):
         border: solid $error;
     }
     
+    #scan-type-container {
+        height: auto;
+        margin-bottom: 1;
+    }
+    
+    #scan-type-buttons {
+        height: 3;
+    }
+    
+    .scan-type-btn {
+        width: 15;
+        margin-right: 1;
+    }
+    
+    .scan-type-btn.-selected {
+        background: $accent;
+        color: $background;
+    }
+    
     #agent-count-container {
         height: auto;
         margin-bottom: 1;
@@ -126,6 +170,7 @@ class NewScanScreen(Screen):
     
     #agent-count-label {
         height: 1;
+        color: $text-muted;
     }
     
     #agent-count-buttons {
@@ -138,7 +183,8 @@ class NewScanScreen(Screen):
     }
     
     .agent-btn.-selected {
-        background: $accent;
+        background: $primary;
+        color: $background;
     }
     
     #button-container {
@@ -149,6 +195,13 @@ class NewScanScreen(Screen):
     
     #submit-btn {
         margin-right: 2;
+        background: $accent;
+        color: $background;
+        min-width: 16;
+    }
+    
+    #cancel-btn {
+        min-width: 12;
     }
     
     #error-message {

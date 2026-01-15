@@ -89,7 +89,19 @@ class NucleiTool(KodiakTool):
         cmd_str = " ".join(command)
 
         try:
-            executor = get_executor()
+            # Docker is the PRIMARY execution path for security tools
+            # This ensures tools run in the Kali container without local installation
+            from kodiak.core.config import settings
+            
+            try:
+                # Primary: Use Docker executor with Kali toolbox
+                executor = get_executor("docker")
+                executor.image = settings.toolbox_image
+            except Exception:
+                # Fallback: Local execution only if Docker unavailable
+                # HARDCODED: This should rarely be used in production
+                executor = get_executor()
+            
             result = await executor.run_command(command)
             
             # Nuclei returns 0 even when vulnerabilities are found

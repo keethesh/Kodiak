@@ -12,30 +12,31 @@ Kodiak is an advanced LLM-powered penetration testing suite that uses AI agents 
 
 **Prerequisites:**
 - Python 3.11+
-- Docker (optional, for database and containerized tools)
-- An LLM provider API key (OpenAI, Google, Anthropic, or local Ollama)
+- Docker (for security toolbox container)
+- An LLM provider API key (OpenAI, Google,Anthropic, or local Ollama)
 
-### Installation
+### One-Command Installation
 
 ```bash
-# Install Kodiak globally (recommended)
+# Install Kodiak with zero configuration required
 curl -sSL https://raw.githubusercontent.com/keethesh/Kodiak/main/install.sh | bash
-
-# Or via UV (modern Python package manager)
-uv tool install kodiak-pentest[full]
-
-# Or via pip
-pip install kodiak-pentest[full]
 ```
+
+This installs:
+- ✅ `kodiak` CLI tool
+- ✅ SQLite database (no external dependencies)
+- ✅ Interactive configuration wizard
 
 ### First Run
 
 ```bash
-# Configure your LLM provider
+# Launch interactive configuration wizard
 kodiak config
+# Choose LLM provider → Enter API key → Select SQLite (default)
 
 # Initialize database
 kodiak init
+# Creates ~/.kodiak/kodiak.db automatically
 
 # Launch TUI interface
 kodiak
@@ -55,10 +56,11 @@ kodiak --target ./my-application
 ### 🤖 AI Agent Coordination
 - **Multi-Agent System**: Specialized AI agents working together
 - **Hive Mind Architecture**: Shared knowledge and coordinated execution
-- **Persistent State**: Database-backed sessions with pause/resume capability
+- **Persistent State**: SQLite-backed sessions with pause/resume capability
 - **Intelligent Reasoning**: LLM-powered decision making and adaptation
 
-### 🛠️ Comprehensive Security Toolkit
+### 🛠️ Comprehensive Security Toolkit (Dockerized)
+All security tools run in a Kali Linux container - **no local installation needed**:
 - **Network Discovery**: nmap, subfinder, httpx reconnaissance
 - **Vulnerability Scanning**: nuclei with 5000+ templates
 - **Web Application Testing**: Playwright browser automation
@@ -73,24 +75,29 @@ kodiak --target ./my-application
 
 ## 🔧 Installation Options
 
-### Full Installation (Recommended)
+### Recommended: One-Command Install
 ```bash
-# All features including database, browser automation, API server
-uv tool install kodiak-pentest[full]
-
-# Or with pip
-pip install kodiak-pentest[full]
+# Installs Kodiak with SQLite database (local mode)
+curl -sSL https://raw.githubusercontent.com/keethesh/Kodiak/main/install.sh | bash
 ```
 
-### Minimal Installation
+### Alternative: Python Package Managers
 ```bash
-# Core CLI only
-uv tool install kodiak-pentest
+# UV (recommended)
+uv tool install kodiak-pentest[local]
 
-# Add features as needed
-uv tool install kodiak-pentest[database]  # Database support
-uv tool install kodiak-pentest[browser]   # Browser automation
-uv tool install kodiak-pentest[api]       # API server mode
+# Or with pip
+pip install kodiak-pentest[local]
+```
+
+### PostgreSQL Mode (Optional)
+For production deployments with multiple users:
+```bash
+# Install with PostgreSQL support
+pip install kodiak-pentest[full]
+
+# Configure PostgreSQL
+kodiak config --advanced
 ```
 
 ### Development Installation

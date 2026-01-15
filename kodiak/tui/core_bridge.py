@@ -210,7 +210,7 @@ class CoreBridge:
                 error=last_error,
                 context={
                     "max_retries": max_retries,
-                    "database_url": settings.postgres_server
+                    "database_url": settings.database_url
                 }
             )
             raise db_error
@@ -710,7 +710,8 @@ class CoreBridge:
             "orchestrator_status": "ready",  # TODO: Add actual orchestrator status
             "event_subscriptions": len(self._event_subscriptions),
             "app_state_stats": app_state.get_stats(),
-            "database_url": f"{settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}"
+            "database_type": "sqlite" if settings.is_sqlite else "postgres",
+            "database_url": settings.database_url
         }
 
 

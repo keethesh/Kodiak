@@ -244,6 +244,16 @@ class KodiakAgent:
         if self.skills_knowledge:
             full_prompt += self.skills_knowledge + "\n"
         
+        # Add Docker Toolbox guidance - PRIMARY execution path
+        full_prompt += (
+            "EXECUTION ENVIRONMENT:\n"
+            f"All security tools run inside the Kali Docker container: {settings.toolbox_image}\n"
+            "This is automatic - you do NOT need to specify docker_image for standard tools like:\n"
+            "  nmap, nuclei, nikto, sqlmap, ffuf, subfinder, httpx, katana, semgrep, etc.\n"
+            "The container has all tools pre-installed. You just call the tool and it runs in Docker.\n"
+            "Only use terminal_start for custom/interactive workflows where you need shell access.\n\n"
+        )
+        
         # Add operational guidelines
         full_prompt += (
             "OPERATIONAL GUIDELINES:\n"
