@@ -504,6 +504,58 @@ def docker(action: str, service: Optional[str]):
             os.system("docker-compose logs -f")
 
 
+
+@main.command()
+def doctor():
+    """Check Kodiak installation status and dependencies."""
+    console.print("🔍 [bold]Kodiak Installation Check[/bold]\n")
+    
+    # Check Python version
+    py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    if sys.version_info >= (3, 11):
+        console.print(f"✅ Python {py_version}")
+    else:
+        console.print(f"❌ Python {py_version} (Required: 3.11+)")
+
+    # Check Core CLI
+    console.print("✅ Core CLI: Available")
+    
+    # Check Optional Dependencies
+    if HAS_DATABASE:
+        console.print("✅ Database support: Available")
+    else:
+        console.print("❌ Database support: Missing (Install with [dim]uv tool install kodiak-pentest[database][/dim])")
+        
+    if HAS_BROWSER:
+        console.print("✅ Browser automation: Available")
+    else:
+        console.print("❌ Browser automation: Missing (Install with [dim]uv tool install kodiak-pentest[browser][/dim])")
+        
+    if HAS_API:
+        console.print("✅ API server: Available")
+    else:
+        console.print("❌ API server: Missing (Install with [dim]uv tool install kodiak-pentest[api][/dim])")
+        
+    # Check Docker
+    if check_docker_available():
+        console.print("✅ Docker: Available")
+    else:
+        console.print("❌ Docker: Missing or Not Running")
+        
+    console.print("\n🛠️  [bold]External Tools:[/bold]")
+    
+    # Check common tools
+    for tool in ["nmap", "curl", "wget", "git"]:
+        # Simple check using shutil.which or trying to run it
+        import shutil
+        if shutil.which(tool):
+            console.print(f"✅ {tool}: Available")
+        else:
+            console.print(f"❌ {tool}: Missing")
+
+    console.print("\n[dim]Run 'kodiak config' to configure settings[/dim]")
+
+
 @main.command()
 def services():
     """Show status of all Kodiak services."""
