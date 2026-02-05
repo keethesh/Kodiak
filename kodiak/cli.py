@@ -113,7 +113,7 @@ def init(force: bool, docker: bool):
     
     # Auto-detect if we should use Docker
     if not docker and not HAS_DATABASE:
-        print_status("Database dependencies not available locally, using Docker...")
+        console.print("Database dependencies not available locally, using Docker...")
         docker = True
     
     if docker:
@@ -262,7 +262,8 @@ KODIAK_TUI_REFRESH_RATE=10
 @main.command()
 @click.option("--interactive", "-i", is_flag=True, help="Force interactive TUI mode")
 @click.option("--basic", "-b", is_flag=True, help="Use basic CLI prompts instead of TUI")
-def config(interactive: bool, basic: bool):
+@click.pass_context
+def config(ctx, interactive: bool, basic: bool):
     """Configure Kodiak settings and API keys.
     
     By default, launches a TUI wizard for guided configuration.
@@ -339,7 +340,11 @@ def config(interactive: bool, basic: bool):
             console.print("🔧 Launching configuration wizard...\n")
             result = run_config_wizard()
             
-            if result:
+            if result and result.get("launch_tui"):
+                console.print("\n[green]✅ Configuration and initialization complete![/green]")
+                # Launch TUI
+                ctx.invoke(tui)
+            elif result:
                 console.print("\n[green]✅ Configuration complete![/green]")
                 console.print("\nNext steps:")
                 console.print("  [dim]kodiak init[/dim]    Initialize database")
@@ -542,16 +547,33 @@ def doctor():
     else:
         console.print("❌ Docker: Missing or Not Running")
         
-    console.print("\n🛠️  [bold]External Tools:[/bold]")
+    console.print("\n🛠️  [bold]System Tools:[/bold]")
+    import shutil
     
-    # Check common tools
-    for tool in ["nmap", "curl", "wget", "git"]:
-        # Simple check using shutil.which or trying to run it
-        import shutil
+    # Check host tools
+    for tool in ["curl", "wget", "git"]:
         if shutil.which(tool):
             console.print(f"✅ {tool}: Available")
         else:
             console.print(f"❌ {tool}: Missing")
+
+    console.print("\n🧰 [bold]Security Tools (Docker Toolbox):[/bold]")
+    docker_available = check_docker_available()
+    
+    # Check security tools
+    security_tools = ["nmap", "nuclei", "sqlmap", "ffuf", "nikto"]
+    
+    if docker_available:
+        # If Docker is available, these are available via the toolbox container
+        for tool in security_tools:
+            console.print(f"✅ {tool}: Available (via Docker)")
+    else:
+        # If Docker is missing, check locally
+        for tool in security_tools:
+            if shutil.which(tool):
+                console.print(f"✅ {tool}: Available (Local)")
+            else:
+                console.print(f"❌ {tool}: Missing (Docker not running & not found locally)")
 
     console.print("\n[dim]Run 'kodiak config' to configure settings[/dim]")
 

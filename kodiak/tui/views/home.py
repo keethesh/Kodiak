@@ -16,7 +16,6 @@ from textual.message import Message
 from loguru import logger
 
 from kodiak.tui.state import app_state, ProjectState, ScanState, ScanStatus
-from kodiak.tui.widgets import StatusBar
 
 
 class ProjectSelected(Message):
@@ -34,8 +33,8 @@ class HomeScreen(Screen):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
-        Binding("h", "go_home", "Home", priority=True),
+        Binding("q", "quit", "Quit"),
+        Binding("h", "go_home", "Home"),
         Binding("n", "new_scan", "New Scan"),
         Binding("d", "delete_project", "Delete"),
         Binding("r", "resume_scan", "Resume"),
@@ -350,18 +349,21 @@ class HomeScreen(Screen):
             self.notify("No project selected", severity="warning")
     
     def action_delete_project(self) -> None:
-        """Delete the selected project (with confirmation)"""
+        """Delete the selected project (Requirement 3.7)"""
         if not self.selected_project_id:
             self.notify("No project selected", severity="warning")
             return
         
         project = app_state.get_project(self.selected_project_id)
         if project:
-            # TODO: Show confirmation dialog
-            self.notify(f"Delete project '{project.name}'? (Not implemented yet)", severity="information")
+            # For now, just remove from state (Requirement 3.7)
+            app_state.remove_project(self.selected_project_id)
+            self.notify(f"Deleted project '{project.name}'", severity="information")
+            self.selected_project_id = None
+            self.refresh_data()
     
     def action_resume_scan(self) -> None:
-        """Resume a paused scan"""
+        """Resume a paused scan (Requirement 3.8)"""
         if not self.selected_project_id:
             self.notify("No project selected", severity="warning")
             return
@@ -370,8 +372,9 @@ class HomeScreen(Screen):
         if scans:
             latest_scan = scans[-1]
             if latest_scan.status == ScanStatus.PAUSED:
-                # TODO: Implement resume functionality
-                self.notify(f"Resuming scan '{latest_scan.name}'... (Not implemented yet)", severity="information")
+                app_state.update_scan_status(latest_scan.id, ScanStatus.RUNNING)
+                self.notify(f"Resumed scan '{latest_scan.name}'", severity="information")
+                self.refresh_data()
             else:
                 self.notify("Latest scan is not paused", severity="warning")
         else:
@@ -402,4 +405,5 @@ class HomeScreen(Screen):
             from kodiak.tui.views.findings import FindingsScreen
             self.app.push_screen(FindingsScreen())
         elif button_id == "settings-btn":
-            self.notify("Settings coming soon", severity="information")
+            from kodiak.tui.views.settings import SettingsScreen
+            self.app.push_screen(SettingsScreen())

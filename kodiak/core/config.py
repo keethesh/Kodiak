@@ -509,7 +509,8 @@ def diagnose_configuration_issues() -> Dict[str, Any]:
         # Check LLM configuration
         llm_config = settings.get_llm_config()
         if not llm_config.get("api_key"):
-            issues.append(f"Missing API key for LLM provider: {settings.llm_provider}")
+            provider = infer_provider_from_model(settings.llm_model)
+            issues.append(f"Missing API key for LLM provider: {provider}")
             
             provider_solutions = {
                 "gemini": "Set GOOGLE_API_KEY environment variable",
@@ -517,7 +518,7 @@ def diagnose_configuration_issues() -> Dict[str, Any]:
                 "claude": "Set ANTHROPIC_API_KEY environment variable"
             }
             
-            solution = provider_solutions.get(settings.llm_provider, "Set KODIAK_LLM_API_KEY environment variable")
+            solution = provider_solutions.get(provider, "Set KODIAK_LLM_API_KEY environment variable")
             solutions.append(solution)
     
     except Exception as e:
@@ -540,9 +541,14 @@ def diagnose_configuration_issues() -> Dict[str, Any]:
         solutions.append("Set all required database environment variables")
     
     # Check for common misconfigurations
-    if settings.llm_model and not settings.llm_model.startswith(settings.llm_provider):
-        issues.append(f"Model '{settings.llm_model}' may not match provider '{settings.llm_provider}'")
-        solutions.append("Ensure model format matches provider (e.g., 'gemini/gemini-1.5-pro' for Gemini)")
+    try:
+        provider = infer_provider_from_model(settings.llm_model)
+        if settings.llm_model and not settings.llm_model.startswith(provider):
+            issues.append(f"Model '{settings.llm_model}' may not match provider '{provider}'")
+            solutions.append("Ensure model format matches provider (e.g., 'gemini/gemini-1.5-pro' for Gemini)")
+    except ValueError:
+        # Unable to infer provider, skip this check
+        pass
     
     return {
         "has_issues": len(issues) > 0,
