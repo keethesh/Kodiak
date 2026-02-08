@@ -370,6 +370,30 @@ def config(ctx, interactive: bool, basic: bool):
 def tui(target: Optional[str], debug: bool, docker: bool):
     """Launch the Kodiak Terminal User Interface."""
     
+    # Configure loguru to write to file instead of stderr to prevent TUI interference
+    from loguru import logger
+    import sys as _sys
+    
+    # Remove default stderr handler to prevent log messages from breaking TUI
+    logger.remove()
+    
+    # Create log directory
+    log_dir = Path.home() / ".kodiak" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "tui.log"
+    
+    # Add file handler
+    log_level = "DEBUG" if debug else "INFO"
+    logger.add(
+        log_file,
+        rotation="10 MB",
+        retention="7 days",
+        level=log_level,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
+    )
+    
+    logger.info("Starting Kodiak TUI...")
+    
     # Ensure Docker backend is ready if using Docker mode
     if docker:
         if not check_docker_available():
@@ -400,6 +424,7 @@ def tui(target: Optional[str], debug: bool, docker: bool):
         console.print("Install with: [dim]uv tool install kodiak-pentest[full][/dim]")
         sys.exit(1)
     except Exception as e:
+        logger.exception("Failed to launch TUI")
         console.print(f"[red]❌ Failed to launch TUI: {e}[/red]")
         if debug:
             raise
