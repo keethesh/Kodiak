@@ -5,6 +5,7 @@ import json
 
 from loguru import logger
 from sqlmodel.ext.asyncio.session import AsyncSession
+from datetime import datetime
 
 from kodiak.database import get_session
 from kodiak.database.crud import scan_job as crud_scan, project as crud_project
@@ -221,6 +222,7 @@ class Orchestrator:
                 session.add(root_task)
                 await crud_scan.update_status(session, scan_id, ScanStatus.RUNNING)
                 await session.commit()
+                print(f"[START_SCAN] Created root task {root_task.id} with status='{root_task.status}'")
                 logger.info(f"Bootstrapped Root Task {root_task.id} for Scan {scan_id}")
                 logger.info(f"Target: {target}, Goal: {user_goal}")
                 # The scheduler loop will pick this up automatically!
@@ -291,11 +293,13 @@ class Orchestrator:
         """
         while self._running:
             try:
+                print(f"[SCHEDULER] Loop iteration at {datetime.utcnow()}")
                 async for session in get_session():
                     # Find pending tasks
                     statement = select(Task).where(Task.status == "pending")
                     results = await session.execute(statement)
                     pending_tasks = results.scalars().all()
+                    print(f"[SCHEDULER] Found {len(pending_tasks)} pending tasks")
                     
                     for task in pending_tasks:
                         logger.debug(f"Found pending task: {task.id} ({task.name})")
@@ -308,9 +312,11 @@ class Orchestrator:
                         await session.commit()
                         
                         # Spawn Worker
+                        print(f"[SCHEDULER] Spawning worker for task {task.id}")
                         worker_task = asyncio.create_task(self._worker_wrapper(task.id, task.project_id))
                         self._active_workers[task.id] = worker_task
                         logger.info(f"Spawned Worker for Task {task.id} ({task.assigned_agent_id})")
+                        print(f"[SCHEDULER] Worker spawned for task {task.id}")
                 
                 await asyncio.sleep(2) # Check every 2s
             except asyncio.CancelledError:
