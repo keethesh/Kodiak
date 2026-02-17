@@ -184,22 +184,26 @@ class Orchestrator:
             # Check if scan is already running
             if scan.status == ScanStatus.RUNNING:
                 logger.warning(f"Scan {scan_id} is already running")
+                print(f"[START_SCAN] Scan {scan_id} already running, returning early")
                 return
             
-            # Check if there's already a root task for this scan
+            # Check if there's already a root task for THIS specific scan
+            # Note: We check for tasks tied to this scan_id specifically, not just the project
             existing_task_stmt = select(Task).where(
                 Task.project_id == scan.project_id,
-                Task.name == "Mission Manager"
+                Task.directive.contains(f'"scan_id": "{scan_id}"')  # Task belongs to THIS scan
             )
             existing_task_result = await session.execute(existing_task_stmt)
             existing_task = existing_task_result.scalar_one_or_none()
             
             if existing_task and existing_task.status in ["pending", "running"]:
-                logger.info(f"Root task already exists for scan {scan_id}, updating scan status")
+                logger.info(f"Root task already exists for scan {scan_id}, skipping creation")
+                print(f"[START_SCAN] Task {existing_task.id} already exists for scan {scan_id}, skipping")
                 await crud_scan.update_status(session, scan_id, ScanStatus.RUNNING)
                 await session.commit()
                 return
             
+            print(f"[START_SCAN] No active task found for scan {scan_id}, creating new root task")
             # The Goal comes from the user config
             user_goal = scan.config.get("instructions", "Conduct a full penetration test.")
             target = scan.config.get("target")
