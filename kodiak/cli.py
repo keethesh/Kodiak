@@ -651,7 +651,8 @@ def scan(target: str, instructions: str, model: Optional[str], project: Optional
             try:
                 await init_db()
             except Exception as e:
-                console.print(f"[dim]Database already initialized[/dim]")
+                # Database might already be initialized, continue
+                pass
             
             # Live output data
             scan_data = {
@@ -775,9 +776,8 @@ def scan(target: str, instructions: str, model: Optional[str], project: Optional
                         )
                         scan_job = await crud_scan.create(session, scan_job)
                         
-                        # Start orchestrator
+                        # Create orchestrator (it auto-starts worker on first scan)
                         orchestrator = Orchestrator(tool_inventory=inventory)
-                        orchestrator.start()
                         
                         # Start the scan
                         await orchestrator.start_scan(scan_job.id)
@@ -848,6 +848,56 @@ def scan(target: str, instructions: str, model: Optional[str], project: Optional
     
     # Run the async function
     asyncio.run(run_scan())
+
+
+@main.command()
+def migrate():
+    """Migrate database schema to latest version."""
+    import asyncio
+    
+    if not HAS_DATABASE:
+        console.print("[red]Database support required for migrations![/red]")
+        return
+    
+    async def run_migration():
+        try:
+            from kodiak.database.engine import get_session, engine
+            from sqlalchemy import text
+            
+            console.print("🔄 [bold]Migrating database schema...[/bold]\n")
+            
+            # Check if using SQLite or PostgreSQL
+            async for session in get_session():
+                # Check if task.properties exists
+                try:
+                    result = await session.execute(text("SELECT properties FROM task LIMIT 1"))
+                    console.print("✅ Database schema is up to date!")
+                    return
+                except Exception:
+                    # Column doesn't exist, need to add it
+                    pass
+                
+                # Add missing columns
+                console.print("📝 Adding missing columns...")
+                
+                try:
+                    # Add task.properties column
+                    await session.execute(text("ALTER TABLE task ADD COLUMN properties TEXT DEFAULT '{}'"))
+                    await session.commit()
+                    console.print("✅ Added task.properties column")
+                except Exception as e:
+                    console.print(f"❌ Failed to add task.properties: {e}")
+                    await session.rollback()
+                
+                console.print("\n✅ [bold green]Migration complete![/bold green]")
+                
+        except Exception as e:
+            console.print(f"[red]Migration failed: {e}[/red]")
+            import traceback
+            traceback.print_exc()
+    
+    asyncio.run(run_migration())
+
 
 
 

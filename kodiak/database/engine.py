@@ -48,23 +48,13 @@ class LazyEngine:
         if self._engine is None:
             self._engine = _create_engine()
         return self._engine
-        
-    def __getattr__(self, name):
-        return getattr(self._ensure_engine(), name)
-        
-    async def begin(self):
-        return self._ensure_engine().begin()
-        
-    async def connect(self):
-        return self._ensure_engine().connect()
-        
-    async def dispose(self):
-        if self._engine:
-            await self._engine.dispose()
-            
-    # Add other necessary delegate methods if needed, or rely on __getattr__
-    # explicit async methods are needed for 'async with' usually if it returns a context manager
     
+    def __getattr__(self, name):
+        """Forward all attribute access to the real engine."""
+        return getattr(self._ensure_engine(), name)
+
+
+# Global lazy engine instance
 engine = LazyEngine()
 
 
