@@ -163,14 +163,25 @@ class KodiakAgent:
             # 2. Act
             if response.tool_calls:
                 # Add assistant message with tool calls to history
+                # Sanitize tool call IDs for Gemini 3
+                sanitized_tool_calls = []
+                for tc in response.tool_calls:
+                    tc_dict = tc.dict() if hasattr(tc, 'dict') else tc
+                    if 'id' in tc_dict and '__thought__' in tc_dict['id']:
+                        tc_dict['id'] = tc_dict['id'].split('__thought__')[0]
+                    sanitized_tool_calls.append(tc_dict)
+
                 history.append({
                     "role": "assistant",
                     "content": response.content,
-                    "tool_calls": [tc.dict() if hasattr(tc, 'dict') else tc for tc in response.tool_calls]
+                    "tool_calls": sanitized_tool_calls
                 })
                 
                 for tool_call in response.tool_calls:
                     tool_name = tool_call.function.name
+                    # sanitize ID here too for the response
+                    original_id = tool_call.id
+                    clean_id = original_id.split('__thought__')[0] if '__thought__' in original_id else original_id
                     try:
                         args = json.loads(tool_call.function.arguments)
                     except json.JSONDecodeError:
@@ -188,7 +199,7 @@ class KodiakAgent:
                     # Add tool result to history
                     history.append({
                         "role": "tool",
-                        "tool_call_id": tool_call.id,
+                        "tool_call_id": clean_id,
                         "content": result.get("output", "")
                     })
                     
