@@ -616,11 +616,18 @@ def scan(target: str, instructions: str, model: Optional[str], project: Optional
         kodiak scan 192.168.1.1 --instructions "Focus on web vulnerabilities"
     """
     import asyncio
+    from datetime import datetime
+    import sys
+    
+    # Force DEBUG logging
+    from loguru import logger
+    logger.remove()
+    logger.add(sys.stderr, level="DEBUG")
+    
     from rich.live import Live
     from rich.table import Table
     from rich.panel import Panel
     from rich import box
-    from datetime import datetime
     from uuid import UUID
     
     if not HAS_DATABASE:
