@@ -424,12 +424,23 @@ class NewScanScreen(Screen):
             created_at=now
         )
         
+        # Add scan to state
         app_state.scans[scan.id] = scan
         app_state.set_current_project(project.id)
         app_state.set_current_scan(scan.id)
         
-        logger.info(f"Created scan for project '{project.name}' targeting '{project.target}'")
-        self.notify(f"Created scan for {project.target}", severity="information")
+        # Create agents for the scan
+        for i in range(self.agent_count):
+            agent_id = str(uuid4())
+            agent_name = f"Agent-{i+1}"
+            app_state.add_agent_to_scan(scan.id, agent_id, agent_name)
+        
+        logger.info(f"Created scan for project '{project.name}' targeting '{project.target}' with {self.agent_count} agents")
+        self.notify(f"Created scan for {project.target} with {self.agent_count} agents", severity="information")
+        
+        # TODO: Start the scan through core bridge
+        # For now, just update status to RUNNING
+        app_state.update_scan_status(scan.id, ScanStatus.RUNNING)
         
         from kodiak.tui.views.mission_control import MissionControlScreen
         self.app.switch_screen(MissionControlScreen())
