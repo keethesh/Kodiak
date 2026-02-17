@@ -298,6 +298,7 @@ class Orchestrator:
                     pending_tasks = results.scalars().all()
                     
                     for task in pending_tasks:
+                        logger.debug(f"Found pending task: {task.id} ({task.name})")
                         if task.id in self._active_workers:
                             continue
                             
@@ -325,6 +326,7 @@ class Orchestrator:
         from kodiak.api.events import event_manager
         
         try:
+            logger.info(f"Worker {task_id} starting for project {project_id}")
             await self._run_agent_for_task(task_id, project_id)
             status = "completed"
             result = "Task finished successfully."
@@ -409,8 +411,10 @@ class Orchestrator:
         async for session in get_session():
             task = await session.get(Task, task_id)
             if not task: 
-                logger.error(f"Task {task_id} not found")
+                logger.error(f"Task {task_id} not found in DB")
                 return
+            
+            logger.debug(f"Task {task_id} found, parsing directive...")
             
             # Extract and validate directive
             directive = self._parse_task_directive(task.directive)

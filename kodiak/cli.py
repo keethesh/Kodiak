@@ -752,64 +752,74 @@ def scan(target: str, instructions: str, model: Optional[str], project: Optional
             with Live(create_status_table(), refresh_per_second=2, console=console) as live:
                 try:
                     # Create or get project
-                    async for session in get_session():
-                        project_name = project or f"CLI Scan - {target}"
-                        
-                        # Try to find existing project
-                        from sqlmodel import select
-                        stmt = select(Project).where(Project.name == project_name)
-                        result = await session.execute(stmt)
-                        proj = result.scalar_one_or_none()
-                        
-                        if not proj:
-                            proj = Project(name=project_name, description=f"CLI scan of {target}")
-                            proj = await crud_project.create(session, proj)
-                        
-                        # Create scan job
-                        scan_job = ScanJob(
-                            project_id=proj.id,
-                            name=f"Scan - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
-                            config={
-                                "target": target,
-                                "instructions": instructions
-                            }
-                        )
-                        scan_job = await crud_scan.create(session, scan_job)
-                        
-                        # Create orchestrator and start the scheduler
-                        orchestrator = Orchestrator(tool_inventory=inventory)
-                        await orchestrator.start()
-                        console.print(f"[dim]✓ Orchestrator started, scheduler is running[/dim]")
-
-                        
-                        # Start the scan
-                        await orchestrator.start_scan(scan_job.id)
-                        console.print(f"[dim]✓ Root task created for scan {scan_job.id}[/dim]")
-                        
-                        # Monitor scan progress
-                        scan_data["agent_status"] = "Scan started..."
-                        
-                        # Wait for the scan to complete (with timeout)
-                        timeout = 300  # 5 minutes
-                        start = datetime.utcnow()
-                        
-                        while (datetime.utcnow() - start).total_seconds() < timeout:
-                            live.update(create_status_table())
-                            await asyncio.sleep(2)
+                    # Phase 1: Initialize Project and Scan
+                    async def initialize_scan():
+                        async for session in get_session():
+                            project_name = project or f"CLI Scan - {target}"
                             
-                            # Check if scan is complete
+                            # Try to find existing project
+                            from sqlmodel import select
+                            stmt = select(Project).where(Project.name == project_name)
+                            result = await session.execute(stmt)
+                            proj = result.scalar_one_or_none()
+                            
+                            if not proj:
+                                proj = Project(name=project_name, description=f"CLI scan of {target}")
+                                proj = await crud_project.create(session, proj)
+                            
+                            # Create scan job
+                            scan_job = ScanJob(
+                                project_id=proj.id,
+                                name=f"Scan - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+                                config={
+                                    "target": target,
+                                    "instructions": instructions
+                                }
+                            )
+                            scan_job = await crud_scan.create(session, scan_job)
+                            return proj, scan_job
+
+                    proj, scan_job = await initialize_scan()
+                    
+                    # Phase 2: Start Orchestrator and Scan
+                    orchestrator = Orchestrator(tool_inventory=inventory)
+                    await orchestrator.start()
+                    console.print(f"[dim]✓ Orchestrator started, scheduler is running[/dim]")
+                    
+                    await orchestrator.start_scan(scan_job.id)
+                    console.print(f"[dim]✓ Root task created for scan {scan_job.id}[/dim]")
+                    
+                    # Monitor scan progress
+                    scan_data["agent_status"] = "Scan started..."
+                    
+                    # Wait for the scan to complete (with timeout)
+                    timeout = 600  # Increased to 10 minutes
+                    start_time = datetime.utcnow()
+                    
+                    while (datetime.utcnow() - start_time).total_seconds() < timeout:
+                        live.update(create_status_table())
+                        await asyncio.sleep(2)
+                        
+                        # Check if scan is complete using a fresh session
+                        async for session in get_session():
                             scan_job_updated = await crud_scan.get(session, scan_job.id)
                             if scan_job_updated and scan_job_updated.status in ["completed", "failed"]:
                                 scan_data["agent_status"] = f"Scan {scan_job_updated.status}!"
                                 break
-                        
-                        # Stop orchestrator
-                        await orchestrator.stop()
-                        
-                        # Final update
-                        live.update(create_status_table())
-                        
-                        # Get final stats
+                        else:
+                            # Inner loop didn't break, continue while loop
+                            continue
+                        # Inner loop broke, exit while loop
+                        break
+                    
+                    # Phase 3: Cleanup and Final Results
+                    await orchestrator.stop()
+                    
+                    # Final update
+                    live.update(create_status_table())
+                    
+                    # Get final stats
+                    async for session in get_session():
                         nodes = await crud_node.get_nodes_by_project(session, proj.id)
                         scan_data["nodes"] = nodes
                         
