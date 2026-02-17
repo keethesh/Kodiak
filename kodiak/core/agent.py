@@ -431,16 +431,15 @@ class KodiakAgent:
                 )
             
             # Execute the tool with proper context
-            context = {
-                "agent_id": self.agent_id,
-                "session": session,
-                "project_id": project_id,
-                "task_id": task_id,
-                "role": self.role
+            # Pass all args directly to execute() which handles standardization
+            execution_args = {
+                **args,
+                'agent_id': self.agent_id,
+                'scan_id': str(project_id) if project_id else None
             }
             
             logger.debug(f"Executing tool {tool_name} with args: {args}")
-            result = await tool.run(args, context=context)
+            result = await tool.execute(**execution_args)
             
             # Ensure result has proper structure
             if hasattr(result, 'dict'):

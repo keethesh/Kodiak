@@ -135,6 +135,9 @@ class Task(SQLModel, table=True):
     # Task directive as JSON string containing goal, target, role, etc.
     directive: str = Field(default="{}")
     
+    # Task properties for storing additional metadata (e.g., approval status, approved_tools)
+    properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    
     result: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     

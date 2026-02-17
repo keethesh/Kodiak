@@ -604,6 +604,257 @@ def doctor():
 
 
 @main.command()
+@click.argument("target")
+@click.option("--instructions", "-i", help="Custom scan instructions", default="Conduct a security assessment")
+@click.option("--model", "-m", help="LLM model to use")
+@click.option("--project", "-p", help="Project name (creates if not exists)", default=None)
+async def scan(target: str, instructions: str, model: Optional[str], project: Optional[str]):
+    """Run a security scan on the target.
+    
+    Examples:
+        kodiak scan example.com
+        kodiak scan 192.168.1.1 --instructions "Focus on web vulnerabilities"
+    """
+    import asyncio
+    from rich.live import Live
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich import box
+    from datetime import datetime
+    from uuid import UUID
+    
+    if not HAS_DATABASE:
+        console.print("[red]Database support required for scans![/red]")
+        console.print("Install with: [dim]poetry install --extras database[/dim]")
+        return
+    
+    try:
+        from kodiak.database.engine import get_session, init_db
+        from kodiak.database.models import Project, ScanJob, Node, Finding
+        from kodiak.database.crud import project as crud_project, scan_job as crud_scan, node as crud_node
+        from kodiak.core.orchestrator import Orchestrator
+        from kodiak.core.tools.inventory import inventory
+        from kodiak.api.events import TUIEventManager
+        from kodiak.core.config import settings
+        
+        # Override model if specified
+        if model:
+            settings.llm_model = model
+        
+        console.print(f"\n🎯 [bold]Target:[/bold] {target}")
+        console.print(f"🧠 [bold]Model:[/bold] {settings.llm_model}")
+        console.print(f"📋 [bold]Instructions:[/bold] {instructions}\n")
+        
+        # Initialize database if needed
+        try:
+            await init_db()
+        except Exception as e:
+            console.print(f"[dim]Database already initialized[/dim]")
+        
+        # Live output data
+        scan_data = {
+            "start_time": datetime.utcnow(),
+            "agent_status": "Initializing...",
+            "tools_run": [],
+            "findings": [],
+            "nodes": []
+        }
+        
+        def create_status_table():
+            """Create the live status display"""
+            elapsed = (datetime.utcnow() - scan_data["start_time"]).total_seconds()
+            
+            # Header panel
+            header = Panel(
+                f"[bold cyan]🔍 Kodiak Security Scan[/bold cyan]\n"
+                f"Target: {target} | Elapsed: {int(elapsed)}s",
+                box=box.DOUBLE,
+                style="cyan"
+            )
+            
+            # Status table
+            status_table = Table(title="Agent Activity", box=box.SIMPLE, show_header=False)
+            status_table.add_row("🤖 Status:", scan_data["agent_status"])
+            
+            # Tools table
+            if scan_data["tools_run"]:
+                tools_table = Table(title="\n🔧 Tools Executed", box=box.SIMPLE)
+                tools_table.add_column("Tool", style="yellow")
+                tools_table.add_column("Target", style="cyan")
+                tools_table.add_column("Status", style="green")
+                
+                for tool in scan_data["tools_run"][-5:]:  # Show last 5
+                    status_icon = "✅" if tool.get("success") else "❌"
+                    tools_table.add_row(
+                        tool["name"],
+                        tool.get("target", "N/A"),
+                        f"{status_icon} {tool.get('status', 'Unknown')}"
+                    )
+            else:
+                tools_table = Panel("[dim]No tools executed yet[/dim]", title="🔧 Tools Executed")
+            
+            # Findings table
+            if scan_data["findings"]:
+                findings_table = Table(title="\n⚠️ Findings", box=box.SIMPLE)
+                findings_table.add_column("Severity", style="red")
+                findings_table.add_column("Title", style="white")
+                
+                for finding in scan_data["findings"][-5:]:  # Show last 5
+                    findings_table.add_row(
+                        finding.get("severity", "UNKNOWN").upper(),
+                        finding.get("title", "Unknown finding")
+                    )
+            else:
+                findings_table = Panel("[dim]No findings yet[/dim]", title="⚠️ Findings")
+            
+            # Combine all elements
+            from rich.console import Group
+            return Group(header, status_table, tools_table, findings_table)
+        
+        # Event handler to update the live display
+        event_manager = TUIEventManager()
+        
+        async def handle_agent_thinking(event):
+            scan_data["agent_status"] = event.data.get("message", "Thinking...")
+        
+        async def handle_tool_start(event):
+            scan_data["agent_status"] = f"Running {event.data['tool_name']}..."
+            scan_data["tools_run"].append({
+                "name": event.data["tool_name"],
+                "target": event.data.get("target", "N/A"),
+                "status": "Running...",
+                "success": None
+            })
+        
+        async def handle_tool_complete(event):
+            tool_name = event.data["tool_name"]
+            success = event.data.get("success", False)
+            # Update the last tool entry
+            if scan_data["tools_run"]:
+                scan_data["tools_run"][-1]["status"] = "Completed" if success else "Failed"
+                scan_data["tools_run"][-1]["success"] = success
+            scan_data["agent_status"] = "Analyzing results..."
+        
+        async def handle_finding_discovered(event):
+            scan_data["findings"].append(event.data.get("finding", {}))
+            scan_data["agent_status"] = f"Found: {event.data.get('finding', {}).get('title', 'Unknown')}"
+        
+        # Subscribe to events
+        event_manager.subscribe("agent_thinking", handle_agent_thinking)
+        event_manager.subscribe("tool_start", handle_tool_start)
+        event_manager.subscribe("tool_complete", handle_tool_complete)
+        event_manager.subscribe("finding_discovered", handle_finding_discovered)
+        
+        # Run the scan with live output
+        with Live(create_status_table(), refresh_per_second=2, console=console) as live:
+            try:
+                # Create or get project
+                async for session in get_session():
+                    project_name = project or f"CLI Scan - {target}"
+                    
+                    # Try to find existing project
+                    from sqlmodel import select
+                    stmt = select(Project).where(Project.name == project_name)
+                    result = await session.execute(stmt)
+                    proj = result.scalar_one_or_none()
+                    
+                    if not proj:
+                        proj = Project(name=project_name, description=f"CLI scan of {target}")
+                        proj = await crud_project.create(session, proj)
+                    
+                    # Create scan job
+                    scan_job = ScanJob(
+                        project_id=proj.id,
+                        name=f"Scan - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+                        config={
+                            "target": target,
+                            "instructions": instructions
+                        }
+                    )
+                    scan_job = await crud_scan.create(session, scan_job)
+                    
+                    # Start orchestrator
+                    orchestrator = Orchestrator(tool_inventory=inventory)
+                    orchestrator.start()
+                    
+                    # Start the scan
+                    await orchestrator.start_scan(scan_job.id)
+                    
+                    # Monitor scan progress
+                    scan_data["agent_status"] = "Scan started..."
+                    
+                    # Wait for the scan to complete (with timeout)
+                    timeout = 300  # 5 minutes
+                    start = datetime.utcnow()
+                    
+                    while (datetime.utcnow() - start).total_seconds() < timeout:
+                        live.update(create_status_table())
+                        await asyncio.sleep(2)
+                        
+                        # Check if scan is complete
+                        scan_job_updated = await crud_scan.get(session, scan_job.id)
+                        if scan_job_updated and scan_job_updated.status in ["completed", "failed"]:
+                            scan_data["agent_status"] = f"Scan {scan_job_updated.status}!"
+                            break
+                    
+                    # Stop orchestrator
+                    await orchestrator.stop()
+                    
+                    # Final update
+                    live.update(create_status_table())
+                    
+                    # Get final stats
+                    nodes = await crud_node.get_nodes_by_project(session, proj.id)
+                    scan_data["nodes"] = nodes
+                    
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Scan interrupted by user[/yellow]")
+                if 'orchestrator' in locals():
+                    await orchestrator.stop()
+            except Exception as e:
+                console.print(f"\n[red]Scan failed: {e}[/red]")
+                import traceback
+                traceback.print_exc()
+        
+        # Print final summary
+        console.print("\n" + "="*60)
+        console.print("[bold green]📊 Scan Complete[/bold green]")
+        console.print("="*60)
+        
+        duration = (datetime.utcnow() - scan_data["start_time"]).total_seconds()
+        console.print(f"⏱️  Duration: {int(duration)}s")
+        console.print(f"🔧 Tools executed: {len(scan_data['tools_run'])}")
+        console.print(f"🌐 Nodes discovered: {len(scan_data['nodes'])}")
+        console.print(f"⚠️  Findings: {len(scan_data['findings'])}")
+        
+        if scan_data['findings']:
+            console.print("\n[bold]Top Findings:[/bold]")
+            for finding in scan_data['findings'][:5]:
+                severity = finding.get('severity', 'UNKNOWN').upper()
+                title = finding.get('title', 'Unknown')
+                console.print(f"  [{severity}] {title}")
+        
+        console.print("\n[dim]Launch TUI for detailed analysis: kodiak tui[/dim]\n")
+        
+    except ImportError as e:
+        console.print(f"[red]Missing dependencies: {e}[/red]")
+        console.print("Install with: [dim]poetry install --extras database[/dim]")
+    except Exception as e:
+        console.print(f"[red]Scan error: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+
+
+# Make scan command async-compatible
+_original_scan = scan
+def scan_wrapper(*args, **kwargs):
+    import asyncio
+    return asyncio.run(_original_scan(*args, **kwargs))
+scan.callback = scan_wrapper
+
+
+
+@main.command()
 def services():
     """Show status of all Kodiak services."""
     console.print("🔍 [bold]Kodiak Services Status[/bold]\n")

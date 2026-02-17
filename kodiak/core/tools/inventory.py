@@ -125,7 +125,4 @@ AVAILABLE_TOOLS = {
     
     # OSINT & Information Gathering
     "web_search": "Web search for reconnaissance",
-    
-    # System & Utilities
-    "terminal_execute": "Execute system commands"
 }

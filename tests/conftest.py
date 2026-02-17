@@ -5,25 +5,13 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from typing import Dict, Any
 
-from kodiak.api.events import EventManager
+from kodiak.api.events import TUIEventManager
 
 
 @pytest.fixture
-def mock_tui_bridge():
-    """Create a mock TUI bridge for testing."""
-    bridge = MagicMock()
-    bridge.send_tool_update = AsyncMock()
-    bridge.send_agent_update = AsyncMock()
-    bridge.send_finding_update = AsyncMock()
-    bridge.broadcast = AsyncMock()
-    bridge.broadcast_global = AsyncMock()
-    return bridge
-
-
-@pytest.fixture
-def event_manager(mock_tui_bridge):
-    """Create an EventManager instance with mocked TUI bridge."""
-    return EventManager(mock_tui_bridge)
+def event_manager():
+    """Create a TUIEventManager instance for testing."""
+    return TUIEventManager()
 
 
 @pytest.fixture

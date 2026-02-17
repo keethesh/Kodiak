@@ -38,34 +38,9 @@ def get_engine():
         _engine = _create_engine()
     return _engine
 
-# For backwards compatibility, but it might still be None/not created yet if accessed directly.
-# However, modifying the global variable directly is tricky.
-# Instead, we will keep 'engine' but make it a proxy or property, OR we explicitly update usage.
-# But 'engine' is exported. Let's redirect usage.
-
-# ACTUALLY, simpler:
-# Just don't call _create_engine() at top level.
-# And usages like 'async with engine.begin()' need to call 'get_engine().begin()'
-
-# But wait, external modules import 'engine'. changing that would break them.
-# I will make 'engine' a proxy object or just keep the variable name but use a LazyProxy if I could.
-# Without a proxy class, I have to update callers. 
-# Let's check imports. `from .engine import engine` is common.
-
-# Alternative: Wrap it in a class or use a LazyObject. 
-# Simplest for now: 
-# 1. Rename _create_engine to create_engine
-# 2. engine = None
-# 3. accessors use get_engine()
-
-# But invalidating the 'engine' import in other files is risky if I don't check all usages.
-# I'll search for 'from .* import .*engine'.
-
-# Let's try to update the code in THIS file to use get_engine(), 
-# and maybe other files need to be updated. 
-# Actually, I can use a simple LazyEngine proxy class here to avoid changing other files.
 
 class LazyEngine:
+    """Lazy engine proxy to avoid eager database connection on import."""
     def __init__(self):
         self._engine = None
         
