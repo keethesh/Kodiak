@@ -96,7 +96,7 @@ class KodiakSettings(BaseSettings):
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     
     # LLM Configuration
-    llm_model: str = Field(default="gemini/gemini-1.5-pro", alias="KODIAK_LLM_MODEL")
+    llm_model: str = Field(default="gemini/gemini-3-pro-preview", alias="KODIAK_LLM_MODEL")
     llm_api_key: Optional[str] = Field(default=None, alias="KODIAK_LLM_API_KEY")
     llm_base_url: Optional[str] = Field(default=None, alias="KODIAK_LLM_BASE_URL")
     llm_temperature: float = Field(default=0.1, alias="KODIAK_LLM_TEMPERATURE")
@@ -203,6 +203,8 @@ class KodiakSettings(BaseSettings):
     def get_model_display_name(self) -> str:
         """Get a human-readable model name"""
         model_map = {
+            "gemini/gemini-3-pro-preview": "Gemini 3 Pro",
+            "gemini/gemini-3-flash-preview": "Gemini 3 Flash",
             "gemini/gemini-1.5-pro": "Gemini 1.5 Pro",
             "gemini/gemini-1.5-flash": "Gemini 1.5 Flash",
             "openai/gpt-4": "GPT-4",

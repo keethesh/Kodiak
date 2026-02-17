@@ -29,8 +29,8 @@ LLM_PROVIDERS = {
         "name": "Google Gemini",
         "description": "Recommended - Best balance of speed and capability",
         "env_var": "GOOGLE_API_KEY",
-        "default_model": "gemini/gemini-1.5-pro",
-        "models": ["gemini/gemini-1.5-pro", "gemini/gemini-1.5-flash", "gemini/gemini-3-pro-preview"]
+        "default_model": "gemini/gemini-3-pro-preview",
+        "models": ["gemini/gemini-3-pro-preview", "gemini/gemini-3-flash-preview", "gemini/gemini-1.5-pro"]
     },
     "openai": {
         "name": "OpenAI GPT",
