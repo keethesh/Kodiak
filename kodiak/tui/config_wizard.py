@@ -372,7 +372,7 @@ class DatabaseScreen(Screen):
     }
     
     #loading-container {
-        border-color: $accent;
+        border: round $accent;
         align: center middle;
     }
     
