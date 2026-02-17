@@ -6,6 +6,7 @@ and simplified configuration validation.
 """
 
 import os
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, SecretStr
@@ -122,7 +123,10 @@ class KodiakSettings(BaseSettings):
     toolbox_image: str = Field(default="ghcr.io/keethesh/kodiak-toolbox:latest", alias="KODIAK_TOOLBOX_IMAGE")
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[
+            ".env",  # Current directory
+            str(Path.home() / ".kodiak" / "config.env"),  # User config from wizard
+        ],
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
