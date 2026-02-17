@@ -302,10 +302,10 @@ install_from_source() {
             print_warning "Version $KODIAK_VERSION not found, using main branch"
         }
     else
-        # Use feature branch for now (until merged to main)
-        if git show-ref --verify --quiet refs/remotes/origin/feature/tui-architecture; then
-            print_status "Using feature/tui-architecture branch..."
-            git checkout feature/tui-architecture
+        # Use refactor branch for now (until merged to main)
+        if git show-ref --verify --quiet refs/remotes/origin/refactor/backend-rewrite; then
+            print_status "Using refactor/backend-rewrite branch..."
+            git checkout refactor/backend-rewrite
         fi
     fi
     
