@@ -779,10 +779,12 @@ def scan(target: str, instructions: str, model: Optional[str], project: Optional
                         # Create orchestrator and start the scheduler
                         orchestrator = Orchestrator(tool_inventory=inventory)
                         await orchestrator.start()
+                        console.print(f"[dim]✓ Orchestrator started, scheduler is running[/dim]")
 
                         
                         # Start the scan
                         await orchestrator.start_scan(scan_job.id)
+                        console.print(f"[dim]✓ Root task created for scan {scan_job.id}[/dim]")
                         
                         # Monitor scan progress
                         scan_data["agent_status"] = "Scan started..."
