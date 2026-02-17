@@ -776,8 +776,10 @@ def scan(target: str, instructions: str, model: Optional[str], project: Optional
                         )
                         scan_job = await crud_scan.create(session, scan_job)
                         
-                        # Create orchestrator (it auto-starts worker on first scan)
+                        # Create orchestrator and start the scheduler
                         orchestrator = Orchestrator(tool_inventory=inventory)
+                        await orchestrator.start()
+
                         
                         # Start the scan
                         await orchestrator.start_scan(scan_job.id)
