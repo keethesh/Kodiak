@@ -714,8 +714,8 @@ def scan(target: str, instructions: str, model: Optional[str], project: Optional
                 from rich.console import Group
                 return Group(header, status_table, tools_table, findings_table)
             
-            # Event handler to update the live display
-            event_manager = TUIEventManager()
+            # Use the global event manager that orchestrator and agents emit to
+            from kodiak.api.events import event_manager
             
             async def handle_agent_thinking(event):
                 scan_data["agent_status"] = event.data.get("message", "Thinking...")
