@@ -34,8 +34,8 @@ class FindingDetailScreen(Screen):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
-        Binding("h", "go_home", "Home", priority=True),
+        Binding("q", "quit", "Quit"),
+        Binding("h", "go_home", "Home"),
         Binding("escape", "go_back", "Back"),
         Binding("c", "copy_poc", "Copy PoC"),
         Binding("r", "retest", "Re-test"),

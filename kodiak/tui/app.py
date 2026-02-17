@@ -29,10 +29,10 @@ class KodiakApp(App):
     
     # Global shortcuts (Requirements 12.1, 12.7)
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
+        Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", priority=True),
-        Binding("h", "go_home", "Home", priority=True),
-        Binding("question_mark", "show_help", "Help", priority=True),
+        Binding("h", "go_home", "Home"),
+        Binding("question_mark", "show_help", "Help"),
     ]
     
     def __init__(self, debug: bool = False):

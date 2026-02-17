@@ -14,8 +14,11 @@ from textual.containers import Container, Vertical, Horizontal
 from textual.screen import Screen
 from textual.widgets import (
     Header, Footer, Static, Button, Input, 
-    RadioButton, RadioSet, Label, ProgressBar
+    RadioButton, RadioSet, Label, ProgressBar, LoadingIndicator
 )
+import asyncio
+from kodiak.database.engine import init_db
+from loguru import logger
 from rich.panel import Panel
 from rich.text import Text
 
@@ -309,15 +312,58 @@ class DatabaseScreen(Screen):
             self.app.push_screen(SuccessScreen())
 
 
-class SuccessScreen(Screen):
-    """Success screen shown after configuration is complete."""
-    
+    async def _do_initialize(self) -> None:
+        """Background worker for initialization"""
+        try:
+            self.query_one("#success-container").display = False
+            self.query_one("#loading-container").display = True
+            
+            # Run the database initialization
+            await init_db()
+            
+            # Wait a moment for effect
+            await asyncio.sleep(1)
+            
+            # Exit with special result to signal launch
+            self.app.exit(result={"launch_tui": True})
+            
+        except Exception as e:
+            logger.error(f"Initialization failed: {e}")
+            self.query_one("#loading-container").display = False
+            self.query_one("#success-container").display = True
+            self.notify(f"Initialization failed: {str(e)}", severity="error")
+
+    def compose(self) -> ComposeResult:
+        with Container(id="success-container"):
+            yield Static("✅ Configuration Complete!", id="success-title")
+            yield Static(
+                "Kodiak is now configured and ready to use.\n\n"
+                "You can now initialize the system and launch the interface immediately.",
+                id="success-msg"
+            )
+            yield Button("Initialize & Launch 🚀", variant="success", id="launch-btn")
+            yield Button("Exit to Terminal", variant="default", id="done-btn")
+        
+        with Container(id="loading-container"):
+            yield Static("Initializing Kodiak...", id="loading-title")
+            yield LoadingIndicator()
+            yield Static("This may take a moment to set up the database.", id="loading-msg")
+
+    def on_mount(self) -> None:
+        self.query_one("#loading-container").display = False
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "done-btn":
+            self.app.exit(result=self.app.config_data)
+        elif event.button.id == "launch-btn":
+            self.run_worker(self._do_initialize())
+
     CSS = """
     SuccessScreen {
         align: center middle;
     }
     
-    #success-container {
+    #success-container, #loading-container {
         width: 70;
         height: auto;
         padding: 2;
@@ -325,37 +371,35 @@ class SuccessScreen(Screen):
         background: $surface;
     }
     
-    #success-title {
+    #loading-container {
+        border-color: $accent;
+        align: center middle;
+    }
+    
+    #success-title, #loading-title {
         text-align: center;
         text-style: bold;
         color: $success;
         margin-bottom: 1;
     }
     
+    #loading-title { color: $accent; }
+    
+    #success-msg, #loading-msg {
+        text-align: center;
+        margin-bottom: 2;
+    }
+    
     Button {
         width: 100%;
         margin-top: 1;
     }
+    
+    LoadingIndicator {
+        height: 3;
+        margin: 1 0;
+    }
     """
-    
-    def compose(self) -> ComposeResult:
-        yield Container(
-            Static("✅ Configuration Complete!", id="success-title"),
-            Static(
-                "Kodiak is now configured and ready to use.\n\n"
-                "Next steps:\n"
-                "• Run 'kodiak init' to initialize the database\n"
-                "• Run 'kodiak' to launch the TUI\n"
-                "• Run 'kodiak --target ./app' to scan a project\n\n"
-                f"Configuration saved to: ~/.kodiak/config.env"
-            ),
-            Button("Done", variant="primary", id="done-btn"),
-            id="success-container"
-        )
-    
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "done-btn":
-            self.app.exit(result=self.app.config_data)
 
 
 class ConfigWizardApp(App):

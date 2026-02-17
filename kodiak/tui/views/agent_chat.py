@@ -25,8 +25,8 @@ class AgentChatScreen(Screen):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
-        Binding("h", "go_home", "Home", priority=True),
+        Binding("q", "quit", "Quit"),
+        Binding("h", "go_home", "Home"),
         Binding("escape", "go_back", "Back"),
         Binding("left", "prev_agent", "Prev Agent"),
         Binding("right", "next_agent", "Next Agent"),

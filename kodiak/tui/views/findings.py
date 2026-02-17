@@ -16,6 +16,7 @@ Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7
 
 from typing import Optional, List
 import json
+import os
 from datetime import datetime
 from textual.screen import Screen
 from textual.app import ComposeResult
@@ -37,8 +38,8 @@ class FindingsScreen(Screen):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
-        Binding("h", "go_home", "Home", priority=True),
+        Binding("q", "quit", "Quit"),
+        Binding("h", "go_home", "Home"),
         Binding("escape", "go_back", "Back"),
         Binding("e", "export_findings", "Export"),
         Binding("1", "filter_critical", "Critical"),
@@ -409,9 +410,10 @@ class FindingsScreen(Screen):
         # Save to file
         filename = f"kodiak_findings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         try:
+            abs_path = os.path.abspath(filename)
             with open(filename, 'w') as f:
                 json.dump(export_data, f, indent=2)
-            self.notify(f"Exported to {filename}", severity="information")
+            self.notify(f"Exported to {abs_path}", severity="information", timeout=10)
         except Exception as e:
             self.notify(f"Export failed: {e}", severity="error")
     
@@ -472,9 +474,10 @@ class FindingsScreen(Screen):
         # Save to file
         filename = f"kodiak_findings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
         try:
+            abs_path = os.path.abspath(filename)
             with open(filename, 'w') as f:
                 f.write("\n".join(lines))
-            self.notify(f"Exported to {filename}", severity="information")
+            self.notify(f"Exported to {abs_path}", severity="information", timeout=10)
         except Exception as e:
             self.notify(f"Export failed: {e}", severity="error")
     
@@ -536,9 +539,10 @@ class FindingsScreen(Screen):
         # Save to file
         filename = f"kodiak_findings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
         try:
+            abs_path = os.path.abspath(filename)
             with open(filename, 'w') as f:
                 f.write(html)
-            self.notify(f"Exported to {filename}", severity="information")
+            self.notify(f"Exported to {abs_path}", severity="information", timeout=10)
         except Exception as e:
             self.notify(f"Export failed: {e}", severity="error")
     

@@ -11,7 +11,7 @@ from datetime import datetime
 from uuid import uuid4
 from textual.screen import Screen
 from textual.app import ComposeResult
-from textual.widgets import Header, Footer, Static, Input, Button, Label
+from textual.widgets import Header, Footer, Static, Input, Button, Label, RadioSet, RadioButton, Select
 from textual.containers import Vertical, Horizontal, Container
 from textual.binding import Binding
 from textual.validation import Validator, ValidationResult
@@ -73,8 +73,8 @@ class NewScanScreen(Screen):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
-        Binding("h", "go_home", "Home", priority=True),
+        Binding("q", "quit", "Quit"),
+        Binding("h", "go_home", "Home"),
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "submit", "Submit"),
         Binding("question_mark", "show_help", "Help"),
@@ -136,6 +136,11 @@ class NewScanScreen(Screen):
     }
     
     .form-input {
+        height: 3;
+        margin-bottom: 0;
+    }
+    
+    Select {
         height: 3;
         margin-bottom: 1;
     }
@@ -220,6 +225,8 @@ class NewScanScreen(Screen):
         super().__init__(**kwargs)
         self.agent_count = 3
         self.error_message = ""
+        self.project_mode = "new"  # "new" or "existing"
+        self._existing_projects = []
     
     def compose(self) -> ComposeResult:
         """Compose the new scan form"""
@@ -228,17 +235,31 @@ class NewScanScreen(Screen):
         with Container(id="form-container"):
             yield Static("🔍 Create New Scan", id="form-title")
             
-            # Project name
+            # Project Mode selection
             with Vertical(classes="form-row"):
-                yield Label("Project Name:", classes="form-label")
+                yield Label("Project:", classes="form-label")
+                with RadioSet(id="project-mode"):
+                    yield RadioButton("Create New Project", id="mode-new", value=True)
+                    yield RadioButton("Use Existing Project", id="mode-existing")
+            
+            # Existing Project Selection (Hidden by default)
+            with Vertical(id="existing-project-container", classes="form-row"):
+                yield Label("Select Project:", classes="form-label")
+                projects = app_state.get_all_projects()
+                options = [(p.name, p.id) for p in projects]
+                yield Select(options, id="project-select", prompt="Select a project...")
+            
+            # Project name (New only)
+            with Vertical(id="new-project-name-container", classes="form-row"):
+                yield Label("New Project Name:", classes="form-label")
                 yield Input(
                     placeholder="Enter project name...",
                     id="name-input",
                     classes="form-input"
                 )
             
-            # Target
-            with Vertical(classes="form-row"):
+            # Target (New only)
+            with Vertical(id="target-container", classes="form-row"):
                 yield Label("Target (URL, IP, or Domain):", classes="form-label")
                 yield Input(
                     placeholder="https://example.com or 192.168.1.1",
@@ -277,9 +298,22 @@ class NewScanScreen(Screen):
         yield Footer()
     
     def on_mount(self) -> None:
-        """Focus the name input on mount"""
-        name_input = self.query_one("#name-input", Input)
-        name_input.focus()
+        """Initialize the view"""
+        self.query_one("#existing-project-container").display = False
+        self.query_one("#name-input", Input).focus()
+    
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        """Handle project mode toggle"""
+        if event.pressed_button.id == "mode-new":
+            self.project_mode = "new"
+            self.query_one("#existing-project-container").display = False
+            self.query_one("#new-project-name-container").display = True
+            self.query_one("#target-container").display = True
+        else:
+            self.project_mode = "existing"
+            self.query_one("#existing-project-container").display = True
+            self.query_one("#new-project-name-container").display = False
+            self.query_one("#target-container").display = False
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses"""
@@ -308,51 +342,59 @@ class NewScanScreen(Screen):
     
     def _submit_form(self):
         """Validate and submit the form"""
-        name_input = self.query_one("#name-input", Input)
-        target_input = self.query_one("#target-input", Input)
-        instructions_input = self.query_one("#instructions-input", Input)
         error_display = self.query_one("#error-message", Static)
-        
-        # Get values
-        name = name_input.value.strip()
-        target = target_input.value.strip()
+        instructions_input = self.query_one("#instructions-input", Input)
         instructions = instructions_input.value.strip()
         
-        # Validate name
-        if not name:
-            error_display.update("❌ Project name is required")
-            name_input.focus()
-            return
-        
-        # Validate target
-        if not target:
-            error_display.update("❌ Target is required")
-            target_input.focus()
-            return
-        
-        # Validate target format
-        validator = TargetValidator()
-        result = validator.validate(target)
-        if not result.is_valid:
-            error_display.update(f"❌ {result.failure_descriptions[0]}")
-            target_input.focus()
-            return
-        
-        # Clear error
-        error_display.update("")
-        
-        # Create project and scan
-        try:
-            self._create_scan(name, target, instructions)
-        except Exception as e:
-            logger.error(f"Failed to create scan: {e}")
-            error_display.update(f"❌ Failed to create scan: {str(e)}")
+        if self.project_mode == "new":
+            name_input = self.query_one("#name-input", Input)
+            target_input = self.query_one("#target-input", Input)
+            
+            name = name_input.value.strip()
+            target = target_input.value.strip()
+            
+            if not name:
+                error_display.update("❌ Project name is required")
+                name_input.focus()
+                return
+            
+            if not target:
+                error_display.update("❌ Target is required")
+                target_input.focus()
+                return
+            
+            validator = TargetValidator()
+            result = validator.validate(target)
+            if not result.is_valid:
+                error_display.update(f"❌ {result.failure_descriptions[0]}")
+                target_input.focus()
+                return
+            
+            # Create project and scan
+            try:
+                self._create_new_project_and_scan(name, target, instructions)
+            except Exception as e:
+                logger.error(f"Failed to create scan: {e}")
+                error_display.update(f"❌ Failed to create scan: {str(e)}")
+        else:
+            # Existing project
+            project_select = self.query_one("#project-select", Select)
+            if project_select.value == Select.BLANK:
+                error_display.update("❌ Please select a project")
+                project_select.focus()
+                return
+            
+            project_id = project_select.value
+            try:
+                self._create_scan_for_existing_project(project_id, instructions)
+            except Exception as e:
+                logger.error(f"Failed to create scan: {e}")
+                error_display.update(f"❌ Failed to create scan: {str(e)}")
     
-    def _create_scan(self, name: str, target: str, instructions: str):
+    def _create_new_project_and_scan(self, name: str, target: str, instructions: str):
         """Create a new project and scan"""
         now = datetime.now()
         
-        # Create project
         project = ProjectState(
             id=str(uuid4()),
             name=name,
@@ -362,27 +404,32 @@ class NewScanScreen(Screen):
             updated_at=now
         )
         
-        # Create scan
+        app_state.projects[project.id] = project
+        self._create_scan_for_existing_project(project.id, instructions)
+    
+    def _create_scan_for_existing_project(self, project_id: str, instructions: str):
+        """Create a scan for an existing project"""
+        project = app_state.get_project(project_id)
+        if not project:
+            raise ValueError(f"Project {project_id} not found")
+            
+        now = datetime.now()
         scan = ScanState(
             id=str(uuid4()),
             project_id=project.id,
-            name=f"Scan of {target}",
-            target=target,
+            name=f"Scan of {project.target}",
+            target=project.target,
             status=ScanStatus.PENDING,
             agent_count=self.agent_count,
             created_at=now
         )
         
-        # Add to state
-        app_state.projects[project.id] = project
         app_state.scans[scan.id] = scan
         app_state.set_current_project(project.id)
         app_state.set_current_scan(scan.id)
         
-        logger.info(f"Created project '{name}' with scan targeting '{target}'")
-        
-        # Navigate to mission control
-        self.notify(f"Created scan for {target}", severity="information")
+        logger.info(f"Created scan for project '{project.name}' targeting '{project.target}'")
+        self.notify(f"Created scan for {project.target}", severity="information")
         
         from kodiak.tui.views.mission_control import MissionControlScreen
         self.app.switch_screen(MissionControlScreen())
@@ -393,6 +440,11 @@ class NewScanScreen(Screen):
     
     def action_go_home(self) -> None:
         """Go to home screen (Global shortcut)"""
+        # Don't trigger if input is focused
+        focused = self.app.focused
+        if focused and isinstance(focused, Input):
+            return
+        
         # Pop all screens and go to home
         while len(self.app.screen_stack) > 1:
             self.app.pop_screen()
@@ -404,15 +456,28 @@ class NewScanScreen(Screen):
     
     def action_show_help(self) -> None:
         """Show help overlay (Global shortcut)"""
+        # Don't trigger if input is focused
+        focused = self.app.focused
+        if focused and isinstance(focused, Input):
+            return
+        
         from kodiak.tui.views.help import HelpScreen
         self.app.push_screen(HelpScreen())
     
     def action_cancel(self) -> None:
         """Cancel and return to home"""
+        # Only cancel if no input is focused (allow ESC to clear input first)
+        focused = self.app.focused
+        if focused and isinstance(focused, Input) and focused.value:
+            return
         self.app.pop_screen()
     
     def action_submit(self) -> None:
         """Submit the form"""
+        # Only submit if no input is focused
+        focused = self.app.focused
+        if focused and isinstance(focused, Input):
+            return
         self._submit_form()
     
     def on_input_changed(self, event: Input.Changed) -> None:

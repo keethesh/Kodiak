@@ -25,7 +25,7 @@ class MissionControlScreen(Screen):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
+        Binding("q", "quit", "Quit"),
         Binding("h", "go_home", "Home"),
         Binding("tab", "focus_next_panel", "Next Panel"),
         Binding("shift+tab", "focus_prev_panel", "Prev Panel"),
@@ -33,7 +33,7 @@ class MissionControlScreen(Screen):
         Binding("f", "show_findings", "Findings"),
         Binding("p", "toggle_pause", "Pause/Resume"),
         Binding("enter", "select_item", "Select"),
-        Binding("escape", "go_home", "Back"),
+        Binding("escape", "go_back", "Back"),
         Binding("question_mark", "show_help", "Help"),
     ]
     
@@ -243,8 +243,8 @@ class MissionControlScreen(Screen):
         """Quit the application"""
         self.app.exit()
     
-    def action_go_home(self) -> None:
-        """Return to home screen"""
+    def action_go_back(self) -> None:
+        """Return to previous screen"""
         self.app.pop_screen()
     
     def action_focus_next_panel(self) -> None:

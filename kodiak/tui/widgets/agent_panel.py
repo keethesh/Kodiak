@@ -105,7 +105,7 @@ class AgentPanel(Widget):
     
     AgentPanel ListItem.-selected {
         background: $accent;
-        color: $text-selected;
+        color: $text;
     }
     
     AgentPanel .empty {
