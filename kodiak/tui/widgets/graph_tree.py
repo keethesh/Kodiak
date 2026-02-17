@@ -358,10 +358,11 @@ class GraphTree(Widget):
         
         return severity_count
     
-    def refresh(self):
+    def refresh(self, **kwargs):
         """Force refresh the tree"""
         self.current_scan = app_state.get_current_scan()
         self._refresh_tree()
+        super().refresh(**kwargs)
     
     def search_nodes(self, query: str) -> List[GraphTreeNode]:
         """Search for nodes matching the query"""

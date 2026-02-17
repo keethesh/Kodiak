@@ -246,10 +246,11 @@ class AgentPanel(Widget):
             return True
         return False
     
-    def refresh(self):
+    def refresh(self, **kwargs):
         """Force refresh the agent panel"""
         self.current_scan = app_state.get_current_scan()
         self._refresh_agents()
+        super().refresh(**kwargs)
     
     def get_agent_count(self) -> int:
         """Get the number of agents"""

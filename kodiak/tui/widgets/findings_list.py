@@ -535,7 +535,8 @@ class FindingsList(Widget):
             collapsible = group.query_one(Collapsible)
             collapsible.collapsed = True
     
-    def refresh(self):
+    def refresh(self, **kwargs):
         """Force refresh the findings list"""
         self.current_scan = app_state.get_current_scan()
         self._refresh_findings()
+        super().refresh(**kwargs)
