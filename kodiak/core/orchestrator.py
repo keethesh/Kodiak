@@ -504,6 +504,22 @@ class Orchestrator:
                             logger.info(f"Agent {agent.agent_id} completed task after {iteration_count} iterations")
                             return
                         
+                        # Add assistant response to history IMMEDIATELY
+                        # We must include the assistant's message (with tool_calls) so the API 
+                        # knows what tool call we are responding to.
+                        if hasattr(response, 'model_dump'):
+                            response_dict = response.model_dump()
+                        elif hasattr(response, 'dict'):
+                            response_dict = response.dict()
+                        else:
+                            response_dict = response
+                            
+                        # Ensure role is set
+                        if "role" not in response_dict:
+                            response_dict["role"] = "assistant"
+                            
+                        history.append(response_dict)
+                        
                         # Process tool calls
                         if response.tool_calls:
                             for tool_call in response.tool_calls:
@@ -552,13 +568,6 @@ class Orchestrator:
                                         "tool_call_id": tool_call.id,
                                         "content": json.dumps({"error": f"Tool execution failed: {str(tool_error)}"})
                                     })
-                        else:
-                            # No tool calls, add agent response to history
-                            history.append({
-                                "role": "assistant",
-                                "content": response.content or "No response content"
-                            })
-                        
                         # Brief pause between iterations
                         await asyncio.sleep(1)
                         
