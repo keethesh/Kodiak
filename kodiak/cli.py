@@ -235,7 +235,7 @@ volumes:
     if not env_file.exists():
         env_content = """# Kodiak Configuration
 # LLM Configuration (choose one)
-KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+KODIAK_LLM_MODEL=gemini/gemini-3-pro-preview
 GOOGLE_API_KEY=your_google_api_key_here
 
 # Alternative LLM Providers
@@ -299,7 +299,7 @@ def config(ctx, interactive: bool, basic: bool):
         if choice == 1:
             api_key = click.prompt("Google API Key", hide_input=True)
             config_lines.extend([
-                "KODIAK_LLM_MODEL=gemini/gemini-1.5-pro",
+                "KODIAK_LLM_MODEL=gemini/gemini-3-pro-preview",
                 f"GOOGLE_API_KEY={api_key}"
             ])
         elif choice == 2:
