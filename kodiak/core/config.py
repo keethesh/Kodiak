@@ -7,8 +7,8 @@ and simplified configuration validation.
 
 import os
 from typing import Optional, Dict, Any, List
-from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr
 from enum import Enum
 
 
@@ -73,58 +73,60 @@ class KodiakSettings(BaseSettings):
     """Kodiak application settings"""
     
     # Application Configuration
-    PROJECT_NAME: str = Field(default="Kodiak", env="KODIAK_PROJECT_NAME")
-    VERSION: str = Field(default="1.0.0", env="KODIAK_VERSION")
+    PROJECT_NAME: str = Field(default="Kodiak", alias="KODIAK_PROJECT_NAME")
+    VERSION: str = Field(default="1.0.0", alias="KODIAK_VERSION")
     
     # TUI Configuration
-    tui_color_theme: str = Field(default="dark", env="KODIAK_TUI_COLOR_THEME")
-    tui_refresh_rate: int = Field(default=10, env="KODIAK_TUI_REFRESH_RATE")  # Hz
+    tui_color_theme: str = Field(default="dark", alias="KODIAK_TUI_COLOR_THEME")
+    tui_refresh_rate: int = Field(default=10, alias="KODIAK_TUI_REFRESH_RATE")  # Hz
     
     # Database Configuration
     # Database type: "sqlite" (default, zero-config) or "postgres" (production)
-    db_type: str = Field(default="sqlite", env="KODIAK_DB_TYPE")
+    db_type: str = Field(default="sqlite", alias="KODIAK_DB_TYPE")
     
     # SQLite Configuration (default, stored in ~/.kodiak/)
-    sqlite_path: Optional[str] = Field(default=None, env="KODIAK_SQLITE_PATH")
+    sqlite_path: Optional[str] = Field(default=None, alias="KODIAK_SQLITE_PATH")
     
     # PostgreSQL Configuration (optional, for production deployments)
-    postgres_server: str = Field(default="localhost", env="POSTGRES_SERVER")
-    postgres_user: str = Field(default="kodiak", env="POSTGRES_USER")
-    postgres_password: str = Field(default="kodiak_password", env="POSTGRES_PASSWORD")
-    postgres_db: str = Field(default="kodiak_db", env="POSTGRES_DB")
-    postgres_port: int = Field(default=5432, env="POSTGRES_PORT")
+    postgres_server: str = Field(default="localhost", alias="POSTGRES_SERVER")
+    postgres_user: str = Field(default="kodiak", alias="POSTGRES_USER")
+    postgres_password: str = Field(default="kodiak_password", alias="POSTGRES_PASSWORD")
+    postgres_db: str = Field(default="kodiak_db", alias="POSTGRES_DB")
+    postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     
     # LLM Configuration
-    llm_model: str = Field(default="gemini/gemini-1.5-pro", env="KODIAK_LLM_MODEL")
-    llm_api_key: Optional[str] = Field(default=None, env="KODIAK_LLM_API_KEY")
-    llm_base_url: Optional[str] = Field(default=None, env="KODIAK_LLM_BASE_URL")
-    llm_temperature: float = Field(default=0.1, env="KODIAK_LLM_TEMPERATURE")
-    llm_max_tokens: int = Field(default=4096, env="KODIAK_LLM_MAX_TOKENS")
+    llm_model: str = Field(default="gemini/gemini-1.5-pro", alias="KODIAK_LLM_MODEL")
+    llm_api_key: Optional[str] = Field(default=None, alias="KODIAK_LLM_API_KEY")
+    llm_base_url: Optional[str] = Field(default=None, alias="KODIAK_LLM_BASE_URL")
+    llm_temperature: float = Field(default=0.1, alias="KODIAK_LLM_TEMPERATURE")
+    llm_max_tokens: int = Field(default=4096, alias="KODIAK_LLM_MAX_TOKENS")
     
     # Legacy environment variable support
-    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
-    google_api_key: Optional[str] = Field(default=None, env="GOOGLE_API_KEY")
-    anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
+    openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
+    anthropic_api_key: Optional[str] = Field(default=None, alias="ANTHROPIC_API_KEY")
     
     # Application Configuration
-    debug: bool = Field(default=False, env="KODIAK_DEBUG")
-    log_level: str = Field(default="INFO", env="KODIAK_LOG_LEVEL")
+    debug: bool = Field(default=False, alias="KODIAK_DEBUG")
+    log_level: str = Field(default="INFO", alias="KODIAK_LOG_LEVEL")
     
     # Security Configuration
-    enable_safety_checks: bool = Field(default=True, env="KODIAK_ENABLE_SAFETY")
-    max_concurrent_agents: int = Field(default=5, env="KODIAK_MAX_AGENTS")
+    enable_safety_checks: bool = Field(default=True, alias="KODIAK_ENABLE_SAFETY")
+    max_concurrent_agents: int = Field(default=5, alias="KODIAK_MAX_AGENTS")
     
     # Tool Configuration
-    tool_timeout: int = Field(default=300, env="KODIAK_TOOL_TIMEOUT")  # 5 minutes
-    enable_hive_mind: bool = Field(default=True, env="KODIAK_ENABLE_HIVE_MIND")
+    tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")  # 5 minutes
+    enable_hive_mind: bool = Field(default=True, alias="KODIAK_ENABLE_HIVE_MIND")
     
     # Toolbox Container Configuration
-    toolbox_image: str = Field(default="ghcr.io/keethesh/kodiak-toolbox:latest", env="KODIAK_TOOLBOX_IMAGE")
+    toolbox_image: str = Field(default="ghcr.io/keethesh/kodiak-toolbox:latest", alias="KODIAK_TOOLBOX_IMAGE")
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-        extra = "ignore"  # Allow extra environment variables
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
     def _get_default_sqlite_path(self) -> str:
         """Get the default SQLite database path in ~/.kodiak/"""

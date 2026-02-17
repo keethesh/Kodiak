@@ -12,6 +12,7 @@ from typing import Dict, Any
 
 from kodiak.database.models import Project, Node, ScanJob
 from kodiak.database.crud import node, project, scan_job
+from kodiak.core.error_handling import DatabaseError
 
 
 class MockAsyncSession:
@@ -316,7 +317,7 @@ class TestDatabaseModelConsistencyProperties:
         test_project, test_nodes = self.create_test_fixtures()
         
         # Test error handling in create operation
-        with pytest.raises(RuntimeError, match="Failed to create node"):
+        with pytest.raises(DatabaseError, match="Database connection failed"):
             await node.create(error_session, test_nodes[0])
         
         # Verify rollback was called

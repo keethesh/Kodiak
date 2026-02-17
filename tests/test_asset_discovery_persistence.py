@@ -13,6 +13,7 @@ from typing import Dict, Any, List
 
 from kodiak.database.models import Project, Node, ScanJob
 from kodiak.database.crud import node, project
+from kodiak.core.error_handling import DatabaseError
 
 
 class MockAsyncSession:
@@ -448,7 +449,7 @@ class TestAssetDiscoveryPersistenceProperties:
         test_asset = discovered_assets[0]
         
         # Attempt to create asset with failing session
-        with pytest.raises(RuntimeError, match="Failed to create node"):
+        with pytest.raises(DatabaseError, match="Database connection failed"):
             await node.create(failing_session, test_asset)
         
         # Verify rollback was called to maintain data integrity
