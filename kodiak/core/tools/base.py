@@ -17,9 +17,9 @@ class BaseTool(ABC):
     Base class for all Kodiak tools with EventManager integration.
     """
     
-    def __init__(self, event_manager=None):
-        """Initialize tool with optional EventManager for event broadcasting."""
-        self.event_manager = event_manager
+    def __init__(self):
+        """Initialize tool."""
+        pass
     
     @property
     @abstractmethod
@@ -52,13 +52,11 @@ class BaseTool(ABC):
 
     async def execute(self, **kwargs) -> ToolResult:
         """
-        Public interface - handles events and calls _execute.
+        Public interface - handles logic and calls _execute.
         This is the main entry point for tool execution.
         """
         # Extract context information
         target = kwargs.get('target', 'unknown')
-        agent_id = kwargs.get('agent_id', 'unknown_agent')
-        scan_id = kwargs.get('scan_id')
         
         try:
             # Validate required parameters if args_schema is defined
@@ -74,10 +72,6 @@ class BaseTool(ABC):
                         output=f"Parameter validation failed: {str(validation_error)}",
                         error=f"Invalid parameters: {str(validation_error)}"
                     )
-            
-            # Emit tool start event
-            if self.event_manager and scan_id:
-                await self.event_manager.emit_tool_start(self.name, target, agent_id, scan_id)
             
             # Execute the actual tool logic with timeout
             try:
@@ -116,24 +110,14 @@ class BaseTool(ABC):
                     error="Invalid ToolResult structure"
                 )
             
-            # Emit tool complete event
-            if self.event_manager and scan_id:
-                await self.event_manager.emit_tool_complete(self.name, result, scan_id)
-            
             return result
             
         except Exception as e:
-            error_result = ToolResult(
+            return ToolResult(
                 success=False, 
                 output=f"Tool execution failed: {str(e)}", 
                 error=str(e)
             )
-            
-            # Emit tool complete event with error
-            if self.event_manager and scan_id:
-                await self.event_manager.emit_tool_complete(self.name, error_result, scan_id)
-            
-            return error_result
 
     @abstractmethod
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:

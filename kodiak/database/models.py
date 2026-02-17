@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from uuid import UUID, uuid4
+from enum import StrEnum
 
 from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 
@@ -9,8 +10,8 @@ if TYPE_CHECKING:
 
 
 # --- Enums & Helpers ---
-# Keeping it simple with strings for now to avoid alembic enum complexities early on
-class FindingSeverity:
+
+class FindingSeverity(StrEnum):
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
@@ -18,12 +19,16 @@ class FindingSeverity:
     INFO = "info"
 
 
-class ScanStatus:
+class ScanStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 
 # --- Core Models ---
@@ -32,7 +37,7 @@ class Project(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     name: str = Field(index=True)
     description: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     
     scans: List["ScanJob"] = Relationship(back_populates="project")
     nodes: List["Node"] = Relationship(back_populates="project")
@@ -44,11 +49,10 @@ class ScanJob(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     project_id: UUID = Field(foreign_key="project.id")
     name: str
-    status: str = Field(default=ScanStatus.PENDING)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    status: ScanStatus = Field(default=ScanStatus.PENDING)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     
-    # Configuration for this scan (scope, agent directives, etc.)
     config: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
     
     project: Project = Relationship(back_populates="scans")
@@ -56,153 +60,83 @@ class ScanJob(SQLModel, table=True):
 
 
 class Node(SQLModel, table=True):
-    """
-    The fundamental unit of the Knowledge Graph.
-    Replaces 'Asset' to be more generic.
-    """
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     project_id: UUID = Field(foreign_key="project.id")
     
-    label: str # e.g. "Asset", "User", "Technology"
-    type: str  # domain, ip, url, service, file, technology
-    name: str = Field(index=True) # example.com, 80/tcp, admin 
+    label: str # e.g. "Asset"
+    type: str  # domain, ip, url, etc.
+    name: str = Field(index=True)
     
-    # Flexible metadata (e.g., {'version': '1.2', 'headers': {...}})
     properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
-    
-    # Workflow Status
     scanned: bool = Field(default=False)
-    
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     
     project: Project = Relationship(back_populates="nodes")
     findings: List["Finding"] = Relationship(back_populates="node")
 
 
 class Edge(SQLModel, table=True):
-    """
-    Relationships between Nodes.
-    e.g. Domain --resolves_to--> IP
-    """
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     source_id: UUID = Field(foreign_key="node.id")
     target_id: UUID = Field(foreign_key="node.id")
-    
-    # "resolves_to", "runs_on", "has_vulnerability"
     relation: str = Field(index=True)
-    
-    # Metadata for the edge (e.g. "first_seen", "confidence")
     properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
-    
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Attempt(SQLModel, table=True):
-    """
-    Operational Memory.
-    Prevents the agent from trying the same tool on the same target infinitely.
-    """
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     project_id: UUID = Field(foreign_key="project.id")
+    scan_id: Optional[UUID] = None
     
-    # What was attempted?
-    tool: str = Field(index=True) # "sqlmap"
-    target: str = Field(index=True) # "http://example.com/id=1"
+    tool: str
+    target: str
+    status: str
+    reason: Optional[str] = None
     
-    # Outcome
-    status: str # "success", "failure", "skipped"
-    reason: Optional[str] = None # "Connection timeout"
+    properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
     
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    
-    # Relationships
-    project: "Project" = Relationship(back_populates="attempts")
+    project: Project = Relationship(back_populates="attempts")
 
 
 class Task(SQLModel, table=True):
-    """
-    Directives for Agents.
-    """
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     project_id: UUID = Field(foreign_key="project.id")
     
-    name: str # "Scan Port 80"
-    status: str = Field(default="pending") # pending, running, completed, failed
-    
-    assigned_agent_id: str # "Scout_1"
-    parent_task_id: Optional[UUID] = Field(foreign_key="task.id", default=None)
-    
-    # Task directive as JSON string containing goal, target, role, etc.
-    directive: str = Field(default="{}")
-    
-    # Task properties for storing additional metadata (e.g., approval status, approved_tools)
-    properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
-    
+    name: str
+    directive: str
+    status: str
+    assigned_agent_id: Optional[str] = None
     result: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
     
-    # Relationships
-    project: "Project" = Relationship(back_populates="tasks")
-    parent_task: Optional["Task"] = Relationship(back_populates="child_tasks", sa_relationship_kwargs={"remote_side": "Task.id"})
-    child_tasks: List["Task"] = Relationship(back_populates="parent_task")
+    created_at: datetime = Field(default_factory=utc_now)
+    project: Project = Relationship(back_populates="tasks")
 
 
 class Finding(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     node_id: UUID = Field(foreign_key="node.id")
-    # scan_id is optional as findings might be general project knowledge
-    scan_id: Optional[UUID] = Field(default=None, foreign_key="scanjob.id")
     
     title: str
     description: str
-    severity: str = Field(default=FindingSeverity.INFO)
-    cve_id: Optional[str] = None
+    severity: FindingSeverity = Field(default=FindingSeverity.INFO)
+    vector: Optional[str] = None
+    proof: Optional[str] = None
     
-    # Evidence: screenshot paths, raw request/response, etc.
-    evidence: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
     
-    remediation: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
     node: Node = Relationship(back_populates="findings")
 
 
 class AgentLog(SQLModel, table=True):
-    """
-    The 'Hive Mind' audit trail. Every thought and action is recorded here.
-    """
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     scan_id: UUID = Field(foreign_key="scanjob.id")
-    agent_name: str
     
-    step: str # "thinking", "executing_tool", "processing_result"
-    content: str # The thought or tool output
-    
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    agent_id: str
+    message: str
+    level: str = Field(default="INFO")
+    timestamp: datetime = Field(default_factory=utc_now)
     
     scan: ScanJob = Relationship(back_populates="logs")
-
-# --- CVE Knowledge Base ---
-
-class VulnerabilityDefinition(SQLModel, table=True):
-    """
-    Local copy of NVD data for quick lookup.
-    """
-    cve_id: str = Field(primary_key=True)
-    description: str
-    cvss_score: Optional[float] = None
-    affected_products: List[str] = Field(default=[], sa_column=Column(JSON)) 
-    # We will use Postgres Full Text Search on this field later
-
-class CommandCache(SQLModel, table=True):
-    """
-    Cache for tool outputs to prevent redundant execution.
-    Part of "The Hive Mind".
-    """
-    command_hash: str = Field(primary_key=True) # e.g. "nmap:192.168.1.1" (hashed or normalized)
-    tool_name: str = Field(index=True)
-    args_json: str # Normalized JSON of args
-    
-    output: str # The raw or compressed output
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    expires_at: Optional[datetime] = None

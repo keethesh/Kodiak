@@ -2,17 +2,12 @@ from typing import Dict, Type, Optional
 from kodiak.core.tools.base import KodiakTool
 
 class ToolInventory:
-    def __init__(self, event_manager=None):
-        """Initialize ToolInventory with optional EventManager"""
+    def __init__(self):
+        """Initialize ToolInventory"""
         self._tools: Dict[str, KodiakTool] = {}
-        self._event_manager = event_manager
 
     def register(self, tool: KodiakTool):
         """Register a tool with the inventory"""
-        # Inject EventManager into the tool if available
-        if self._event_manager and hasattr(tool, 'event_manager'):
-            tool.event_manager = self._event_manager
-        
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> KodiakTool | None:
@@ -46,6 +41,7 @@ class ToolInventory:
         from kodiak.core.tools.definitions.python_runtime import (
             PythonStartTool, PythonExecuteTool, PythonHistoryTool, PythonStopTool
         )
+        from kodiak.core.tools.definitions.complete_scan import CompleteScanTool
 
         # Register all tools
         self.register(NmapTool())
@@ -73,6 +69,9 @@ class ToolInventory:
         self.register(PythonExecuteTool())
         self.register(PythonHistoryTool())
         self.register(PythonStopTool())
+        
+        # Register scan control tools
+        self.register(CompleteScanTool())
 
 
 # Legacy global instance for backward compatibility
@@ -125,4 +124,7 @@ AVAILABLE_TOOLS = {
     
     # OSINT & Information Gathering
     "web_search": "Web search for reconnaissance",
+
+    # Scan Control
+    "complete_scan": "Signal scan completion with summary",
 }

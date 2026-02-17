@@ -4,7 +4,7 @@ Prevents infinite loops by tracking tool execution attempts and implementing sma
 """
 
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, Tuple
 from uuid import UUID
 from loguru import logger
@@ -108,9 +108,6 @@ class DeduplicationService:
     ) -> Tuple[bool, Optional[str]]:
         """
         Determine if this tool execution attempt should be skipped based on deduplication logic.
-        
-        Returns:
-            Tuple of (should_skip: bool, reason: Optional[str])
         """
         try:
             normalized_target = self._normalize_target(tool, target)
@@ -126,7 +123,7 @@ class DeduplicationService:
                     tool in self.strict_dedup_tools):
                     
                     # Check if the success is still within cache duration
-                    time_since_success = datetime.utcnow() - existing_attempt.timestamp
+                    time_since_success = datetime.now(timezone.utc) - existing_attempt.timestamp
                     if time_since_success < self.success_cache_duration:
                         return True, f"Tool {tool} already succeeded on {normalized_target} within {self.success_cache_duration}"
                 
@@ -140,7 +137,7 @@ class DeduplicationService:
                         return True, f"Tool {tool} has failed {failed_count} times on {normalized_target}, skipping"
                     
                     # Check if enough time has passed since last failure
-                    time_since_failure = datetime.utcnow() - existing_attempt.timestamp
+                    time_since_failure = datetime.now(timezone.utc) - existing_attempt.timestamp
                     if time_since_failure < self.failure_retry_delay:
                         return True, f"Tool {tool} failed recently on {normalized_target}, waiting for retry delay"
             
@@ -148,7 +145,6 @@ class DeduplicationService:
             
         except Exception as e:
             logger.error(f"Error checking deduplication for {tool} on {target}: {e}")
-            # On error, allow the attempt to proceed
             return False, None
 
     async def record_attempt(
@@ -162,17 +158,6 @@ class DeduplicationService:
     ) -> Attempt:
         """
         Record a tool execution attempt in the database.
-        
-        Args:
-            session: Database session
-            project_id: Project UUID
-            tool: Tool name
-            target: Target identifier
-            status: "success", "failure", or "skipped"
-            reason: Optional reason for the status
-            
-        Returns:
-            Created Attempt record
         """
         try:
             normalized_target = self._normalize_target(tool, target)
@@ -183,7 +168,7 @@ class DeduplicationService:
                 target=normalized_target,
                 status=status,
                 reason=reason,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             
             return await attempt_crud.create(session, attempt_record)
@@ -201,15 +186,6 @@ class DeduplicationService:
     ) -> list[Attempt]:
         """
         Get attempt history for context injection into agent prompts.
-        
-        Args:
-            session: Database session
-            project_id: Project UUID
-            tool: Optional tool filter
-            limit: Maximum number of attempts to return
-            
-        Returns:
-            List of recent Attempt records
         """
         try:
             if tool:
@@ -224,12 +200,10 @@ class DeduplicationService:
     async def get_deduplication_stats(self, session: Any, project_id: UUID) -> Dict[str, Any]:
         """
         Get statistics about deduplication for monitoring and debugging.
-        
-        Returns:
-            Dictionary with deduplication statistics
         """
         try:
             attempts = await attempt_crud.get_attempts_by_project(session, project_id, 1000)
+            now = datetime.now(timezone.utc)
             
             stats = {
                 "total_attempts": len(attempts),
@@ -238,7 +212,7 @@ class DeduplicationService:
                 "skipped_attempts": len([a for a in attempts if a.status == "skipped"]),
                 "tools_used": len(set(a.tool for a in attempts)),
                 "unique_targets": len(set(a.target for a in attempts)),
-                "recent_activity": len([a for a in attempts if (datetime.utcnow() - a.timestamp) < timedelta(hours=1)])
+                "recent_activity": len([a for a in attempts if (now - a.timestamp) < timedelta(hours=1)])
             }
             
             # Tool-specific stats
