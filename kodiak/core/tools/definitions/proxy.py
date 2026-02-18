@@ -138,18 +138,21 @@ class ProxyStartTool(KodiakTool):
             _proxy_session.is_running = True
             _proxy_session.session_id = f"proxy_{int(time.time())}"
             
-            # Send WebSocket update for session start
-            from kodiak.services.websocket_manager import manager
-            await manager.send_session_update(
-                session_type="proxy",
-                session_id=_proxy_session.session_id,
-                status="started",
-                data={
-                    "proxy_url": f"http://{interface}:{port}",
-                    "ssl_intercept": args.get('ssl_intercept', True),
-                    "log_requests": args.get('log_requests', True)
-                }
-            )
+            # Notify WebSocket clients if available (no-op in CLI mode)
+            try:
+                from kodiak.services.websocket_manager import manager
+                await manager.send_session_update(
+                    session_type="proxy",
+                    session_id=_proxy_session.session_id,
+                    status="started",
+                    data={
+                        "proxy_url": f"http://{interface}:{port}",
+                        "ssl_intercept": args.get('ssl_intercept', True),
+                        "log_requests": args.get('log_requests', True)
+                    }
+                )
+            except Exception:
+                pass  # WebSocket not available in CLI mode
             
             # In a real implementation, this would start an actual HTTP proxy server
             # For now, we'll simulate it and provide the framework
@@ -569,22 +572,23 @@ class ProxyStopTool(KodiakTool):
         
         # Stop proxy
         _proxy_session.is_running = False
-        
-        # Send WebSocket update for session stop
-        from kodiak.services.websocket_manager import manager
-        await manager.send_session_update(
-            session_type="proxy",
-            session_id=_proxy_session.session_id,
-            status="stopped",
-            data={
-                "total_requests": total_requests,
-                "total_responses": total_responses
-            }
-        )
-        
-        # Generate session summary
         total_requests = len(_proxy_session.requests)
         total_responses = len(_proxy_session.responses)
+        
+        # Notify WebSocket clients if available (no-op in CLI mode)
+        try:
+            from kodiak.services.websocket_manager import manager
+            await manager.send_session_update(
+                session_type="proxy",
+                session_id=_proxy_session.session_id,
+                status="stopped",
+                data={
+                    "total_requests": total_requests,
+                    "total_responses": total_responses
+                }
+            )
+        except Exception:
+            pass  # WebSocket not available in CLI mode
         
         summary = f"Proxy session stopped.\n"
         summary += f"Session ID: {_proxy_session.session_id}\n"

@@ -143,19 +143,22 @@ class TerminalStartTool(KodiakTool):
             
             session.add_command(test_command, result.stdout, result.exit_code)
             
-            # Send WebSocket update for session start
-            from kodiak.services.websocket_manager import manager
-            await manager.send_session_update(
-                session_type="terminal",
-                session_id=session_id,
-                status="started",
-                data={
-                    "shell_type": shell_type,
-                    "working_directory": working_directory,
-                    "docker_image": docker_image,
-                    "test_result": result.stdout.strip()
-                }
-            )
+            # Notify WebSocket clients if available (no-op in CLI mode)
+            try:
+                from kodiak.services.websocket_manager import manager
+                await manager.send_session_update(
+                    session_type="terminal",
+                    session_id=session_id,
+                    status="started",
+                    data={
+                        "shell_type": shell_type,
+                        "working_directory": working_directory,
+                        "docker_image": docker_image,
+                        "test_result": result.stdout.strip()
+                    }
+                )
+            except Exception:
+                pass  # WebSocket not available in CLI mode
             
             summary = f"Terminal session started successfully\n"
             summary += f"Session ID: {session_id}\n"
@@ -631,21 +634,22 @@ class TerminalStopTool(KodiakTool):
         
         # Mark session as inactive
         session.is_active = False
-        
-        # Send WebSocket update for session stop
-        from kodiak.services.websocket_manager import manager
-        await manager.send_session_update(
-            session_type="terminal",
-            session_id=session_id,
-            status="stopped",
-            data={
-                "duration_minutes": duration,
-                "total_commands": len(session.history)
-            }
-        )
-        
-        # Generate session summary
         duration = int((time.time() - session.created_at) / 60)
+        
+        # Notify WebSocket clients if available (no-op in CLI mode)
+        try:
+            from kodiak.services.websocket_manager import manager
+            await manager.send_session_update(
+                session_type="terminal",
+                session_id=session_id,
+                status="stopped",
+                data={
+                    "duration_minutes": duration,
+                    "total_commands": len(session.history)
+                }
+            )
+        except Exception:
+            pass  # WebSocket not available in CLI mode
         
         summary = f"Terminal session {session_id} stopped.\n"
         summary += f"Session Duration: {duration} minutes\n"

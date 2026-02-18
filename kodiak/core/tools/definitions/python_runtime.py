@@ -172,19 +172,28 @@ class PythonStartTool(KodiakTool):
         # Test session with a simple command
         test_result = session.execute_code("print('Python session initialized')")
         
-        # Send WebSocket update for session start
-        from kodiak.services.websocket_manager import manager
-        await manager.send_session_update(
-            session_type="python",
-            session_id=session_id,
-            status="started",
-            data={
-                "session_name": session_name,
-                "available_libraries": available_libs,
-                "test_successful": test_result["success"]
-            }
-        )
-        
+        # Compute available libraries before using in WebSocket payload
+        available_libs = []
+        for name, obj in session.globals_dict.items():
+            if hasattr(obj, '__name__') and not name.startswith('_'):
+                available_libs.append(name)
+
+        # Notify WebSocket clients if available (no-op in CLI mode)
+        try:
+            from kodiak.services.websocket_manager import manager
+            await manager.send_session_update(
+                session_type="python",
+                session_id=session_id,
+                status="started",
+                data={
+                    "session_name": session_name,
+                    "available_libraries": available_libs,
+                    "test_successful": test_result["success"]
+                }
+            )
+        except Exception:
+            pass  # WebSocket not available in CLI mode
+
         summary = f"Python Runtime Session Started\n"
         summary += "=" * 35 + "\n\n"
         summary += f"Session ID: {session_id}\n"
@@ -192,12 +201,6 @@ class PythonStartTool(KodiakTool):
         summary += f"Pre-loaded Libraries: {'Yes' if args.get('preload_libraries', True) else 'No'}\n"
         summary += f"Available Globals: {len(session.globals_dict)} items\n"
         summary += f"Test Output: {test_result['output'].strip()}\n\n"
-        
-        # Show available libraries
-        available_libs = []
-        for name, obj in session.globals_dict.items():
-            if hasattr(obj, '__name__') and not name.startswith('_'):
-                available_libs.append(name)
         
         if available_libs:
             summary += f"Pre-loaded Libraries: {', '.join(sorted(available_libs))}\n"
@@ -600,21 +603,22 @@ class PythonStopTool(KodiakTool):
         
         # Mark session as inactive
         session.is_active = False
-        
-        # Send WebSocket update for session stop
-        from kodiak.services.websocket_manager import manager
-        await manager.send_session_update(
-            session_type="python",
-            session_id=session_id,
-            status="stopped",
-            data={
-                "duration_minutes": duration,
-                "total_executions": len(session.execution_history)
-            }
-        )
-        
-        # Generate session summary
         duration = int((time.time() - session.created_at) / 60)
+        
+        # Notify WebSocket clients if available (no-op in CLI mode)
+        try:
+            from kodiak.services.websocket_manager import manager
+            await manager.send_session_update(
+                session_type="python",
+                session_id=session_id,
+                status="stopped",
+                data={
+                    "duration_minutes": duration,
+                    "total_executions": len(session.execution_history)
+                }
+            )
+        except Exception:
+            pass  # WebSocket not available in CLI mode
         
         summary = f"Python session {session_id} stopped.\n"
         summary += f"Session Duration: {duration} minutes\n"

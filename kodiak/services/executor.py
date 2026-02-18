@@ -240,3 +240,47 @@ def get_executor(mode: str = "local") -> ServiceExecutor:
     if mode == "mock":
         return MockExecutor()
     return LocalExecutor()
+
+
+async def get_docker_executor(preferred_image: str | None = None) -> DockerExecutor:
+    """
+    Returns a DockerExecutor, falling back to kalilinux/kali-rolling if the
+    preferred image is not accessible (e.g. private registry denied).
+    """
+    import asyncio
+
+    # HARDCODED fallback: public Kali image used when toolbox is unavailable
+    fallback_image = "kalilinux/kali-rolling"
+    image = preferred_image or fallback_image
+
+    if image != fallback_image:
+        # Quick check: try to inspect the image locally first
+        try:
+            check = await asyncio.create_subprocess_exec(
+                "docker", "image", "inspect", image,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await check.wait()
+            if check.returncode != 0:
+                # Not cached locally — try a pull (with short timeout)
+                pull = await asyncio.create_subprocess_exec(
+                    "docker", "pull", image,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                try:
+                    await asyncio.wait_for(pull.wait(), timeout=15)
+                    if pull.returncode != 0:
+                        logger.warning(f"Could not pull {image}, falling back to {fallback_image}")
+                        image = fallback_image
+                except asyncio.TimeoutError:
+                    pull.kill()
+                    logger.warning(f"Pull of {image} timed out, falling back to {fallback_image}")
+                    image = fallback_image
+        except Exception as e:
+            logger.warning(f"Docker image check failed ({e}), falling back to {fallback_image}")
+            image = fallback_image
+
+    return DockerExecutor(image=image)
+
