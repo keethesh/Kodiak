@@ -92,6 +92,12 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         from kodiak.api.events import event_manager
         from kodiak.core.config import settings
         
+        # Silence loguru so log messages don't break the Rich Live display
+        logger.remove()
+        log_file = Path.home() / ".kodiak" / "logs" / "scan.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(log_file, level="DEBUG", rotation="10 MB")
+        
         if model:
             settings.llm_model = model
             
