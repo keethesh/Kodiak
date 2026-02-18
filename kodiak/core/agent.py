@@ -355,27 +355,61 @@ class KodiakAgent:
         return context_str
 
     async def _summarize_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Keep history within reasonable limits.
-        
-        CRITICAL: Never slice in the middle of an assistant+tool pair.
-        LiteLLM requires every 'tool' role message to have a preceding
-        assistant message with matching tool_calls. If we cut the assistant
-        message off but keep the tool response, LiteLLM raises
-        'Missing corresponding tool call for tool response message'.
+        """Keep history within reasonable limits, respecting Gemini's strict turn ordering.
+
+        Rules enforced:
+        1. Never start the slice on a 'tool' message (orphaned tool response).
+        2. Never end the slice on an assistant message that has tool_calls but
+           no following tool response (Gemini: function call must be followed by
+           a function response turn).
+        3. Never have two consecutive non-assistant messages without an assistant
+           message in between.
         """
         max_messages = 20  # keep last N messages
         if len(history) <= max_messages:
-            return history
+            return self._sanitize_for_gemini(history)
 
-        # Start from the naive cut point and walk forward until we land on
-        # a message that is NOT a tool response (role != "tool").
-        # This ensures the slice always starts at a user or assistant message,
-        # never in the middle of an assistant→tool block.
+        # Walk forward from the naive cut until we land on a non-tool message
         cut = len(history) - max_messages
         while cut < len(history) and history[cut].get("role") == "tool":
             cut += 1
 
-        return history[cut:]
+        return self._sanitize_for_gemini(history[cut:])
+
+    def _sanitize_for_gemini(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Remove any assistant+tool_calls messages that have no following tool response.
+        
+        Gemini requires: assistant(tool_calls) → tool(response) pairs to be complete.
+        An assistant message with tool_calls that has no following tool message
+        causes INVALID_ARGUMENT errors.
+        """
+        result = []
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            role = msg.get("role")
+            tool_calls = msg.get("tool_calls")
+
+            if role == "assistant" and tool_calls:
+                # Check that the next message(s) are tool responses for each call
+                j = i + 1
+                expected_ids = {tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                                for tc in tool_calls}
+                found_ids = set()
+                while j < len(messages) and messages[j].get("role") == "tool":
+                    found_ids.add(messages[j].get("tool_call_id"))
+                    j += 1
+
+                if expected_ids and not found_ids:
+                    # This assistant tool_call has no following tool response — skip it
+                    i += 1
+                    continue
+
+            result.append(msg)
+            i += 1
+
+        return result
+
 
 
     async def act(
