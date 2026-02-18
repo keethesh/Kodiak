@@ -92,8 +92,9 @@ class DockerExecutor(ServiceExecutor):
     Runs commands inside Docker containers.
     Used when Kodiak runs locally but needs to execute security tools in a containerized environment.
     """
-    def __init__(self, image: str = "kalilinux/kali-rolling"):
+    def __init__(self, image: str = "kalilinux/kali-rolling", entrypoint: str | None = None):
         self.image = image
+        self.entrypoint = entrypoint
         logger.info(f"DockerExecutor initialized with image: {self.image}")
 
     async def run_command(
@@ -113,6 +114,10 @@ class DockerExecutor(ServiceExecutor):
             "-v", f"{work_dir}:/workspace",  # Mount working directory
             "-w", "/workspace",  # Set working directory inside container
         ]
+        
+        # Override entrypoint if specified
+        if self.entrypoint is not None:
+            docker_cmd.extend(["--entrypoint", self.entrypoint])
         
         # Add environment variables
         if env:
@@ -242,16 +247,20 @@ def get_executor(mode: str = "local") -> ServiceExecutor:
     return LocalExecutor()
 
 
-async def get_docker_executor(preferred_image: str | None = None) -> DockerExecutor:
+async def get_docker_executor(
+    preferred_image: str | None = None, 
+    fallback_image: str = "kalilinux/kali-rolling",
+    fallback_entrypoint: str | None = None
+) -> DockerExecutor:
     """
-    Returns a DockerExecutor, falling back to kalilinux/kali-rolling if the
+    Returns a DockerExecutor, falling back to fallback_image if the
     preferred image is not accessible (e.g. private registry denied).
     """
     import asyncio
 
-    # HARDCODED fallback: public Kali image used when toolbox is unavailable
-    fallback_image = "kalilinux/kali-rolling"
+    # Use the provided fallback image (defaulting to kali-rolling if not specified)
     image = preferred_image or fallback_image
+    entrypoint = None
 
     if image != fallback_image:
         # Quick check: try to inspect the image locally first
@@ -274,13 +283,16 @@ async def get_docker_executor(preferred_image: str | None = None) -> DockerExecu
                     if pull.returncode != 0:
                         logger.warning(f"Could not pull {image}, falling back to {fallback_image}")
                         image = fallback_image
+                        entrypoint = fallback_entrypoint
                 except asyncio.TimeoutError:
                     pull.kill()
                     logger.warning(f"Pull of {image} timed out, falling back to {fallback_image}")
                     image = fallback_image
+                    entrypoint = fallback_entrypoint
         except Exception as e:
             logger.warning(f"Docker image check failed ({e}), falling back to {fallback_image}")
             image = fallback_image
+            entrypoint = fallback_entrypoint
 
-    return DockerExecutor(image=image)
+    return DockerExecutor(image=image, entrypoint=entrypoint)
 

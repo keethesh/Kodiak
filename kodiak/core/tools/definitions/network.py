@@ -104,7 +104,11 @@ class NmapTool(KodiakTool):
         try:
             from kodiak.core.config import settings
             from kodiak.services.executor import get_docker_executor
-            executor = await get_docker_executor(settings.toolbox_image)
+            executor = await get_docker_executor(
+                settings.toolbox_image, 
+                fallback_image="instrumentisto/nmap",
+                fallback_entrypoint=""
+            )
             result = await executor.run_command(command)
             
             if result.exit_code != 0:

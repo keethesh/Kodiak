@@ -66,14 +66,13 @@ class SubfinderTool(KodiakTool):
         try:
             # Docker is the PRIMARY execution path for security tools
             from kodiak.core.config import settings
+            from kodiak.services.executor import get_docker_executor
             
-            try:
-                executor = get_executor("docker")
-                executor.image = settings.toolbox_image
-            except Exception:
-                # Fallback: Local execution only if Docker unavailable
-                # HARDCODED: This should rarely be used in production
-                executor = get_executor()
+            executor = await get_docker_executor(
+                settings.toolbox_image,
+                fallback_image="projectdiscovery/subfinder:latest",
+                fallback_entrypoint=""
+            )
             
             result = await executor.run_command(command)
             
@@ -252,14 +251,13 @@ class HttpxTool(KodiakTool):
         try:
             # Docker is the PRIMARY execution path for security tools
             from kodiak.core.config import settings
+            from kodiak.services.executor import get_docker_executor
             
-            try:
-                executor = get_executor("docker")
-                executor.image = settings.toolbox_image
-            except Exception:
-                # Fallback: Local execution only if Docker unavailable
-                # HARDCODED: This should rarely be used in production
-                executor = get_executor()
+            executor = await get_docker_executor(
+                settings.toolbox_image,
+                fallback_image="projectdiscovery/httpx:latest",
+                fallback_entrypoint=""
+            )
             
             result = await executor.run_command(command, stdin=stdin_data)
             
