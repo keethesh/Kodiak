@@ -355,8 +355,28 @@ class KodiakAgent:
         return context_str
 
     async def _summarize_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Keep history within reasonable limits"""
-        return history[-15:]
+        """Keep history within reasonable limits.
+        
+        CRITICAL: Never slice in the middle of an assistant+tool pair.
+        LiteLLM requires every 'tool' role message to have a preceding
+        assistant message with matching tool_calls. If we cut the assistant
+        message off but keep the tool response, LiteLLM raises
+        'Missing corresponding tool call for tool response message'.
+        """
+        max_messages = 20  # keep last N messages
+        if len(history) <= max_messages:
+            return history
+
+        # Start from the naive cut point and walk forward until we land on
+        # a message that is NOT a tool response (role != "tool").
+        # This ensures the slice always starts at a user or assistant message,
+        # never in the middle of an assistant→tool block.
+        cut = len(history) - max_messages
+        while cut < len(history) and history[cut].get("role") == "tool":
+            cut += 1
+
+        return history[cut:]
+
 
     async def act(
         self, 
