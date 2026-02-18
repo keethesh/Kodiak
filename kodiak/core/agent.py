@@ -247,6 +247,16 @@ class KodiakAgent:
             
             # Add summarized heart of history
             condensed_history = await self._summarize_history(history)
+            
+            # Gemini Turn Ordering Fix:
+            # The conversation (after system prompt) MUST start with a user message.
+            # If truncation left us starting with an assistant message, prepend a dummy user message.
+            if condensed_history and condensed_history[0].get("role") == "assistant":
+                condensed_history.insert(0, {
+                    "role": "user",
+                    "content": "..."  # Minimal continuation prompt to satisfy alternating roles
+                })
+                
             messages.extend(condensed_history)
             
             # Get LLM configuration
