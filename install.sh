@@ -9,6 +9,7 @@ INSTALL_DIR="$HOME/.kodiak"
 BIN_DIR="$HOME/.local/bin"
 UV_VERSION="0.5.11"
 FORCE_INSTALL="${FORCE_INSTALL:-false}"
+UPDATE_INSTALL="${UPDATE_INSTALL:-false}"
 SKIP_DOCKER="${SKIP_DOCKER:-false}"
 
 # Colors for output
@@ -201,7 +202,7 @@ install_kodiak() {
         fi
     fi
     
-    if [[ "$kodiak_works" == "true" ]] && [[ "$FORCE_INSTALL" != "true" ]]; then
+    if [[ "$kodiak_works" == "true" ]] && [[ "$FORCE_INSTALL" != "true" ]] && [[ "$UPDATE_INSTALL" != "true" ]]; then
         local current_version
         current_version=$(kodiak --version 2>/dev/null | grep -o 'v[0-9.]*' || echo "unknown")
         
@@ -210,7 +211,7 @@ install_kodiak() {
         # But source version is in pyproject.toml which we might not have here yet if curling.
         
         print_warning "Kodiak $current_version is already installed."
-        print_status "To force a reinstall/upgrade, run with --force"
+        print_status "To force a reinstall/upgrade, run with --force or --update"
         
         # Determine if we should auto-upgrade (e.g. if we are installing specific version)
         if [[ "$KODIAK_VERSION" != "latest" ]] && [[ "v$KODIAK_VERSION" != "$current_version" ]]; then
@@ -255,8 +256,14 @@ install_kodiak() {
     
     # Try PyPI installation first
     print_status "Attempting PyPI installation..."
-    if uv tool install kodiak-pentest[full] 2>/dev/null; then
-        print_success "Kodiak installed from PyPI"
+    
+    local uv_install_cmd="uv tool install kodiak-pentest[full]"
+    if [[ "$UPDATE_INSTALL" == "true" ]] || [[ "$FORCE_INSTALL" == "true" ]]; then
+        uv_install_cmd="$uv_install_cmd --force"
+    fi
+    
+    if $uv_install_cmd 2>/dev/null; then
+        print_success "Kodiak installed/updated from PyPI"
         
         install_playwright --with kodiak-pentest
         
@@ -277,56 +284,91 @@ install_from_source() {
     fi
     
     local source_dir="$INSTALL_DIR/source"
+    local is_update=false
     
-    # Clean up existing installation
-    if [[ -d "$source_dir" ]]; then
-        print_status "Removing existing source installation..."
-        rm -rf "$source_dir"
+    if [[ "$UPDATE_INSTALL" == "true" ]] && [[ -d "$source_dir/.git" ]]; then
+        is_update=true
     fi
     
-    # Aggressively clean up ALL existing Kodiak installations
-    print_status "Cleaning up any existing Kodiak installations..."
-    
-    # Remove UV tool installations
-    if command_exists uv; then
-        uv tool uninstall kodiak-pentest 2>/dev/null || true
-        uv tool uninstall kodiak 2>/dev/null || true
+    # If we are already in a Kodiak source directory, use it
+    if [[ -f "pyproject.toml" ]] && grep -q "name = \"kodiak-pentest\"" pyproject.toml 2>/dev/null; then
+        print_status "Found local Kodiak source code. Installing from current directory..."
+        source_dir="$PWD"
+        cd "$source_dir"
+        
+        if [[ "$is_update" == "true" ]]; then
+            print_status "Pulling latest changes in local repository..."
+            git pull origin HEAD || true
+        fi
+    else
+        # Not in a source dir, we will use ~/.kodiak/source
+        if [[ "$is_update" == "true" ]]; then
+            print_status "Updating existing Kodiak repository..."
+            cd "$source_dir"
+            git fetch --all --tags
+        else
+            # Clean up existing installation
+            if [[ -d "$source_dir" ]]; then
+                print_status "Removing existing source installation..."
+                rm -rf "$source_dir"
+            fi
+            
+            # Aggressively clean up ALL existing Kodiak installations
+            print_status "Cleaning up any existing Kodiak installations..."
+            
+            # Remove UV tool installations
+            if command_exists uv; then
+                uv tool uninstall kodiak-pentest 2>/dev/null || true
+                uv tool uninstall kodiak 2>/dev/null || true
+            fi
+            
+            # Remove pipx installations
+            if command_exists pipx; then
+                pipx uninstall kodiak-pentest 2>/dev/null || true
+                pipx uninstall kodiak 2>/dev/null || true
+            fi
+            
+            # Remove any existing kodiak binary in common locations
+            rm -f "$HOME/.local/bin/kodiak" 2>/dev/null || true
+            rm -f "/usr/local/bin/kodiak" 2>/dev/null || true
+            
+            # Remove UV tool directory for kodiak
+            rm -rf "$HOME/.local/share/uv/tools/kodiak-pentest" 2>/dev/null || true
+            rm -rf "$HOME/.local/share/uv/tools/kodiak" 2>/dev/null || true
+            
+            # Clone repository
+            print_status "Cloning Kodiak repository..."
+            if ! git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
+                print_error "Failed to clone repository"
+                exit 1
+            fi
+            
+            cd "$source_dir"
+        fi
     fi
-    
-    # Remove pipx installations
-    if command_exists pipx; then
-        pipx uninstall kodiak-pentest 2>/dev/null || true
-        pipx uninstall kodiak 2>/dev/null || true
-    fi
-    
-    # Remove any existing kodiak binary in common locations
-    rm -f "$HOME/.local/bin/kodiak" 2>/dev/null || true
-    rm -f "/usr/local/bin/kodiak" 2>/dev/null || true
-    
-    # Remove UV tool directory for kodiak
-    rm -rf "$HOME/.local/share/uv/tools/kodiak-pentest" 2>/dev/null || true
-    rm -rf "$HOME/.local/share/uv/tools/kodiak" 2>/dev/null || true
-    
-    # Clone repository
-    print_status "Cloning Kodiak repository..."
-    if ! git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
-        print_error "Failed to clone repository"
-        exit 1
-    fi
-    
-    cd "$source_dir"
     
     # Checkout specific branch/version if specified
     if [[ "$KODIAK_VERSION" != "latest" ]]; then
         print_status "Checking out version $KODIAK_VERSION..."
         git checkout "$KODIAK_VERSION" || {
-            print_warning "Version $KODIAK_VERSION not found, using main branch"
+            print_warning "Version $KODIAK_VERSION not found"
         }
+        
+        if [[ "$is_update" == "true" ]]; then
+            git pull origin "$KODIAK_VERSION" || true
+        fi
     else
         # Use refactor branch for now (until merged to main)
         if git show-ref --verify --quiet refs/remotes/origin/refactor/backend-rewrite; then
             print_status "Using refactor/backend-rewrite branch..."
             git checkout refactor/backend-rewrite
+            if [[ "$is_update" == "true" ]] && [[ "$source_dir" != "$PWD" || $(git symbolic-ref --short HEAD 2>/dev/null) == "refactor/backend-rewrite" ]]; then
+                git pull origin refactor/backend-rewrite || true
+            fi
+        else
+            if [[ "$is_update" == "true" ]] && [[ "$source_dir" != "$PWD" || $(git symbolic-ref --short HEAD 2>/dev/null) == "main" ]]; then
+                git pull origin main || true
+            fi
         fi
     fi
     
@@ -544,6 +586,7 @@ handle_arguments() {
                 echo "  --help, -h         Show this help message"
                 echo "  --version VERSION  Install specific version/branch"
                 echo "  --force, -f        Force reinstall even if already installed"
+                echo "  --update, -u       Update Kodiak to the latest version via git pull or PyPI upgrade"
                 echo "  --skip-docker      Skip building the Kodiak toolbox Docker image"
                 echo "  --verbose, -v      Enable verbose output"
                 echo
@@ -568,6 +611,10 @@ handle_arguments() {
                 ;;
             --force|-f)
                 FORCE_INSTALL=true
+                shift
+                ;;
+            --update|-u)
+                UPDATE_INSTALL=true
                 shift
                 ;;
             --skip-docker)
