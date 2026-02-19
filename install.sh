@@ -423,7 +423,7 @@ install_from_source() {
     fi
     
     # Install playwright browsers
-    install_playwright
+    install_playwright --with ".[full]"
     
     print_success "Kodiak installed from source"
 }
@@ -529,10 +529,10 @@ setup_docker() {
                 local dockerfile_path=""
                 if [[ -f "containers/Dockerfile" ]]; then
                     dockerfile_path="containers/Dockerfile"
-                    build_context="."
+                    build_context="containers"
                 elif [[ -f "$INSTALL_DIR/source/containers/Dockerfile" ]]; then
                     dockerfile_path="$INSTALL_DIR/source/containers/Dockerfile"
-                    build_context="$INSTALL_DIR/source"
+                    build_context="$INSTALL_DIR/source/containers"
                 fi
                 
                 if [[ -n "$dockerfile_path" ]]; then
