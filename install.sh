@@ -70,6 +70,14 @@ command_exists() {
 check_requirements() {
     print_step "Checking system requirements..."
     
+    # Check for root execution
+    if [[ $EUID -eq 0 ]]; then
+        print_warning "Running as root! Kodiak tool packages will be installed to /root/.local/bin."
+        print_status "Browser binaries and config will also be placed in /root."
+        print_warning "If this is unintended, press Ctrl+C within 5 seconds to cancel."
+        sleep 5
+    fi
+    
     # Check Python version
     if ! command_exists python3; then
         print_error "Python 3 is required but not installed"
@@ -298,7 +306,25 @@ install_from_source() {
         
         if [[ "$is_update" == "true" ]]; then
             print_status "Pulling latest changes in local repository..."
-            git pull origin HEAD || true
+            
+            # Handle uncommitted changes
+            local dirty=false
+            if ! git diff-index --quiet HEAD --; then
+                print_warning "Local repository has uncommitted changes."
+                print_status "Stashing local changes..."
+                git stash || true
+                dirty=true
+            fi
+            
+            git pull origin HEAD --rebase || {
+                print_error "Failed to pull updates from repository. You may need to fetch manually."
+                exit 1
+            }
+            
+            if [[ "$dirty" == "true" ]]; then
+                print_status "Restoring local changes..."
+                git stash pop || print_warning "Merge conflicts detected while restoring stash. Please resolve manually."
+            fi
         fi
     else
         # Not in a source dir, we will use ~/.kodiak/source
@@ -355,7 +381,18 @@ install_from_source() {
         }
         
         if [[ "$is_update" == "true" ]]; then
-            git pull origin "$KODIAK_VERSION" || true
+            # Handle uncommitted changes for specific version pull
+            local dirty=false
+            if ! git diff-index --quiet HEAD --; then
+                git stash || true
+                dirty=true
+            fi
+            
+            git pull origin "$KODIAK_VERSION" --rebase || true
+            
+            if [[ "$dirty" == "true" ]]; then
+                git stash pop || print_warning "Conflicts restoring stash."
+            fi
         fi
     else
         # Use refactor branch for now (until merged to main)
@@ -363,11 +400,11 @@ install_from_source() {
             print_status "Using refactor/backend-rewrite branch..."
             git checkout refactor/backend-rewrite
             if [[ "$is_update" == "true" ]] && [[ "$source_dir" != "$PWD" || $(git symbolic-ref --short HEAD 2>/dev/null) == "refactor/backend-rewrite" ]]; then
-                git pull origin refactor/backend-rewrite || true
+                git pull origin refactor/backend-rewrite --rebase || true
             fi
         else
             if [[ "$is_update" == "true" ]] && [[ "$source_dir" != "$PWD" || $(git symbolic-ref --short HEAD 2>/dev/null) == "main" ]]; then
-                git pull origin main || true
+                git pull origin main --rebase || true
             fi
         fi
     fi
