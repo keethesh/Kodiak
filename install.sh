@@ -9,6 +9,7 @@ INSTALL_DIR="$HOME/.kodiak"
 BIN_DIR="$HOME/.local/bin"
 UV_VERSION="0.5.11"
 FORCE_INSTALL="${FORCE_INSTALL:-false}"
+SKIP_DOCKER="${SKIP_DOCKER:-false}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -167,6 +168,23 @@ install_uv() {
     fi
 }
 
+# Install Playwright browsers and dependencies
+install_playwright() {
+    print_status "Installing Playwright browsers..."
+    local args=("$@")
+    
+    if command_exists uv; then
+        if uv run "${args[@]}" playwright install chromium; then
+            if [[ "$(uname -s)" == "Linux" ]]; then
+                print_status "Installing Playwright system dependencies (may prompt for sudo)..."
+                uv run "${args[@]}" playwright install-deps chromium || print_warning "Failed to install dependencies automatically. Run 'playwright install-deps chromium' if browser tools fail."
+            fi
+        else
+            print_warning "Failed to install Playwright browsers. Browser tools may not work."
+        fi
+    fi
+}
+
 # Install Kodiak
 install_kodiak() {
     print_step "Installing Kodiak..."
@@ -239,6 +257,9 @@ install_kodiak() {
     print_status "Attempting PyPI installation..."
     if uv tool install kodiak-pentest[full] 2>/dev/null; then
         print_success "Kodiak installed from PyPI"
+        
+        install_playwright --with kodiak-pentest
+        
         return 0
     fi
     
@@ -322,6 +343,9 @@ install_from_source() {
         fi
     fi
     
+    # Install playwright browsers
+    install_playwright
+    
     print_success "Kodiak installed from source"
 }
 
@@ -396,6 +420,65 @@ verify_installation() {
     fi
 }
 
+# Setup Docker image
+setup_docker() {
+    if [[ "$SKIP_DOCKER" == "true" ]]; then
+        print_status "Skipping Docker environment setup as requested."
+        return 0
+    fi
+
+    print_step "Setting up Docker environment..."
+    
+    if command_exists docker; then
+        if docker info >/dev/null 2>&1; then
+            print_status "Docker is running. Checking for kodiak-toolbox image..."
+            
+            # Check if image exists locally
+            local image_exists=false
+            if docker image inspect ghcr.io/keethesh/kodiak-toolbox:latest >/dev/null 2>&1; then
+                image_exists=true
+            fi
+            
+            if [[ "$image_exists" == "false" ]] || [[ "$FORCE_INSTALL" == "true" ]]; then
+                if [[ "$image_exists" == "true" ]]; then
+                    print_status "Force install requested. Rebuilding Kodiak toolbox Docker image (this may take a while)..."
+                else
+                    print_status "Building Kodiak toolbox Docker image (this may take a while)..."
+                fi
+                
+                # Check if we are in the source directory (either from git clone or manual download)
+                local dockerfile_path=""
+                if [[ -f "containers/Dockerfile" ]]; then
+                    dockerfile_path="containers/Dockerfile"
+                    build_context="."
+                elif [[ -f "$INSTALL_DIR/source/containers/Dockerfile" ]]; then
+                    dockerfile_path="$INSTALL_DIR/source/containers/Dockerfile"
+                    build_context="$INSTALL_DIR/source"
+                fi
+                
+                if [[ -n "$dockerfile_path" ]]; then
+                    if docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f "$dockerfile_path" "$build_context"; then
+                        print_success "Kodiak toolbox Docker image built successfully"
+                    else
+                        print_warning "Failed to build Docker image locally"
+                        print_status "You can build it later by running: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile ."
+                    fi
+                else
+                    print_warning "Dockerfile not found. Could not build Kodiak toolbox image locally."
+                    print_status "The agent will fallback to individual tool containers when scanning."
+                fi
+            else
+                print_success "Kodiak toolbox image already exists locally"
+            fi
+        else
+            print_warning "Docker is installed but the daemon is not running."
+            print_status "Start Docker and run 'docker pull ghcr.io/keethesh/kodiak-toolbox:latest' or build it manually."
+        fi
+    else
+        print_warning "Docker not found. Security tools will rely on local installations."
+    fi
+}
+
 # Show next steps
 show_next_steps() {
     echo
@@ -461,6 +544,7 @@ handle_arguments() {
                 echo "  --help, -h         Show this help message"
                 echo "  --version VERSION  Install specific version/branch"
                 echo "  --force, -f        Force reinstall even if already installed"
+                echo "  --skip-docker      Skip building the Kodiak toolbox Docker image"
                 echo "  --verbose, -v      Enable verbose output"
                 echo
                 echo "Environment variables:"
@@ -484,6 +568,10 @@ handle_arguments() {
                 ;;
             --force|-f)
                 FORCE_INSTALL=true
+                shift
+                ;;
+            --skip-docker)
+                SKIP_DOCKER=true
                 shift
                 ;;
             --verbose|-v)
@@ -524,6 +612,7 @@ main() {
     install_uv
     install_kodiak
     setup_configuration
+    setup_docker
     
     if verify_installation; then
         show_next_steps

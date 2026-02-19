@@ -20,7 +20,7 @@ class CommandResult(BaseModel):
 class ServiceExecutor(ABC):
     @abstractmethod
     async def run_command(
-        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None
+        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None, stdin: str | None = None
     ) -> CommandResult:
         """Run a command to completion."""
         pass
@@ -35,7 +35,7 @@ class ServiceExecutor(ABC):
 
 class LocalExecutor(ServiceExecutor):
     async def run_command(
-        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None
+        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None, stdin: str | None = None
     ) -> CommandResult:
         logger.info(f"LocalExec: {' '.join(command)}")
         
@@ -46,16 +46,17 @@ class LocalExecutor(ServiceExecutor):
 
         process = await asyncio.create_subprocess_exec(
             *command,
+            stdin=asyncio.subprocess.PIPE if stdin is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=full_env,
         )
         
-        stdout, stderr = await process.communicate()
+        stdout, stderr = await process.communicate(input=stdin.encode() if stdin is not None else None)
         
         return CommandResult(
-            exit_code=process.returncode or 1,
+            exit_code=process.returncode or 0,
             stdout=stdout.decode().strip(),
             stderr=stderr.decode().strip(),
         )
@@ -98,7 +99,7 @@ class DockerExecutor(ServiceExecutor):
         logger.info(f"DockerExecutor initialized with image: {self.image}")
 
     async def run_command(
-        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None
+        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None, stdin: str | None = None
     ) -> CommandResult:
         """
         Execute command inside Docker container.
@@ -111,9 +112,15 @@ class DockerExecutor(ServiceExecutor):
         docker_cmd = [
             "docker", "run",
             "--rm",  # Remove container after execution
+        ]
+        
+        if stdin is not None:
+            docker_cmd.append("-i")
+            
+        docker_cmd.extend([
             "-v", f"{work_dir}:/workspace",  # Mount working directory
             "-w", "/workspace",  # Set working directory inside container
-        ]
+        ])
         
         # Override entrypoint if specified
         if self.entrypoint is not None:
@@ -134,11 +141,12 @@ class DockerExecutor(ServiceExecutor):
             # Execute docker run command
             process = await asyncio.create_subprocess_exec(
                 *docker_cmd,
+                stdin=asyncio.subprocess.PIPE if stdin is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             
-            stdout, stderr = await process.communicate()
+            stdout, stderr = await process.communicate(input=stdin.encode() if stdin is not None else None)
             
             return CommandResult(
                 exit_code=process.returncode or 0,
@@ -210,7 +218,7 @@ class DockerExecutor(ServiceExecutor):
 
 class MockExecutor(ServiceExecutor):
     async def run_command(
-        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None
+        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None, stdin: str | None = None
     ) -> CommandResult:
         cmd_str = " ".join(command)
         logger.info(f"MockExec: {cmd_str}")
