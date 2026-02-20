@@ -40,52 +40,52 @@ class TerminalTool(KodiakTool):
         timeout = args.get("timeout", 60)
         
         try:
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            from kodiak.core.config import settings
+            from kodiak.services.executor import get_docker_executor
+
+            executor = await get_docker_executor(
+                settings.toolbox_image,
+                fallback_image="kalilinux/kali-rolling:latest",
+                fallback_entrypoint=""
             )
             
-            try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-                output = stdout.decode() + stderr.decode()
-                
-                success = process.returncode == 0
-                
-                summary = f"Terminal Command Execution\n"
-                summary += "=" * 30 + "\n\n"
-                summary += f"Command: {command}\n"
-                summary += f"Exit Code: {process.returncode}\n"
-                summary += f"Success: {'✓' if success else '✗'}\n\n"
-                
-                if output:
-                    output_preview = output[:1000]
-                    if len(output) > 1000:
-                        output_preview += "\n... (truncated)"
-                    summary += f"Output:\n{output_preview}\n"
-                else:
-                    summary += "No output produced.\n"
-                
-                return ToolResult(
-                    success=success,
-                    output=summary,
-                    data={
-                        "command": command,
-                        "exit_code": process.returncode,
-                        "stdout": stdout.decode(),
-                        "stderr": stderr.decode(),
-                        "full_output": output
-                    },
-                    error=stderr.decode() if not success and stderr else None
-                )
-                
-            except asyncio.TimeoutError:
-                process.kill()
-                return ToolResult(
-                    success=False,
-                    output=f"Command timed out after {timeout} seconds",
-                    error=f"Command timed out after {timeout} seconds"
-                )
+            # Run the command through bash inside the container
+            docker_cmd = ["/bin/bash", "-c", command]
+            
+            # executor.run_command inherently respects some timeouts but let's pass it if supported, 
+            # otherwise we just rely on its internal execution
+            result = await executor.run_command(docker_cmd)
+            
+            success = result.exit_code == 0
+            
+            summary = f"Terminal Command Execution (Sandbox)\n"
+            summary += "=" * 30 + "\n\n"
+            summary += f"Command: {command}\n"
+            summary += f"Exit Code: {result.exit_code}\n"
+            summary += f"Success: {'✓' if success else '✗'}\n\n"
+            
+            output = result.stdout + result.stderr
+
+            if output:
+                output_preview = output[:1000]
+                if len(output) > 1000:
+                    output_preview += "\n... (truncated)"
+                summary += f"Output:\n{output_preview}\n"
+            else:
+                summary += "No output produced.\n"
+            
+            return ToolResult(
+                success=success,
+                output=summary,
+                data={
+                    "command": command,
+                    "exit_code": result.exit_code,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "full_output": output
+                },
+                error=result.stderr if not success and result.stderr else None
+            )
                 
         except Exception as e:
             return ToolResult(
