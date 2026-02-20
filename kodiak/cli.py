@@ -81,7 +81,8 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.option("--instructions", "-i", help="Custom scan instructions", default="Conduct a security assessment")
 @click.option("--model", "-m", help="LLM model to use")
 @click.option("--max-iterations", "-n", default=25, help="Maximum agent iterations")
-def scan(target: str, instructions: str, model: Optional[str], max_iterations: int):
+@click.option("--verbose", "-v", is_flag=True, help="Show verbose real-time logging output")
+def scan(target: str, instructions: str, model: Optional[str], max_iterations: int, verbose: bool):
     """Run a security scan on the target."""
     if not HAS_DATABASE:
         console.print("[red]Database support required for scans![/red]")
@@ -92,8 +93,10 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         from kodiak.api.events import event_manager
         from kodiak.core.config import settings
         
-        # Silence loguru so log messages don't break the Rich Live display
-        logger.remove()
+        # If not verbose, silence loguru so messages don't break the Rich Live display
+        if not verbose:
+            logger.remove()
+            
         log_file = Path.home() / ".kodiak" / "logs" / "scan.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
         logger.add(log_file, level="DEBUG", rotation="10 MB")
@@ -107,7 +110,23 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         
         runner = ScanRunner(event_manager)
         
-        # State for live display
+        # If verbose, bypass the TUI overlay and just let logs stream freely
+        if verbose:
+            console.print("[yellow]Verbose mode enabled. Streaming real-time execution logs...[/yellow]\n")
+            try:
+                result = await runner.run(
+                    target=target,
+                    instructions=instructions,
+                    max_iterations=max_iterations
+                )
+                console.print(f"\n[green]Scan {result.status}![/green]")
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Scan interrupted.[/yellow]")
+            except Exception as e:
+                console.print(f"\n[red]Scan failed: {e}[/red]")
+            return
+
+        # State for live display (Non-Verbose Mode)
         state = {
             "status": "Initializing...",
             "tools": [],
