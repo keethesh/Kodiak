@@ -53,8 +53,13 @@ class LocalExecutor(ServiceExecutor):
             env=full_env,
         )
         
-        stdout, stderr = await process.communicate(input=stdin.encode() if stdin is not None else None)
-        
+        try:
+            stdout, stderr = await process.communicate(input=stdin.encode() if stdin is not None else None)
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
+            
         return CommandResult(
             exit_code=process.returncode or 0,
             stdout=stdout.decode().strip(),
@@ -78,14 +83,18 @@ class LocalExecutor(ServiceExecutor):
             env=full_env,
         )
 
-        if process.stdout:
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                yield line.decode()
-        
-        await process.wait()
+        try:
+            if process.stdout:
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        break
+                    yield line.decode()
+            await process.wait()
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
 
 
 class DockerExecutor(ServiceExecutor):
@@ -147,7 +156,12 @@ class DockerExecutor(ServiceExecutor):
                 stderr=asyncio.subprocess.PIPE,
             )
             
-            stdout, stderr = await process.communicate(input=stdin.encode() if stdin is not None else None)
+            try:
+                stdout, stderr = await process.communicate(input=stdin.encode() if stdin is not None else None)
+            except asyncio.CancelledError:
+                process.kill()
+                await process.wait()
+                raise
             
             return CommandResult(
                 exit_code=process.returncode or 0,
@@ -203,14 +217,19 @@ class DockerExecutor(ServiceExecutor):
                 stderr=asyncio.subprocess.PIPE,
             )
             
-            if process.stdout:
-                while True:
-                    line = await process.stdout.readline()
-                    if not line:
-                        break
-                    yield line.decode()
-            
-            await process.wait()
+            try:
+                if process.stdout:
+                    while True:
+                        line = await process.stdout.readline()
+                        if not line:
+                            break
+                        yield line.decode()
+                
+                await process.wait()
+            except asyncio.CancelledError:
+                process.kill()
+                await process.wait()
+                raise
             
         except Exception as e:
             logger.error(f"Docker stream failed: {e}")
@@ -279,7 +298,13 @@ async def get_docker_executor(
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await check.wait()
+            try:
+                await check.wait()
+            except asyncio.CancelledError:
+                check.kill()
+                await check.wait()
+                raise
+                
             if check.returncode != 0:
                 # Not cached locally — try a pull (with short timeout)
                 pull = await asyncio.create_subprocess_exec(
@@ -295,9 +320,14 @@ async def get_docker_executor(
                         entrypoint = fallback_entrypoint
                 except asyncio.TimeoutError:
                     pull.kill()
+                    await pull.wait()  # Wait for proper cleanup
                     logger.warning(f"Pull of {image} timed out, falling back to {fallback_image}")
                     image = fallback_image
                     entrypoint = fallback_entrypoint
+                except asyncio.CancelledError:
+                    pull.kill()
+                    await pull.wait()
+                    raise
         except Exception as e:
             logger.warning(f"Docker image check failed ({e}), falling back to {fallback_image}")
             image = fallback_image

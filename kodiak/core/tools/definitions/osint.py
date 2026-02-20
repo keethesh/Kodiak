@@ -91,7 +91,12 @@ class WebSearchTool(KodiakTool):
                 stderr=asyncio.subprocess.PIPE
             )
             
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                process.kill()
+                await process.wait()
+                raise
             
             if process.returncode == 0 and stdout:
                 html_content = stdout.decode()

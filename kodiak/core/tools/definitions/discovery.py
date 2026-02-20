@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
@@ -438,4 +439,465 @@ class HttpxTool(KodiakTool):
         if len(results) > 10:
             summary += f"... and {len(results) - 10} more hosts\n"
         
+        return summary
+
+
+class KatanaArgs(BaseModel):
+    url: str = Field(..., description="Target URL to crawl")
+    depth: int = Field(2, description="Crawl depth (default: 2)")
+    js_crawl: bool = Field(True, description="Enable JavaScript crawling for SPAs and dynamic content")
+    headless: bool = Field(False, description="Use headless browser for JavaScript rendering")
+    timeout: int = Field(30, description="Request timeout in seconds")
+    rate_limit: int = Field(150, description="Maximum requests per second")
+    scope: Optional[str] = Field(None, description="Scope regex to restrict crawling (e.g., 'example\\.com')") 
+
+
+class KatanaTool(KodiakTool):
+    name = "katana"
+    description = "Fast, configurable web crawler for discovering URLs, endpoints, JavaScript files, and API routes. Ideal for mapping the full attack surface of a web application."
+    args_schema = KatanaArgs
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Target URL to start crawling from (e.g., https://example.com)"
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Maximum crawl depth (default: 2, higher means deeper but slower)"
+                },
+                "js_crawl": {
+                    "type": "boolean",
+                    "description": "Parse JavaScript files to find additional endpoints (default: true)"
+                },
+                "headless": {
+                    "type": "boolean",
+                    "description": "Use headless browser for JS-rendered content (slower but more thorough)"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Request timeout in seconds (default: 30)"
+                },
+                "rate_limit": {
+                    "type": "integer",
+                    "description": "Max requests per second to avoid detection (default: 150)"
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Regex pattern to limit crawling scope (e.g., 'example\\.com')"
+                }
+            },
+            "required": ["url"]
+        }
+
+    async def _execute(self, args: Dict[str, Any]) -> ToolResult:
+        url = args["url"]
+
+        command = [
+            "katana",
+            "-u", url,
+            "-d", str(args.get("depth", 2)),
+            "-rl", str(args.get("rate_limit", 150)),
+            "-timeout", str(args.get("timeout", 30)),
+            "-silent",
+            "-jc" if args.get("js_crawl", True) else "",
+        ]
+        command = [c for c in command if c]
+
+        if args.get("headless"):
+            command.append("-headless")
+        if args.get("scope"):
+            command.extend(["-fs", args["scope"]])
+
+        cmd_str = " ".join(command)
+
+        try:
+            from kodiak.core.config import settings
+            from kodiak.services.executor import get_docker_executor
+
+            executor = await get_docker_executor(
+                settings.toolbox_image,
+                fallback_image="projectdiscovery/katana:latest",
+                fallback_entrypoint=""
+            )
+            result = await executor.run_command(command)
+
+            if result.exit_code != 0:
+                return ToolResult(
+                    success=False,
+                    output=f"Katana failed: {result.stderr}",
+                    error=f"Command failed with exit code {result.exit_code}"
+                )
+
+            urls = self._parse_urls(result.stdout)
+            summary = self._generate_summary(url, urls)
+
+            return ToolResult(
+                success=True,
+                output=summary,
+                data={
+                    "command": cmd_str,
+                    "target": url,
+                    "urls": urls,
+                    "total_found": len(urls),
+                    "endpoints": [u for u in urls if any(p in u for p in ["api", "graphql", "v1", "v2", "rest"])],
+                    "js_files": [u for u in urls if u.endswith(".js")],
+                    "forms": [u for u in urls if "?" in u],
+                }
+            )
+
+        except Exception as e:
+            return ToolResult(
+                success=False,
+                output=f"Katana execution failed: {str(e)}",
+                error=str(e)
+            )
+
+    def _parse_urls(self, output: str) -> List[str]:
+        """Parse katana's line-separated URL output"""
+        urls = []
+        for line in output.strip().split("\n"):
+            line = line.strip()
+            if line and (line.startswith("http://") or line.startswith("https://")):
+                urls.append(line)
+        return list(dict.fromkeys(urls))  # Deduplicate preserving order
+
+    def _generate_summary(self, target: str, urls: List[str]) -> str:
+        summary = f"Katana Web Crawl Results for {target}\n"
+        summary += "=" * 50 + "\n\n"
+        summary += f"Total URLs Discovered: {len(urls)}\n"
+        summary += f"  API/Endpoint Paths: {len([u for u in urls if any(p in u for p in ['api', 'graphql', 'v1', 'v2', 'rest'])])}\n"
+        summary += f"  JavaScript Files:   {len([u for u in urls if u.endswith('.js')])}\n"
+        summary += f"  URLs with Params:   {len([u for u in urls if '?' in u])}\n\n"
+
+        if urls:
+            summary += "Sample Discovered URLs (first 20):\n"
+            for u in urls[:20]:
+                summary += f"  - {u}\n"
+            if len(urls) > 20:
+                summary += f"  ... and {len(urls) - 20} more\n"
+        else:
+            summary += "No URLs discovered.\n"
+
+        return summary
+
+
+class FfufArgs(BaseModel):
+    url: str = Field(..., description="Target URL with FUZZ keyword as placeholder (e.g., https://example.com/FUZZ)")
+    wordlist: str = Field(
+        "/usr/share/seclists/Discovery/Web-Content/common.txt",
+        description="Path to wordlist file inside the Docker container"
+    )
+    extensions: Optional[str] = Field(None, description="File extensions to append to each word (e.g., 'php,html,asp')")
+    filter_status: Optional[str] = Field("404", description="HTTP status codes to filter OUT of results (comma-separated, e.g., '404,403')")
+    threads: int = Field(40, description="Number of concurrent threads")
+    timeout: int = Field(10, description="Request timeout in seconds")
+    method: str = Field("GET", description="HTTP method (GET, POST, etc.)")
+    headers: Optional[str] = Field(None, description="Additional HTTP headers (e.g., 'Authorization: Bearer token')")
+    cookies: Optional[str] = Field(None, description="Cookie string to include with requests")
+
+
+class FfufTool(KodiakTool):
+    name = "ffuf"
+    description = "Fast web fuzzer for discovering hidden directories, files, virtual hosts, and parameters. Use the FUZZ keyword in the URL to specify the injection point."
+    args_schema = FfufArgs
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL with FUZZ placeholder (e.g., https://example.com/FUZZ or https://example.com/api/FUZZ.php)"
+                },
+                "wordlist": {
+                    "type": "string",
+                    "description": "Wordlist file path (default: /usr/share/seclists/Discovery/Web-Content/common.txt). Other options: /usr/share/seclists/Discovery/Web-Content/big.txt"
+                },
+                "extensions": {
+                    "type": "string",
+                    "description": "Comma-separated file extensions to try (e.g., 'php,html,txt,bak')"
+                },
+                "filter_status": {
+                    "type": "string",
+                    "description": "HTTP status codes to HIDE from results (e.g., '404' or '404,403,400')"
+                },
+                "threads": {
+                    "type": "integer",
+                    "description": "Number of concurrent threads (default: 40)"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Request timeout in seconds (default: 10)"
+                },
+                "method": {
+                    "type": "string",
+                    "description": "HTTP method to use (default: GET)"
+                },
+                "headers": {
+                    "type": "string",
+                    "description": "Additional HTTP headers to include"
+                },
+                "cookies": {
+                    "type": "string",
+                    "description": "Cookie header value to include with requests"
+                }
+            },
+            "required": ["url"]
+        }
+
+    async def _execute(self, args: Dict[str, Any]) -> ToolResult:
+        url = args["url"]
+        # HARDCODED: Default wordlist path inside the Kodiak Docker container (from seclists)
+        wordlist = args.get("wordlist", "/usr/share/seclists/Discovery/Web-Content/common.txt")
+
+        command = [
+            "ffuf",
+            "-u", url,
+            "-w", wordlist,
+            "-t", str(args.get("threads", 40)),
+            "-timeout", str(args.get("timeout", 10)),
+            "-X", args.get("method", "GET"),
+            "-json",
+            "-s",  # Silent mode
+        ]
+
+        if args.get("extensions"):
+            command.extend(["-e", args["extensions"]])
+        if args.get("filter_status"):
+            command.extend(["-fc", args["filter_status"]])
+        if args.get("headers"):
+            command.extend(["-H", args["headers"]])
+        if args.get("cookies"):
+            command.extend(["-b", args["cookies"]])
+
+        cmd_str = " ".join(command)
+
+        try:
+            from kodiak.core.config import settings
+            from kodiak.services.executor import get_docker_executor
+
+            executor = await get_docker_executor(
+                settings.toolbox_image,
+                fallback_image="ghcr.io/ffuf/ffuf:latest",
+                fallback_entrypoint=""
+            )
+            result = await executor.run_command(command)
+
+            # ffuf exits non-zero when no results are found; that's not a failure
+            results = self._parse_ffuf_output(result.stdout)
+            summary = self._generate_ffuf_summary(url, wordlist, results)
+
+            return ToolResult(
+                success=True,
+                output=summary,
+                data={
+                    "command": cmd_str,
+                    "target_url": url,
+                    "wordlist": wordlist,
+                    "results": results,
+                    "total_found": len(results),
+                    "interesting": [r for r in results if r.get("status") in [200, 201, 301, 302, 403]],
+                }
+            )
+
+        except Exception as e:
+            return ToolResult(
+                success=False,
+                output=f"FFUF execution failed: {str(e)}",
+                error=str(e)
+            )
+
+    def _parse_ffuf_output(self, output: str) -> List[Dict[str, Any]]:
+        """Parse ffuf's JSONL output (one JSON object per line)"""
+        results = []
+        for line in output.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                # ffuf JSON output has a top-level 'results' array when using -json flag
+                if "results" in data:
+                    for r in data["results"]:
+                        results.append({
+                            "url": r.get("url", ""),
+                            "status": r.get("status", 0),
+                            "length": r.get("length", 0),
+                            "words": r.get("words", 0),
+                            "lines": r.get("lines", 0),
+                            "input": r.get("input", {}).get("FUZZ", ""),
+                        })
+                elif "url" in data:
+                    results.append({
+                        "url": data.get("url", ""),
+                        "status": data.get("status", 0),
+                        "length": data.get("length", 0),
+                        "words": data.get("words", 0),
+                        "lines": data.get("lines", 0),
+                        "input": data.get("input", {}).get("FUZZ", ""),
+                    })
+            except json.JSONDecodeError:
+                continue
+        return results
+
+    def _generate_ffuf_summary(self, url: str, wordlist: str, results: List[Dict[str, Any]]) -> str:
+        summary = f"FFUF Directory/File Fuzzing Results\n"
+        summary += "=" * 50 + "\n\n"
+        summary += f"Target:   {url}\n"
+        summary += f"Wordlist: {wordlist}\n"
+        summary += f"Found:    {len(results)} result(s)\n\n"
+
+        if results:
+            summary += "Discovered Paths:\n"
+            for r in results[:30]:
+                status = r.get("status", "?")
+                path = r.get("input", r.get("url", "?"))
+                length = r.get("length", 0)
+                summary += f"  [{status}] /{path:<35} (size: {length})\n"
+            if len(results) > 30:
+                summary += f"  ... and {len(results) - 30} more\n"
+        else:
+            summary += "No results found.\n"
+
+        return summary
+
+
+class WhatWebArgs(BaseModel):
+    url: str = Field(..., description="Target URL or comma-separated list of URLs")
+    aggression: int = Field(1, description="Aggression level (1=stealthy, 3=aggressive, 4=heavy)")
+
+
+class WhatWebTool(KodiakTool):
+    name = "whatweb"
+    description = "Web technology fingerprinting tool. Identifies web frameworks, CMS platforms, server software, JavaScript libraries, and other technologies used by a target."
+    args_schema = WhatWebArgs
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Target URL(s) to fingerprint (e.g., 'https://example.com' or comma-separated)"
+                },
+                "aggression": {
+                    "type": "integer",
+                    "description": "Aggression level: 1=stealthy (quiet, one request), 3=aggressive (more requests), 4=heavy"
+                }
+            },
+            "required": ["url"]
+        }
+
+    async def _execute(self, args: Dict[str, Any]) -> ToolResult:
+        url = args["url"]
+        aggression = args.get("aggression", 1)
+
+        targets = [t.strip() for t in url.split(",") if t.strip()]
+        command = [
+            "whatweb",
+            f"--aggression={aggression}",
+            "--log-json=-",  # Output JSON to stdout
+            "--no-errors",
+        ] + targets
+
+        cmd_str = " ".join(command)
+
+        try:
+            from kodiak.core.config import settings
+            from kodiak.services.executor import get_docker_executor
+
+            executor = await get_docker_executor(
+                settings.toolbox_image,
+                fallback_image="kalilinux/kali-rolling",
+                fallback_entrypoint=""
+            )
+            result = await executor.run_command(command)
+
+            parsed = self._parse_whatweb_output(result.stdout)
+            summary = self._generate_whatweb_summary(url, parsed)
+
+            return ToolResult(
+                success=True,
+                output=summary,
+                data={
+                    "command": cmd_str,
+                    "target": url,
+                    "results": parsed,
+                }
+            )
+
+        except Exception as e:
+            return ToolResult(
+                success=False,
+                output=f"WhatWeb execution failed: {str(e)}",
+                error=str(e)
+            )
+
+    def _parse_whatweb_output(self, output: str) -> List[Dict[str, Any]]:
+        """Parse WhatWeb JSON log output"""
+        results = []
+        for line in output.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                if isinstance(data, list):
+                    for entry in data:
+                        results.append(self._normalise_entry(entry))
+                elif isinstance(data, dict):
+                    results.append(self._normalise_entry(data))
+            except json.JSONDecodeError:
+                continue
+        return results
+
+    def _normalise_entry(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """Flatten a WhatWeb result entry into a simpler structure"""
+        plugins = entry.get("plugins", {})
+        technologies = []
+        for name, details in plugins.items():
+            tech = {"name": name}
+            if details.get("version"):
+                tech["version"] = details["version"][0] if isinstance(details["version"], list) else details["version"]
+            if details.get("string"):
+                tech["string"] = details["string"][0] if isinstance(details["string"], list) else details["string"]
+            technologies.append(tech)
+        return {
+            "target": entry.get("target", ""),
+            "http_status": entry.get("http_status", 0),
+            "technologies": technologies,
+            "technology_names": [t["name"] for t in technologies],
+        }
+
+    def _generate_whatweb_summary(self, url: str, results: List[Dict[str, Any]]) -> str:
+        summary = f"WhatWeb Technology Fingerprint for {url}\n"
+        summary += "=" * 50 + "\n\n"
+
+        if not results:
+            summary += "No results returned.\n"
+            return summary
+
+        for entry in results:
+            summary += f"Target: {entry.get('target', url)}  [HTTP {entry.get('http_status', '?')}]\n"
+            techs = entry.get("technologies", [])
+            if techs:
+                summary += "Detected Technologies:\n"
+                for t in techs:
+                    line = f"  - {t['name']}"
+                    if t.get("version"):
+                        line += f" {t['version']}"
+                    if t.get("string"):
+                        line += f" [{t['string'][:60]}]"
+                    summary += line + "\n"
+            else:
+                summary += "  No technologies identified.\n"
+            summary += "\n"
+
         return summary

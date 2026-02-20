@@ -28,10 +28,10 @@ class ToolInventory:
         from kodiak.core.tools.definitions.network import NmapTool
         from kodiak.core.tools.definitions.web import NucleiTool
         from kodiak.core.tools.definitions.system import TerminalTool
-        from kodiak.core.tools.definitions.discovery import SubfinderTool, HttpxTool
+        from kodiak.core.tools.definitions.discovery import SubfinderTool, HttpxTool, KatanaTool, FfufTool, WhatWebTool
         from kodiak.core.tools.definitions.browser import BrowserNavigateTool
         from kodiak.core.tools.definitions.osint import WebSearchTool
-        from kodiak.core.tools.definitions.exploitation import SQLMapTool, CommixTool
+        from kodiak.core.tools.definitions.exploitation import SQLMapTool, CommixTool, SearchsploitTool
         from kodiak.core.tools.definitions.proxy import (
             ProxyStartTool, ProxyRequestTool, ProxyHistoryTool, ProxyStopTool
         )
@@ -53,6 +53,12 @@ class ToolInventory:
         self.register(WebSearchTool())
         self.register(SQLMapTool())
         self.register(CommixTool())
+        self.register(SearchsploitTool())
+
+        # Register new discovery tools
+        self.register(KatanaTool())
+        self.register(FfufTool())
+        self.register(WhatWebTool())
 
         # Register new comprehensive tools
         self.register(ProxyStartTool())
@@ -98,11 +104,15 @@ AVAILABLE_TOOLS = {
     # Discovery & Reconnaissance  
     "subfinder": "Passive subdomain enumeration",
     "httpx": "HTTP toolkit for probing web services",
+    "katana": "Web crawler for discovering URLs and API endpoints",
+    "ffuf": "Fast web fuzzer for discovering hidden directories and files",
+    "whatweb": "Web technology fingerprinting tool",
     
     # Web Application Testing
     "browser_navigate": "Browser automation for web app testing",
     "sqlmap": "Automatic SQL injection detection and exploitation",
     "commix": "Command injection detection and exploitation",
+    "searchsploit": "Offline Exploit-DB search and exploit export",
     
     # HTTP Proxy System
     "proxy_start": "Start HTTP proxy server for request interception",
