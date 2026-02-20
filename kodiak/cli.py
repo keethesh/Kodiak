@@ -85,7 +85,22 @@ def main(ctx, version: bool, target: Optional[str]):
 def scan(target: str, instructions: str, model: Optional[str], max_iterations: int, verbose: bool):
     """Run a security scan on the target."""
     if not HAS_DATABASE:
-        console.print("[yellow]Database not found. Initializing...[/yellow]")
+        console.print("[red]Database dependencies not installed! Please install sqlalchemy and sqlmodel.[/red]")
+        return
+        
+    # Auto-initialize database if it's missing or empty
+    from kodiak.core.config import settings
+    import os
+    
+    needs_init = False
+    if settings.is_sqlite:
+        db_path = os.path.expanduser(settings.sqlite_path or "~/.kodiak/kodiak.db")
+        if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
+            needs_init = True
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            
+    if needs_init:
+        console.print("[yellow]Database not found or empty. Initializing...[/yellow]")
         from kodiak.database.engine import init_db
         asyncio.run(init_db())
         console.print("[green]Database initialized![/green]")
