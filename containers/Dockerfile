@@ -33,7 +33,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV KODIAK_SANDBOX_MODE=true
 ENV PATH="/home/kodiak/go/bin:/home/kodiak/.local/bin:/home/kodiak/.npm-global/bin:$PATH"
 
-# Create non-root user for security
+# Install core dependencies first
+RUN apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends kali-archive-keyring wget curl git unzip tar ca-certificates gnupg
+
+# Sudo often fails configure in Kali minimal on first run with other packages
+RUN apt-get install -y --no-install-recommends sudo
+
+# Create non-root user for security (AFTER sudo is installed to prevent dpkg prompt)
 RUN useradd -m -s /bin/bash kodiak && \
     usermod -aG sudo kodiak && \
     echo "kodiak ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
@@ -45,12 +52,7 @@ RUN useradd -m -s /bin/bash kodiak && \
              /app && \
     chown -R kodiak:kodiak /home/kodiak /workspace /app
 
-# Install core dependencies first
-RUN apt-get update --fix-missing && \
-    apt-get install -y --no-install-recommends kali-archive-keyring wget curl git unzip tar ca-certificates gnupg
 
-# Sudo often fails configure in Kali minimal on first run with other packages
-RUN apt-get install -y --no-install-recommends sudo
 
 # Install Python and Networking
 RUN apt-get install -y --no-install-recommends \
