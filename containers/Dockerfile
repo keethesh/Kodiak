@@ -114,7 +114,7 @@ RUN npm cache clean --force && \
 
 # Install Playwright Chromium specifically (avoid bulky full installs)
 USER kodiak
-RUN pip3 install --user playwright && \
+RUN pip3 install --user --break-system-packages playwright && \
     # Install ONLY chromium directly and delete the bloated unused package downloads
     python3 -m playwright install chromium && \
     rm -rf /home/kodiak/.cache/pip && \
