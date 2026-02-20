@@ -6,7 +6,7 @@
 # STAGE 1: GO BUILDER
 # Compiles ProjectDiscovery tools to avoid adding Go toolchain to final image
 # ============================================================
-FROM golang:1.22-bookworm AS go-builder
+FROM golang:1.24-bookworm AS go-builder
 
 ENV CGO_ENABLED=0
 
