@@ -44,17 +44,20 @@ class SubfinderTool(KodiakTool):
         }
 
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
-        domain = args["domain"]
+        domain_str = args["domain"]
+        domains = [d.strip() for d in domain_str.split(",") if d.strip()]
         
         # Build subfinder command
         command = [
             "subfinder",
-            "-d", domain,
             "-json",
             "-silent",
             "-timeout", str(args.get("timeout", 30))
         ]
         
+        for d in domains:
+            command.extend(["-d", d])
+            
         if args.get("sources"):
             command.extend(["-sources", args["sources"]])
         

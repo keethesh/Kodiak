@@ -155,7 +155,11 @@ class TUIEventManager:
         """Broadcast tool execution completion"""
         try:
             status = "completed" if result.success else "failed"
-            logger.info(f"Tool {tool_name} {status}")
+            
+            if not result.success and hasattr(result, 'error') and result.error:
+                logger.error(f"Tool {tool_name} failed: {result.error}")
+            else:
+                logger.info(f"Tool {tool_name} {status}")
             
             event = TUIEvent("tool_complete", {
                 "tool_name": tool_name,
