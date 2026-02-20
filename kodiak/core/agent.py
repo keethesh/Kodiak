@@ -157,6 +157,21 @@ class KodiakAgent:
             iterations += 1
             logger.debug(f"🔄 Iteration {iterations}/{max_iterations}")
             
+            # --- Max Iteration Warning System ---
+            if max_iterations > 10:
+                if iterations == int(max_iterations * 0.85):
+                    remaining = max_iterations - iterations
+                    history.append({
+                        "role": "user",
+                        "content": f"URGENT: You are approaching the maximum iteration limit. Current: {iterations}/{max_iterations} ({remaining} iterations remaining). Please prioritize completing your required task(s) and calling the `complete_scan` tool as soon as possible."
+                    })
+                elif iterations == max_iterations - 3:
+                    history.append({
+                        "role": "user",
+                        "content": "CRITICAL: You have only 3 iterations left! Your next message MUST be the tool call to the `complete_scan` tool to finalize the report. No other actions should be taken except finishing your work to prevent an abnormal termination."
+                    })
+            # ------------------------------------
+            
             # 1. Think
             response = await self.think(history)
             
