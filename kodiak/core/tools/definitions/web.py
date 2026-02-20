@@ -60,16 +60,28 @@ class NucleiTool(KodiakTool):
         }
 
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
-        target = args["target"]
+        target_str = args["target"]
         
-        # Ensure target has protocol
-        if not target.startswith(('http://', 'https://')):
-            target = f"https://{target}"
+        # Split target by comma to handle multiple targets
+        targets = [t.strip() for t in target_str.split(",") if t.strip()]
+        
+        processed_targets = []
+        for t in targets:
+            # Ensure target has protocol if it looks like a web target (has dots and not an IP)
+            if not t.startswith(('http://', 'https://')):
+                # Only add https if it's unlikely to be a raw IP or internal hostname being subjected to non-web nuclei templates
+                # For safety, since nuclei handles missing protocols surprisingly well with its web templates,
+                # we only prepend https:// if it lacks a scheme and looks like a generic FQDN.
+                if '.' in t and not any(c.isdigit() for c in t):
+                    processed_targets.append(f"https://{t}")
+                else:
+                    processed_targets.append(t)
+            else:
+                processed_targets.append(t)
         
         # Build nuclei command
         command = [
             "nuclei",
-            "-target", target,
             "-json",  # JSON output for parsing
             "-nc",    # No color
             "-silent", # Reduce noise
@@ -77,6 +89,11 @@ class NucleiTool(KodiakTool):
             "-timeout", str(args.get("timeout", 10)),
             "-retries", str(args.get("retries", 1))
         ]
+        
+        # Add all targets using the -u/target flags appropriately
+        # Nuclei supports space separated targets or comma. For absolute safety, we use comma
+        # https://docs.projectdiscovery.io/tools/nuclei/running
+        command.extend(["-target", ",".join(processed_targets)])
         
         # Add filters
         if args.get("tags"):

@@ -100,6 +100,11 @@ class BrowserNavigateTool(KodiakTool):
                     screenshot_bytes = await page.screenshot(full_page=True)
                     screenshot_data = base64.b64encode(screenshot_bytes).decode()
                 
+                # IMPORTANT: Close page and context BEFORE closing the browser
+                # Otherwise, background Playwright tasks might crash the Asyncio Event Loop
+                # during application exit (RuntimeError: Event loop is closed)
+                await page.close()
+                await context.close()
                 await browser.close()
                 
                 # Analyze for potential vulnerabilities

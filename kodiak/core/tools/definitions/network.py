@@ -96,8 +96,11 @@ class NmapTool(KodiakTool):
             if args.get("os_detection"):
                 command.append("-O")
         
-        # Add target
-        command.append(args["target"])
+        # Add targets
+        # Nmap accepts multiple targets separated by space
+        target_str = args["target"]
+        targets = [t.strip() for t in target_str.split(",") if t.strip()]
+        command.extend(targets)
         
         cmd_str = " ".join(command)
 
