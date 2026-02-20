@@ -131,7 +131,7 @@ class KodiakAgent:
         session: Any, 
         project_id: UUID, 
         scan_id: UUID, 
-        max_iterations: int = 25
+        max_iterations: int = 100
     ) -> AgentResult:
         """
         Run the full think-act loop.

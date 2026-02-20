@@ -80,7 +80,7 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.argument("target")
 @click.option("--instructions", "-i", help="Custom scan instructions", default="Conduct a security assessment")
 @click.option("--model", "-m", help="LLM model to use")
-@click.option("--max-iterations", "-n", default=25, help="Maximum agent iterations")
+@click.option("--max-iterations", "-n", default=100, help="Maximum agent iterations")
 @click.option("--verbose", "-v", is_flag=True, help="Show verbose real-time logging output")
 def scan(target: str, instructions: str, model: Optional[str], max_iterations: int, verbose: bool):
     """Run a security scan on the target."""
