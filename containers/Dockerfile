@@ -68,8 +68,7 @@ RUN apt-get install -y --no-install-recommends \
 # Install Scanner tools & libcap
 RUN apt-get install -y --no-install-recommends \
     libcap2-bin nmap ncat ndiff masscan \
-    sqlmap nuclei subfinder naabu ffuf nikto wapiti whatweb wafw00f && \
-    setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip $(which nmap)
+    sqlmap nuclei subfinder naabu ffuf nikto wapiti whatweb wafw00f
 
 # Install Playwright browser dependencies
 RUN apt-get install -y --no-install-recommends \

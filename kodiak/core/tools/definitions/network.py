@@ -71,7 +71,7 @@ class NmapTool(KodiakTool):
 
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
         # Construct nmap command
-        command = ["nmap", "-oN", "-"]  # Normal output to stdout
+        command = ["sudo", "nmap", "-oN", "-"]  # Normal output to stdout
         
         # Scan type options
         if args.get("stealth_scan"):
