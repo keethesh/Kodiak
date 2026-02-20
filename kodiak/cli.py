@@ -85,8 +85,11 @@ def main(ctx, version: bool, target: Optional[str]):
 def scan(target: str, instructions: str, model: Optional[str], max_iterations: int, verbose: bool):
     """Run a security scan on the target."""
     if not HAS_DATABASE:
-        console.print("[red]Database support required for scans![/red]")
-        return
+        console.print("[yellow]Database not found. Initializing...[/yellow]")
+        from kodiak.database.engine import init_db
+        import asyncio
+        asyncio.run(init_db())
+        console.print("[green]Database initialized![/green]")
 
     async def run_scan_internal():
         from kodiak.core.scan_runner import ScanRunner
