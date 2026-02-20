@@ -522,7 +522,7 @@ setup_docker() {
                 if [[ "$image_exists" == "true" ]]; then
                     print_status "Force install requested. Rebuilding Kodiak toolbox Docker image (this may take a while)..."
                 else
-                    print_status "Building Kodiak toolbox Docker image (this may take a while)..."
+                    print_status "Building Kodiak toolbox Docker image from scratch (this may take a while)..."
                 fi
                 
                 # Check if we are in the source directory (either from git clone or manual download)
@@ -540,14 +540,15 @@ setup_docker() {
                         print_success "Kodiak toolbox Docker image built successfully"
                     else
                         print_warning "Failed to build Docker image locally"
-                        print_status "You can build it later by running: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile ."
+                        print_status "You can build it later by running: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
                     fi
                 else
                     print_warning "Dockerfile not found. Could not build Kodiak toolbox image locally."
                     print_status "The agent will fallback to individual tool containers when scanning."
                 fi
             else
-                print_success "Kodiak toolbox image already exists locally"
+                print_success "Kodiak toolbox image already exists locally. Skipping build."
+                print_status "Use --force to rebuild the image."
             fi
         else
             print_warning "Docker is installed but the daemon is not running."

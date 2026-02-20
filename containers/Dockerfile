@@ -19,6 +19,7 @@ RUN go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@l
 RUN go install -v github.com/tomnomnom/waybackurls@latest || echo "Warning: Failed to install waybackurls"
 RUN go install -v github.com/tomnomnom/gf@latest || echo "Warning: Failed to install gf"
 RUN go install -v github.com/lc/gau/v2/cmd/gau@latest || echo "Warning: Failed to install gau"
+RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || echo "Warning: Failed to install nuclei"
 
 # ============================================================
 # STAGE 2: FINAL KALI IMAGE
