@@ -519,32 +519,45 @@ setup_docker() {
             fi
             
             if [[ "$image_exists" == "false" ]] || [[ "$FORCE_INSTALL" == "true" ]]; then
-                if [[ "$image_exists" == "true" ]]; then
-                    print_status "Force install requested. Rebuilding Kodiak toolbox Docker image (this may take a while)..."
-                else
-                    print_status "Building Kodiak toolbox Docker image from scratch (this may take a while)..."
-                fi
-                
-                # Check if we are in the source directory (either from git clone or manual download)
-                local dockerfile_path=""
-                if [[ -f "containers/Dockerfile" ]]; then
-                    dockerfile_path="containers/Dockerfile"
-                    build_context="containers"
-                elif [[ -f "$INSTALL_DIR/source/containers/Dockerfile" ]]; then
-                    dockerfile_path="$INSTALL_DIR/source/containers/Dockerfile"
-                    build_context="$INSTALL_DIR/source/containers"
-                fi
-                
-                if [[ -n "$dockerfile_path" ]]; then
-                    if docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f "$dockerfile_path" "$build_context"; then
-                        print_success "Kodiak toolbox Docker image built successfully"
+                local pulled=false
+                if [[ "$FORCE_INSTALL" != "true" ]]; then
+                    print_status "Attempting to pull pre-built Kodiak toolbox image..."
+                    if docker pull ghcr.io/keethesh/kodiak-toolbox:latest; then
+                        print_success "Kodiak toolbox Docker image pulled successfully from GHCR"
+                        pulled=true
                     else
-                        print_warning "Failed to build Docker image locally"
-                        print_status "You can build it later by running: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
+                        print_warning "Could not pull pre-built image. Proceeding with local build."
                     fi
-                else
-                    print_warning "Dockerfile not found. Could not build Kodiak toolbox image locally."
-                    print_status "The agent will fallback to individual tool containers when scanning."
+                fi
+                
+                if [[ "$pulled" == "false" ]]; then
+                    if [[ "$image_exists" == "true" ]]; then
+                        print_status "Force install requested. Rebuilding Kodiak toolbox Docker image (this may take a while)..."
+                    else
+                        print_status "Building Kodiak toolbox Docker image from scratch (this may take a while)..."
+                    fi
+                    
+                    # Check if we are in the source directory (either from git clone or manual download)
+                    local dockerfile_path=""
+                    if [[ -f "containers/Dockerfile" ]]; then
+                        dockerfile_path="containers/Dockerfile"
+                        build_context="containers"
+                    elif [[ -f "$INSTALL_DIR/source/containers/Dockerfile" ]]; then
+                        dockerfile_path="$INSTALL_DIR/source/containers/Dockerfile"
+                        build_context="$INSTALL_DIR/source/containers"
+                    fi
+                    
+                    if [[ -n "$dockerfile_path" ]]; then
+                        if docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f "$dockerfile_path" "$build_context"; then
+                            print_success "Kodiak toolbox Docker image built successfully"
+                        else
+                            print_warning "Failed to build Docker image locally"
+                            print_status "You can build it later by running: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
+                        fi
+                    else
+                        print_warning "Dockerfile not found. Could not build Kodiak toolbox image locally."
+                        print_status "The agent will fallback to individual tool containers when scanning."
+                    fi
                 fi
             else
                 print_success "Kodiak toolbox image already exists locally. Skipping build."
