@@ -46,8 +46,11 @@ RUN useradd -m -s /bin/bash kodiak && \
     chown -R kodiak:kodiak /home/kodiak /workspace /app
 
 # Install core dependencies first
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    kali-archive-keyring sudo wget curl git unzip tar ca-certificates gnupg
+RUN apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends kali-archive-keyring wget curl git unzip tar ca-certificates gnupg
+
+# Sudo often fails configure in Kali minimal on first run with other packages
+RUN apt-get install -y --no-install-recommends sudo
 
 # Install Python and Networking
 RUN apt-get install -y --no-install-recommends \
