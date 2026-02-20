@@ -83,7 +83,17 @@ class NmapTool(KodiakTool):
         if args.get("fast_mode") and not args.get("ports"):
             command.append("-F")
         elif args.get("ports"):
-            command.extend(["-p", args["ports"]])
+            ports_val = str(args["ports"]).strip()
+            if ports_val.lower() == "all" or ports_val == "-":
+                command.extend(["-p", "-"])
+            elif ports_val.lower().startswith("top-ports"):
+                parts = ports_val.split()
+                if len(parts) > 1:
+                    command.extend(["--top-ports", parts[1]])
+                else:
+                    command.extend(["--top-ports", "1000"])
+            else:
+                command.extend(["-p", ports_val])
             
         # Detection options
         if args.get("aggressive"):
