@@ -211,6 +211,32 @@ class TUIEventManager:
             )
     
     @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_agent_thought(self, agent_id: str, thought: str, scan_id: str = None):
+        """Broadcast agent's raw thinking/reasoning content"""
+        try:
+            logger.info(f"🤔 Agent {agent_id} thought:\n{thought}")
+            
+            event = TUIEvent("agent_thought", {
+                "agent_id": agent_id,
+                "thought": thought,
+                "status": "thought_generated"
+            })
+            
+            await self.emit(event, scan_id)
+                
+        except Exception as e:
+            raise EventBroadcastingError(
+                message=f"Failed to emit agent thought event for {agent_id}",
+                event_type="agent_thought",
+                details={
+                    "agent_id": agent_id,
+                    "thought": thought,
+                    "scan_id": scan_id,
+                    "original_error": str(e)
+                }
+            )
+            
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
     async def emit_scan_started(self, scan_id: str, scan_name: str, target: str, agent_id: str = None):
         """Broadcast scan started event"""
         try:

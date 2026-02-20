@@ -160,6 +160,15 @@ class KodiakAgent:
             # 1. Think
             response = await self.think(history)
             
+            # Broadcast the agent's thoughts so they appear in `--verbose` logs
+            if response.content and self.event_manager:
+                await self.event_manager.emit_agent_thought(
+                    agent_id=self.agent_id,
+                    thought=response.content,
+                    scan_id=str(self.project_id) if self.project_id else None
+                )
+            
+            
             # 2. Act
             if response.tool_calls:
                 # Add assistant message with tool calls to history

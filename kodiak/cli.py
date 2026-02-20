@@ -168,6 +168,7 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
 
         # Event Handlers
         async def on_thinking(ev): state["status"] = ev.data.get("message", "Thinking...")
+        async def on_thought(ev): state["status"] = "Generating plan..."
         async def on_tool_start(ev):
             state["status"] = f"Running {ev.data['tool_name']}"
             state["tools"].append({"name": ev.data['tool_name'], "target": ev.data.get("target", ""), "success": None})
@@ -178,6 +179,7 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
             state["findings"].append(ev.data.get("finding", {}))
 
         event_manager.subscribe("agent_thinking", on_thinking)
+        event_manager.subscribe("agent_thought", on_thought)
         event_manager.subscribe("tool_start", on_tool_start)
         event_manager.subscribe("tool_complete", on_tool_complete)
         event_manager.subscribe("finding_discovered", on_finding)
