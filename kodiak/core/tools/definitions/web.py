@@ -84,7 +84,7 @@ class NucleiTool(KodiakTool):
             "nuclei",
             "-json",  # JSON output for parsing
             "-nc",    # No color
-            "-silent", # Reduce noise
+            # Removed -silent to capture actual error strings in stderr on Exit 2
             "-rate-limit", str(args.get("rate_limit", 150)),
             "-timeout", str(args.get("timeout", 10)),
             "-retries", str(args.get("retries", 1))
@@ -128,14 +128,14 @@ class NucleiTool(KodiakTool):
             findings = self._parse_nuclei_output(result.stdout)
             
             # Generate summary
-            summary = self._generate_summary(target, findings)
+            summary = self._generate_summary(target_str, findings)
             
             return ToolResult(
                 success=True,
                 output=summary,
                 data={
                     "command": cmd_str,
-                    "target": target,
+                    "target": target_str,
                     "findings": findings,
                     "total_findings": len(findings),
                     "severity_breakdown": self._get_severity_breakdown(findings),

@@ -90,14 +90,14 @@ class SubfinderTool(KodiakTool):
             subdomains = self._parse_subfinder_output(result.stdout)
             
             # Generate summary
-            summary = self._generate_subfinder_summary(domain, subdomains)
+            summary = self._generate_subfinder_summary(domain_str, subdomains)
             
             return ToolResult(
                 success=True,
                 output=summary,
                 data={
                     "command": cmd_str,
-                    "domain": domain,
+                    "domain": domain_str,
                     "subdomains": subdomains,
                     "total_found": len(subdomains),
                     "unique_subdomains": list(set(subdomains))

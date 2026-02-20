@@ -112,6 +112,7 @@ class DockerExecutor(ServiceExecutor):
         docker_cmd = [
             "docker", "run",
             "--rm",  # Remove container after execution
+            "--privileged",  # Grant raw sockets and bypass seccomp for security tools
         ]
         
         if stdin is not None:
