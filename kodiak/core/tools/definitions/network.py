@@ -118,7 +118,7 @@ class NmapTool(KodiakTool):
                 return ToolResult(
                     success=False,
                     output=f"Nmap scan failed: {result.stderr}",
-                    error=f"Command failed with exit code {result.exit_code}"
+                    error=f"Command failed with exit code {result.exit_code}: {result.stderr}"
                 )
             
             # Parse nmap output

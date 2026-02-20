@@ -121,7 +121,7 @@ class NucleiTool(KodiakTool):
                 return ToolResult(
                     success=False,
                     output=f"Nuclei scan failed: {result.stderr}",
-                    error=f"Command failed with exit code {result.exit_code}"
+                    error=f"Command failed with exit code {result.exit_code}: {result.stderr}"
                 )
             
             # Parse JSON output
