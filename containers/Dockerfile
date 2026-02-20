@@ -10,14 +10,15 @@ FROM golang:1.24-bookworm AS go-builder
 
 ENV CGO_ENABLED=0
 
-RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && \
-    go install -v github.com/projectdiscovery/katana/cmd/katana@latest && \
-    go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest && \
-    go install -v github.com/jaeles-project/gospider@latest && \
-    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest && \
-    go install -v github.com/tomnomnom/waybackurls@latest && \
-    go install -v github.com/tomnomnom/gf@latest && \
-    go install -v github.com/lc/gau/v2/cmd/gau@latest
+RUN mkdir -p /go/bin
+RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest || echo "Warning: Failed to install httpx"
+RUN go install -v github.com/projectdiscovery/katana/cmd/katana@latest || echo "Warning: Failed to install katana"
+RUN go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest || echo "Warning: Failed to install dnsx"
+RUN go install -v github.com/jaeles-project/gospider@latest || echo "Warning: Failed to install gospider"
+RUN go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest || echo "Warning: Failed to install interactsh"
+RUN go install -v github.com/tomnomnom/waybackurls@latest || echo "Warning: Failed to install waybackurls"
+RUN go install -v github.com/tomnomnom/gf@latest || echo "Warning: Failed to install gf"
+RUN go install -v github.com/lc/gau/v2/cmd/gau@latest || echo "Warning: Failed to install gau"
 
 # ============================================================
 # STAGE 2: FINAL KALI IMAGE
