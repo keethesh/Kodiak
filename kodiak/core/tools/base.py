@@ -38,12 +38,29 @@ class BaseTool(ABC):
     
     def to_openai_schema(self) -> Dict[str, Any]:
         """Converts the tool definition to OpenAI function schema."""
+        schema = self.parameters_schema.copy()
+        
+        # Enforce all tools to require a 'thought' parameter to capture LLM reasoning
+        if "properties" not in schema:
+            schema["properties"] = {}
+        
+        schema["properties"]["thought"] = {
+            "type": "string",
+            "description": "REQUIRED: Explain your step-by-step reasoning and plan before executing this tool."
+        }
+        
+        if "required" not in schema:
+            schema["required"] = []
+            
+        if "thought" not in schema["required"]:
+            schema["required"].append("thought")
+            
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters_schema
+                "parameters": schema
             }
         }
     

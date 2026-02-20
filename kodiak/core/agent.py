@@ -195,6 +195,15 @@ class KodiakAgent:
                         args = json.loads(tool_call.function.arguments)
                     except json.JSONDecodeError:
                         args = {}
+                        
+                    # Extract the synthetic 'thought' parameter Gemini uses to explain actions
+                    thought = args.pop("thought", None)
+                    if thought and not response.content and self.event_manager:
+                        await self.event_manager.emit_agent_thought(
+                            agent_id=self.agent_id,
+                            thought=thought,
+                            scan_id=str(self.project_id) if self.project_id else None
+                        )
                     
                     # Execute action
                     result = await self.act(
@@ -268,6 +277,20 @@ class KodiakAgent:
                 
             messages.extend(condensed_history)
             
+            # Enforce thinking before tool calls
+            # Models like Gemini 3 Flash often skip the 'content' block 
+            # if we don't explicitly prompt them at the end of the chain.
+            if len(messages) > 0 and messages[-1].get("role") != "user":
+                messages.append({
+                    "role": "user",
+                    "content": "Please explain your reasoning and plan step-by-step before calling any tools."
+                })
+            elif len(messages) > 0 and messages[-1].get("role") == "user":
+                # Inject it into the existing user message if it's not empty
+                orig_content = messages[-1].get("content", "")
+                if orig_content and "explain your reasoning" not in orig_content.lower():
+                    messages[-1]["content"] = orig_content + "\n\n(Remember to explain your reasoning step-by-step before calling any tools.)"
+                    
             # Get LLM configuration
             provider = llm.infer_provider_from_model(self.model_name)
             api_key = llm.get_api_key_for_provider(provider)
@@ -321,6 +344,7 @@ class KodiakAgent:
             "EXECUTION ENVIRONMENT:\n"
             "All security tools run inside a Kali Docker container. You call the tool and it runs automatically.\n\n"
             "OPERATIONAL GUIDELINES:\n"
+            "- CRITICAL RULE: YOU MUST ALWAYS EXPLAIN YOUR REASONING BEFORE CALLING A TOOL. Never output a tool call without first explaining your plan, findings, or thoughts in plain text.\n"
             "- Use tools systematically and interpret results carefully\n"
             "- Focus on high-impact vulnerabilities\n"
             "- CALL complete_scan tool when you are finished\n\n"
