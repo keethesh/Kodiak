@@ -87,7 +87,6 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
     if not HAS_DATABASE:
         console.print("[yellow]Database not found. Initializing...[/yellow]")
         from kodiak.database.engine import init_db
-        import asyncio
         asyncio.run(init_db())
         console.print("[green]Database initialized![/green]")
 
@@ -213,7 +212,6 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
 @main.command()
 def migrate():
     """Reset and initialize the database tables (MVP simple migration)."""
-    import asyncio
     from kodiak.database.engine import init_db
     console.print("🔄 [bold]Recreating database tables...[/bold]")
     asyncio.run(init_db())
