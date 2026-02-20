@@ -45,30 +45,34 @@ RUN useradd -m -s /bin/bash kodiak && \
              /app && \
     chown -R kodiak:kodiak /home/kodiak /workspace /app
 
-# Install all apt dependencies in a single layer, clean aggressively
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    # Core system
-    kali-archive-keyring sudo wget curl git unzip tar ca-certificates gnupg \
-    # Python environment
+# Install core dependencies first
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    kali-archive-keyring sudo wget curl git unzip tar ca-certificates gnupg
+
+# Install Python and Networking
+RUN apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv pipx \
-    # Network utilities
-    dnsutils iproute2 iputils-ping \
-    # Text processing
+    dnsutils iproute2 iputils-ping
+
+# Install Text Processing and Node
+RUN apt-get install -y --no-install-recommends \
     jq parallel ripgrep grep less procps \
-    # Node.js
-    nodejs npm \
-    # System capabilities & Kali Scanner Tools
+    nodejs npm
+
+# Install Scanner tools & libcap
+RUN apt-get install -y --no-install-recommends \
     libcap2-bin nmap ncat ndiff masscan \
-    sqlmap nuclei subfinder naabu ffuf nikto wapiti whatweb wafw00f \
-    # Playwright browser dependencies (only exactly what's needed for chromium)
+    sqlmap nuclei subfinder naabu ffuf nikto wapiti whatweb wafw00f && \
+    setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip $(which nmap)
+
+# Install Playwright browser dependencies
+RUN apt-get install -y --no-install-recommends \
     libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libatspi2.0-0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2t64 \
-    fonts-unifont fonts-noto-color-emoji fonts-freefont-ttf fonts-dejavu-core ttf-bitstream-vera && \
-    # Set nmap capabilities
-    setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip $(which nmap) && \
-    # Clean apt caches entirely
-    apt-get autoremove -y && \
+    fonts-unifont fonts-noto-color-emoji fonts-freefont-ttf fonts-dejavu-core ttf-bitstream-vera
+
+# Clean up apt caches
+RUN apt-get autoremove -y && \
     apt-get autoclean && \
     rm -rf /var/lib/apt/lists/*
 
