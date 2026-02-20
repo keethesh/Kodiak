@@ -14,8 +14,8 @@ class TerminalTool(KodiakTool):
     Execute arbitrary shell commands.
     This provides the 'Hybrid' capability: giving the LLM raw access when structured tools aren't enough.
     """
-    name = "terminal_execute"
-    description = "Executes a shell command on the system. Use this for tools that don't have dedicated wrappers or for file system exploration."
+    name = "system_execute"
+    description = "Executes a simple shell command locally on the host system. Use this for basic file system exploration. For advanced multi-step commands or docker container isolation, use terminal_start."
     args_schema = TerminalArgs
 
     @property
