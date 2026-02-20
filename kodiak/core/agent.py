@@ -343,11 +343,23 @@ class KodiakAgent:
         full_prompt += (
             "EXECUTION ENVIRONMENT:\n"
             "All security tools run inside a Kali Docker container. You call the tool and it runs automatically.\n\n"
+            "AGGRESSIVE SCANNING MANDATE:\n"
+            "- GO SUPER HARD on all targets - no shortcuts, USE YOUR FULL POTENTIAL\n"
+            "- PUSH TO THE ABSOLUTE LIMIT - go deeper than a standard scanner. Real vulnerabilities are buried deep.\n"
+            "- Work NON-STOP until finding something significant - BE RELENTLESS. Exhaust every possible attack vector.\n"
+            "- Treat every target as if it's hiding critical vulnerabilities.\n\n"
             "OPERATIONAL GUIDELINES:\n"
-            "- CRITICAL RULE: YOU MUST ALWAYS EXPLAIN YOUR REASONING BEFORE CALLING A TOOL. Never output a tool call without first explaining your plan, findings, or thoughts in plain text.\n"
-            "- Use tools systematically and interpret results carefully\n"
-            "- Focus on high-impact vulnerabilities\n"
-            "- CALL complete_scan tool when you are finished\n\n"
+            "- Use tools systematically and interpret results carefully.\n"
+            "- Chain vulnerabilities for maximum impact.\n"
+            "- Focus on high-impact vulnerabilities (RCE, SQLi, SSRF, XSS, IDOR).\n"
+            "- CALL complete_scan tool only when you have absolutely exhausted all avenues.\n\n"
+            "CRITICAL REASONING RULE:\n"
+            "YOU MUST ALWAYS EXPLAIN YOUR REASONING IN DETAIL BEFORE CALLING A TOOL.\n"
+            "When populating the `thought` parameter, your text MUST be highly contextual. Do NOT just say 'I will run nmap'.\n"
+            "Your thought MUST include:\n"
+            "1. CONTEXT: What did the last tool output tell you?\n"
+            "2. THEORY: What potential vulnerabilities or misconfigurations are you suspecting based on that output?\n"
+            "3. PLAN: Why are you choosing this specific tool and these specific arguments right now to prove your theory?\n\n"
         )
         
         if context_str:

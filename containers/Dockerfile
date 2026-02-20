@@ -32,26 +32,18 @@ LABEL description="Kodiak Security Toolbox - AI-Powered Penetration Testing Envi
 # Environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV KODIAK_SANDBOX_MODE=true
-ENV PATH="/home/kodiak/go/bin:/home/kodiak/.local/bin:/home/kodiak/.npm-global/bin:$PATH"
+ENV PATH="/root/go/bin:/root/.local/bin:/root/.npm-global/bin:$PATH"
 
 # Install core dependencies first
 RUN apt-get update --fix-missing && \
     apt-get install -y --no-install-recommends kali-archive-keyring wget curl git unzip tar ca-certificates gnupg
 
-# Sudo often fails configure in Kali minimal on first run with other packages
-RUN apt-get install -y --no-install-recommends sudo
-
-# Create non-root user for security (AFTER sudo is installed to prevent dpkg prompt)
-RUN useradd -m -s /bin/bash kodiak && \
-    usermod -aG sudo kodiak && \
-    echo "kodiak ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
-    mkdir -p /home/kodiak/tools \
-             /home/kodiak/wordlists \
-             /home/kodiak/output \
-             /home/kodiak/go/bin \
+RUN mkdir -p /root/tools \
+             /root/wordlists \
+             /root/output \
+             /root/go/bin \
              /workspace \
-             /app && \
-    chown -R kodiak:kodiak /home/kodiak /workspace /app
+             /app
 
 
 
@@ -82,14 +74,12 @@ RUN apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy compiled Go tools from builder stage
-COPY --from=go-builder /go/bin/* /home/kodiak/go/bin/
+COPY --from=go-builder /go/bin/* /root/go/bin/
 
-# Update nuclei templates (run as kodiak to store in home dir)
-USER kodiak
-RUN /home/kodiak/go/bin/nuclei -update-templates
+# Update nuclei templates
+RUN /root/go/bin/nuclei -update-templates
 
 # Install Python and Node tools
-USER root
 RUN pipx install arjun || echo "Warning: Failed to install arjun"
 RUN pipx install dirsearch || echo "Warning: Failed to install dirsearch"
 RUN pipx inject dirsearch setuptools || echo "Warning: Failed to inject dirsearch setuptools"
@@ -99,9 +89,8 @@ RUN pipx install bandit || echo "Warning: Failed to install bandit"
 RUN pipx install jwt-tool || echo "Warning: Failed to install jwt-tool"
 
 # Setup Node tools
-RUN mkdir -p /home/kodiak/.npm-global && \
-    npm install -g retire@latest eslint@latest js-beautify@latest jshint@latest && \
-    chown -R kodiak:kodiak /home/kodiak/.npm-global
+RUN mkdir -p /root/.npm-global && \
+    npm install -g retire@latest eslint@latest js-beautify@latest jshint@latest
 
 # Install TruffleHog and Trivy
 RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin || echo "Warning: Failed to install trufflehog"
@@ -112,29 +101,25 @@ RUN npm cache clean --force && \
     rm -rf /root/.cache/pipx /root/.cache/pip /tmp/*
 
 # Install Playwright Chromium specifically (avoid bulky full installs)
-USER kodiak
-RUN pip3 install --user --break-system-packages --force-reinstall playwright && \
+RUN pip3 install --break-system-packages --force-reinstall playwright && \
     # Install ONLY chromium directly and delete the bloated unused package downloads
-    python3 -m playwright install chromium && \
-    rm -rf /home/kodiak/.cache/pip && \
+    playwright install chromium && \
+    rm -rf /root/.cache/pip && \
     # Strip unnecessary browser binaries if they downloaded anyway
-    find /home/kodiak/.cache/ms-playwright -mindepth 1 -maxdepth 1 ! -name 'chromium-*' -exec rm -rf {} +
+    find /root/.cache/ms-playwright -mindepth 1 -maxdepth 1 ! -name 'chromium-*' -exec rm -rf {} +
 
 # ============================================================
 # ENTRYPOINT SETUP
 # ============================================================
-USER kodiak
 WORKDIR /workspace
 
 # Add tool paths to profile
-RUN echo 'export PATH="/home/kodiak/go/bin:/home/kodiak/.local/bin:/home/kodiak/.npm-global/bin:$PATH"' >> /home/kodiak/.bashrc && \
-    echo 'export PATH="/home/kodiak/go/bin:/home/kodiak/.local/bin:/home/kodiak/.npm-global/bin:$PATH"' >> /home/kodiak/.profile
+RUN echo 'export PATH="/root/go/bin:/root/.local/bin:/root/.npm-global/bin:$PATH"' >> /root/.bashrc && \
+    echo 'export PATH="/root/go/bin:/root/.local/bin:/root/.npm-global/bin:$PATH"' >> /root/.profile
 
 # Copy entrypoint script
-USER root
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-USER kodiak
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["/bin/bash"]
