@@ -90,10 +90,9 @@ class NucleiTool(KodiakTool):
             "-retries", str(args.get("retries", 1))
         ]
         
-        # Add all targets using the -u/target flags appropriately
-        # Nuclei supports space separated targets or comma. For absolute safety, we use comma
-        # https://docs.projectdiscovery.io/tools/nuclei/running
-        command.extend(["-target", ",".join(processed_targets)])
+        # Add all targets using multiple -u flags
+        for t in processed_targets:
+            command.extend(["-u", t])
         
         # Add filters
         if args.get("tags"):
