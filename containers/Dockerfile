@@ -91,23 +91,25 @@ RUN /home/kodiak/go/bin/nuclei -update-templates
 
 # Install Python and Node tools
 USER root
-RUN pipx install arjun && \
-    pipx install dirsearch && \
-    pipx inject dirsearch setuptools && \
-    pipx install wafw00f && \
-    pipx install semgrep && \
-    pipx install bandit && \
-    pipx install jwt-tool && \
-    # Setup Node tools
-    mkdir -p /home/kodiak/.npm-global && \
+RUN pipx install arjun || echo "Warning: Failed to install arjun"
+RUN pipx install dirsearch || echo "Warning: Failed to install dirsearch"
+RUN pipx inject dirsearch setuptools || echo "Warning: Failed to inject dirsearch setuptools"
+RUN pipx install wafw00f || echo "Warning: Failed to install wafw00f"
+RUN pipx install semgrep || echo "Warning: Failed to install semgrep"
+RUN pipx install bandit || echo "Warning: Failed to install bandit"
+RUN pipx install jwt-tool || echo "Warning: Failed to install jwt-tool"
+
+# Setup Node tools
+RUN mkdir -p /home/kodiak/.npm-global && \
     npm install -g retire@latest eslint@latest js-beautify@latest jshint@latest && \
-    chown -R kodiak:kodiak /home/kodiak/.npm-global && \
-    # Install TruffleHog
-    curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin && \
-    # Install Trivy
-    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin && \
-    # Clean up caches
-    npm cache clean --force && \
+    chown -R kodiak:kodiak /home/kodiak/.npm-global
+
+# Install TruffleHog and Trivy
+RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin || echo "Warning: Failed to install trufflehog"
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin || echo "Warning: Failed to install trivy"
+
+# Clean up caches
+RUN npm cache clean --force && \
     rm -rf /root/.cache/pipx /root/.cache/pip /tmp/*
 
 # Install Playwright Chromium specifically (avoid bulky full installs)
