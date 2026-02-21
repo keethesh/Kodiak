@@ -265,3 +265,17 @@ def test_agent_prepares_only_gated_tools():
     names = [item["function"]["name"] for item in prepared]
 
     assert names == ["nuclei", "complete_scan"]
+
+
+def test_agent_history_content_includes_evidence_block():
+    agent = _make_agent()
+    output = (
+        "Scan summary\n"
+        "[high] SQL Injection vulnerable parameter id\n"
+        "HTTP status 302 on login endpoint\n"
+        "Completed."
+    )
+    content = agent._build_tool_history_content({"output": output, "data": {}})
+
+    assert "[tool_evidence]" in content
+    assert "vulnerable parameter id" in content

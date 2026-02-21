@@ -3,6 +3,7 @@ import json
 import asyncio
 import time
 import hashlib
+import re
 from contextlib import AsyncExitStack
 from uuid import uuid4, UUID
 from dataclasses import dataclass
@@ -1046,9 +1047,18 @@ class KodiakAgent:
         if len(output) > 3500:
             output = output[:3497] + "..."
 
+        evidence_lines = self._extract_key_evidence(result, output)
+
         data = result.get("data")
+        parts: List[str] = []
+        if output:
+            parts.append(output)
+        if evidence_lines:
+            evidence_block = "\n".join(f"- {line}" for line in evidence_lines[:6])
+            parts.append(f"[tool_evidence]\n{evidence_block}\n[/tool_evidence]")
+
         if not isinstance(data, dict) or not data:
-            return output
+            return "\n\n".join(parts).strip()
 
         preferred_keys = (
             "exit_code",
@@ -1080,7 +1090,52 @@ class KodiakAgent:
             compact_json = compact_json[:697] + "..."
 
         data_tail = f"[tool_data]{compact_json}[/tool_data]"
-        return f"{output}\n\n{data_tail}" if output else data_tail
+        parts.append(data_tail)
+        return "\n\n".join(parts).strip()
+
+    def _extract_key_evidence(self, result: Dict[str, Any], output: str) -> List[str]:
+        """
+        Extract a small evidence set that is easy for the LLM to plan against.
+        """
+        evidence: List[str] = []
+        if not output:
+            return evidence
+
+        important = re.compile(
+            r"\b(vulnerab|cve-|open|found|severity|critical|high|timeout|timed out|error|failed|"
+            r"status|title|database|privilege|payload|login|rce|sqli|xss|200|301|302|403)\b",
+            re.IGNORECASE,
+        )
+        seen = set()
+        for raw_line in output.splitlines():
+            line = " ".join(raw_line.split()).strip()
+            if not line:
+                continue
+            if len(line) > 180:
+                line = line[:177] + "..."
+            if important.search(line) and line.lower() not in seen:
+                evidence.append(line)
+                seen.add(line.lower())
+            if len(evidence) >= 6:
+                break
+
+        if evidence:
+            return evidence
+
+        # Fallback: first meaningful lines.
+        for raw_line in output.splitlines():
+            line = " ".join(raw_line.split()).strip()
+            if not line:
+                continue
+            if len(line) > 180:
+                line = line[:177] + "..."
+            if line.lower() in seen:
+                continue
+            evidence.append(line)
+            seen.add(line.lower())
+            if len(evidence) >= 3:
+                break
+        return evidence
 
     async def _execute_tool_with_limits(self, tool_name: str, tool: Any, execution_args: Dict[str, Any]) -> Any:
         if self._tool_scheduler is not None:
