@@ -11,6 +11,7 @@ import litellm
 from litellm import acompletion
 
 from kodiak.core.config import settings
+from kodiak.core.memory import InsightMemoryService
 from kodiak.core.tools.base import ToolResult
 from kodiak.services import llm
 
@@ -58,10 +59,14 @@ class KodiakAgent:
         self.skills_knowledge: str = ""
         self._hive_mind = None
         self._current_iteration = 0
+        self.scan_id: Optional[UUID] = None
 
         # Lightweight in-run memory for tool deduplication/backoff.
         self._tool_attempts: List[Dict[str, Any]] = []
         self._attempts_by_fingerprint: Dict[str, List[Dict[str, Any]]] = {}
+        self._persisted_insights: List[Dict[str, Any]] = []
+        self._persisted_do_not_repeat: Dict[str, str] = {}
+        self._insight_memory_service = InsightMemoryService(self.model_name)
         self._strict_dedupe_tools = {
             "nmap",
             "nuclei",
@@ -160,6 +165,8 @@ class KodiakAgent:
         - Error occurs
         """
         logger.info(f"🚀 Agent {self.agent_id} starting run for goal: {goal}")
+        self.scan_id = scan_id
+        await self._load_persisted_insight_memory(session, scan_id)
         
         history = [
             {
@@ -471,6 +478,34 @@ class KodiakAgent:
 
         return self._sanitize_for_gemini(history[cut:])
 
+    async def _load_persisted_insight_memory(self, session: Any, scan_id: UUID) -> None:
+        if not session or not scan_id:
+            return
+        try:
+            from kodiak.database.crud import insight_memory
+
+            records = await insight_memory.list_by_scan(
+                session=session,
+                scan_id=scan_id,
+                limit=settings.memory_max_entries,
+            )
+            self._persisted_insights = []
+            self._persisted_do_not_repeat = {}
+            for record in reversed(records):
+                entry = {
+                    "tool": record.tool,
+                    "target": record.target,
+                    "fingerprint": record.fingerprint,
+                    "status": record.status,
+                    "insight": record.insight or {},
+                }
+                self._persisted_insights.append(entry)
+                do_not_repeat = (record.insight or {}).get("do_not_repeat", "").strip()
+                if do_not_repeat:
+                    self._persisted_do_not_repeat[record.fingerprint] = do_not_repeat
+        except Exception as e:
+            logger.warning(f"Could not load persisted insight memory for scan {scan_id}: {e}")
+
     def _sanitize_for_gemini(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Remove any assistant+tool_calls messages that have no following tool response.
         
@@ -507,13 +542,32 @@ class KodiakAgent:
 
     def _build_runtime_memory_context(self) -> str:
         """Build compact run-state memory to reduce repeated tool calls."""
-        if not self._tool_attempts:
+        if not self._tool_attempts and not self._persisted_insights:
             return ""
 
-        lines = [
-            "RUNTIME MEMORY (recent tool actions; reuse these results and avoid duplicates):"
-        ]
-        for attempt in self._tool_attempts[-10:]:
+        lines = ["RUNTIME MEMORY (reuse these results and avoid duplicates):"]
+
+        recent_persisted = self._persisted_insights[-settings.memory_recent_in_prompt:]
+        if recent_persisted:
+            lines.append("RECENT INSIGHTS:")
+            for entry in recent_persisted:
+                insight = entry.get("insight", {})
+                what = (insight.get("what_was_tested") or f"{entry.get('tool')} {entry.get('target')}").strip()
+                observations = insight.get("key_observations") or []
+                next_actions = insight.get("next_best_actions") or []
+                do_not_repeat = (insight.get("do_not_repeat") or "").strip()
+                obs_text = observations[0] if observations else ""
+                next_text = next_actions[0] if next_actions else ""
+                line = f"- [{entry.get('status', 'unknown').upper()}] {what}"
+                if obs_text:
+                    line += f" | obs: {obs_text}"
+                if next_text:
+                    line += f" | next: {next_text}"
+                if do_not_repeat:
+                    line += f" | avoid: {do_not_repeat}"
+                lines.append(line)
+
+        for attempt in self._tool_attempts[-settings.memory_recent_in_prompt:]:
             status = "SUCCESS"
             if not attempt.get("success"):
                 status = "TIMEOUT" if attempt.get("timed_out") else "FAILED"
@@ -647,6 +701,12 @@ class KodiakAgent:
         return args, None
 
     def _should_skip_tool_call(self, tool_name: str, args: Dict[str, Any], fingerprint: str) -> Optional[str]:
+        if fingerprint in self._persisted_do_not_repeat:
+            return (
+                f"Skipping {tool_name} with previously blocked fingerprint: "
+                f"{self._persisted_do_not_repeat[fingerprint]}"
+            )
+
         prior_attempts = self._attempts_by_fingerprint.get(fingerprint, [])
         if not prior_attempts:
             return None
@@ -713,6 +773,43 @@ class KodiakAgent:
         self._tool_attempts.append(attempt_record)
         self._attempts_by_fingerprint.setdefault(fingerprint, []).append(attempt_record)
 
+    async def _persist_insight_memory(
+        self,
+        session: Any,
+        project_id: Any,
+        scan_id: Any,
+        tool_name: str,
+        target: str,
+        fingerprint: str,
+        args: Dict[str, Any],
+        result_dict: Dict[str, Any],
+    ) -> None:
+        if not session or not project_id or not scan_id:
+            return
+        try:
+            insight_entry = await self._insight_memory_service.generate_and_store(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target,
+                fingerprint=fingerprint,
+                args=args,
+                result=result_dict,
+            )
+            if not insight_entry:
+                return
+
+            self._persisted_insights.append(insight_entry)
+            do_not_repeat = (insight_entry.get("insight", {}) or {}).get("do_not_repeat", "").strip()
+            if do_not_repeat:
+                self._persisted_do_not_repeat[fingerprint] = do_not_repeat
+
+            if len(self._persisted_insights) > settings.memory_max_entries:
+                self._persisted_insights = self._persisted_insights[-settings.memory_max_entries:]
+        except Exception as e:
+            logger.warning(f"Failed to persist insight memory for {tool_name}: {e}")
+
 
 
     async def act(
@@ -744,6 +841,16 @@ class KodiakAgent:
             if skip_reason:
                 skipped = ToolResult(success=False, output=skip_reason, error=skip_reason)
                 self._record_tool_attempt(tool_name, adjusted_args, fingerprint, skipped)
+                await self._persist_insight_memory(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=self._result_to_dict(skipped),
+                )
                 if self.event_manager:
                     await self.event_manager.emit_tool_complete(tool_name, skipped, str(scan_id))
                 return self._result_to_dict(skipped)
@@ -764,6 +871,16 @@ class KodiakAgent:
                 result_dict = {"success": True, "output": str(result), "data": {}}
 
             self._record_tool_attempt(tool_name, adjusted_args, fingerprint, result_dict)
+            await self._persist_insight_memory(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target,
+                fingerprint=fingerprint,
+                args=adjusted_args,
+                result_dict=result_dict,
+            )
             
             # Emit completion
             if self.event_manager:
@@ -775,6 +892,16 @@ class KodiakAgent:
             failure = ToolResult(success=False, output=f"Error: {e}", error=str(e))
             fingerprint = self._fingerprint_tool_call(tool_name, args)
             self._record_tool_attempt(tool_name, args, fingerprint, failure)
+            await self._persist_insight_memory(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target,
+                fingerprint=fingerprint,
+                args=args,
+                result_dict=self._result_to_dict(failure),
+            )
             if self.event_manager:
                 await self.event_manager.emit_tool_complete(tool_name, failure, str(scan_id))
             return self._result_to_dict(failure)

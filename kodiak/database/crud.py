@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
 
-from kodiak.database.models import Project, ScanJob, Node, Finding, ScanStatus, Attempt
+from kodiak.database.models import Project, ScanJob, Node, Finding, ScanStatus, Attempt, InsightMemory
 from kodiak.core.error_handling import (
     ErrorHandler, DatabaseError, handle_errors, ErrorCategory
 )
@@ -236,7 +236,7 @@ class CRUDAttempt:
                 Attempt.project_id == project_id,
                 Attempt.tool == tool,
                 Attempt.target == target
-            ).order_by(Attempt.timestamp.desc())
+            ).order_by(Attempt.created_at.desc())
             result = await session.execute(statement)
             return result.scalar_one_or_none()
         except SQLAlchemyError as e:
@@ -252,7 +252,7 @@ class CRUDAttempt:
         try:
             statement = select(Attempt).where(
                 Attempt.project_id == project_id
-            ).order_by(Attempt.timestamp.desc()).limit(limit)
+            ).order_by(Attempt.created_at.desc()).limit(limit)
             result = await session.execute(statement)
             return list(result.scalars().all())
         except SQLAlchemyError as e:
@@ -268,7 +268,7 @@ class CRUDAttempt:
             statement = select(Attempt).where(
                 Attempt.project_id == project_id,
                 Attempt.tool == tool
-            ).order_by(Attempt.timestamp.desc()).limit(limit)
+            ).order_by(Attempt.created_at.desc()).limit(limit)
             result = await session.execute(statement)
             return list(result.scalars().all())
         except SQLAlchemyError as e:
@@ -318,7 +318,79 @@ class CRUDAttempt:
             })
 
 
+class CRUDInsightMemory:
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def create(self, session: AsyncSession, memory: InsightMemory) -> InsightMemory:
+        try:
+            session.add(memory)
+            await session.commit()
+            await session.refresh(memory)
+            return memory
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("create_insight_memory", e, {
+                "project_id": str(getattr(memory, "project_id", "unknown")),
+                "scan_id": str(getattr(memory, "scan_id", "unknown")),
+                "tool": getattr(memory, "tool", "unknown"),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_by_scan(self, session: AsyncSession, scan_id: UUID, limit: int = 50) -> List[InsightMemory]:
+        try:
+            statement = (
+                select(InsightMemory)
+                .where(InsightMemory.scan_id == scan_id)
+                .order_by(InsightMemory.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_insight_memory_by_scan", e, {
+                "scan_id": str(scan_id),
+                "limit": limit,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def find_by_fingerprint(self, session: AsyncSession, scan_id: UUID, fingerprint: str) -> Optional[InsightMemory]:
+        try:
+            statement = (
+                select(InsightMemory)
+                .where(
+                    InsightMemory.scan_id == scan_id,
+                    InsightMemory.fingerprint == fingerprint
+                )
+                .order_by(InsightMemory.created_at.desc())
+            )
+            result = await session.execute(statement)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("find_insight_memory_by_fingerprint", e, {
+                "scan_id": str(scan_id),
+                "fingerprint": fingerprint,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_do_not_repeat(self, session: AsyncSession, scan_id: UUID, limit: int = 50) -> List[InsightMemory]:
+        try:
+            statement = (
+                select(InsightMemory)
+                .where(InsightMemory.scan_id == scan_id)
+                .order_by(InsightMemory.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            records = list(result.scalars().all())
+            return [r for r in records if (r.insight or {}).get("do_not_repeat")]
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_insight_memory_do_not_repeat", e, {
+                "scan_id": str(scan_id),
+                "limit": limit,
+            })
+
+
 project = CRUDProject()
 scan_job = CRUDScanJob()
 node = CRUDNode()
 attempt = CRUDAttempt()
+insight_memory = CRUDInsightMemory()

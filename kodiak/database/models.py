@@ -43,6 +43,7 @@ class Project(SQLModel, table=True):
     nodes: List["Node"] = Relationship(back_populates="project")
     tasks: List["Task"] = Relationship(back_populates="project")
     attempts: List["Attempt"] = Relationship(back_populates="project")
+    insights: List["InsightMemory"] = Relationship(back_populates="project")
 
 
 class ScanJob(SQLModel, table=True):
@@ -98,6 +99,22 @@ class Attempt(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     
     project: Project = Relationship(back_populates="attempts")
+
+
+class InsightMemory(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    project_id: UUID = Field(foreign_key="project.id")
+    scan_id: Optional[UUID] = Field(default=None, foreign_key="scanjob.id")
+
+    tool: str
+    target: str
+    fingerprint: str = Field(index=True)
+    status: str
+    insight: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+
+    created_at: datetime = Field(default_factory=utc_now)
+
+    project: Project = Relationship(back_populates="insights")
 
 
 class Task(SQLModel, table=True):
