@@ -80,11 +80,15 @@ class KodiakSettings(BaseSettings):
     # Tool Configuration
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")  # 5 minutes
     heavy_tool_parallel_limit: int = Field(default=2, alias="KODIAK_HEAVY_TOOL_PARALLEL_LIMIT")
+    tool_scheduler: str = Field(default="queue", alias="KODIAK_TOOL_SCHEDULER")
+    tool_queue_limit: int = Field(default=50, alias="KODIAK_TOOL_QUEUE_LIMIT")
     enable_hive_mind: bool = Field(default=True, alias="KODIAK_ENABLE_HIVE_MIND")
     memory_enabled: bool = Field(default=True, alias="KODIAK_MEMORY_ENABLED")
+    memory_central_enabled: bool = Field(default=True, alias="KODIAK_MEMORY_CENTRAL_ENABLED")
     memory_max_entries: int = Field(default=200, alias="KODIAK_MEMORY_MAX_ENTRIES")
     memory_recent_in_prompt: int = Field(default=10, alias="KODIAK_MEMORY_RECENT")
     memory_output_chars: int = Field(default=1500, alias="KODIAK_MEMORY_OUTPUT_CHARS")
+    report_output_path: str = Field(default=str(Path.home() / ".kodiak" / "reports"), alias="KODIAK_REPORT_PATH")
     
     # Toolbox Container Configuration
     toolbox_image: str = Field(default="ghcr.io/keethesh/kodiak-toolbox:latest", alias="KODIAK_TOOLBOX_IMAGE")

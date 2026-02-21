@@ -13,6 +13,8 @@ from litellm import acompletion
 
 from kodiak.core.config import settings
 from kodiak.core.memory import InsightMemoryService
+from kodiak.core.memory_central import CentralMemoryService
+from kodiak.core.failure_policy import apply_timeout_backoff
 from kodiak.core.tools.base import ToolResult
 from kodiak.services import llm
 
@@ -50,6 +52,7 @@ class KodiakAgent:
         skills: Optional[List[str]] = None,
         global_tool_semaphore: Optional[asyncio.Semaphore] = None,
         tool_semaphores: Optional[Dict[str, asyncio.Semaphore]] = None,
+        tool_scheduler: Any = None,
     ):
         self.agent_id = agent_id
         self.model_name = model_name or settings.llm_model
@@ -65,6 +68,7 @@ class KodiakAgent:
         self.scan_id: Optional[UUID] = None
         self._global_tool_semaphore = global_tool_semaphore
         self._tool_semaphores = tool_semaphores or {}
+        self._tool_scheduler = tool_scheduler
         self._limited_heavy_tools = {"nmap", "sqlmap", "nuclei", "ffuf", "katana"}
 
         # Lightweight in-run memory for tool deduplication/backoff.
@@ -73,6 +77,8 @@ class KodiakAgent:
         self._persisted_insights: List[Dict[str, Any]] = []
         self._persisted_do_not_repeat: Dict[str, str] = {}
         self._insight_memory_service = InsightMemoryService(self.model_name)
+        self._central_memory_service = CentralMemoryService()
+        self._central_memory_context = ""
         self._strict_dedupe_tools = {
             "nmap",
             "nuclei",
@@ -302,6 +308,12 @@ class KodiakAgent:
         try:
             # Load context from DB
             context_str = await self._load_context(self.session, self.project_id)
+            if settings.memory_central_enabled and self.session and self.scan_id:
+                self._central_memory_context = await self._central_memory_service.build_prompt_context(
+                    session=self.session,
+                    scan_id=self.scan_id,
+                    limit=settings.memory_recent_in_prompt,
+                )
             runtime_memory = self._build_runtime_memory_context()
             if runtime_memory:
                 context_str = f"{context_str}\n{runtime_memory}" if context_str else runtime_memory
@@ -604,10 +616,13 @@ class KodiakAgent:
 
     def _build_runtime_memory_context(self) -> str:
         """Build compact run-state memory to reduce repeated tool calls."""
-        if not self._tool_attempts and not self._persisted_insights:
+        if not self._tool_attempts and not self._persisted_insights and not self._central_memory_context:
             return ""
 
         lines = ["RUNTIME MEMORY (reuse these results and avoid duplicates):"]
+
+        if self._central_memory_context:
+            lines.append(self._central_memory_context)
 
         recent_persisted = self._persisted_insights[-settings.memory_recent_in_prompt:]
         if recent_persisted:
@@ -688,79 +703,34 @@ class KodiakAgent:
 
         return str(args.get("target") or args.get("url") or args.get("domain") or "").strip().lower()
 
-    def _has_prior_timeout(self, tool_name: str, target_key: str) -> bool:
+    def _count_prior_timeouts_in_run(self, tool_name: str, target_key: str) -> int:
         if not target_key:
-            return False
+            return 0
+        count = 0
         for attempt in reversed(self._tool_attempts):
             if attempt.get("tool") != tool_name:
                 continue
             if attempt.get("target_key") != target_key:
                 continue
             if attempt.get("timed_out"):
-                return True
-        return False
+                count += 1
+        return count
 
-    def _safe_int(self, value: Any, default: int) -> int:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
-
-    def _maybe_backoff_tool_args(self, tool_name: str, args: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[str]]:
+    def _maybe_backoff_tool_args(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        timeout_count: int,
+    ) -> tuple[Dict[str, Any], Optional[str], Optional[str]]:
         """
-        If we already saw timeouts for this tool+target in this run,
-        reduce aggressiveness before retrying.
+        Apply policy-based backoff and stop conditions after timeout(s).
         """
-        target_key = self._extract_tool_target(tool_name, args)
-        if not self._has_prior_timeout(tool_name, target_key):
-            return args, None
-
-        updated = dict(args)
-        changes: List[str] = []
-
-        if tool_name == "sqlmap":
-            level = self._safe_int(updated.get("level", 1), 1)
-            risk = self._safe_int(updated.get("risk", 1), 1)
-            threads = self._safe_int(updated.get("threads", 1), 1)
-
-            if level > 2:
-                updated["level"] = 2
-                changes.append("level->2")
-            if risk > 1:
-                updated["risk"] = 1
-                changes.append("risk->1")
-            if threads > 1:
-                updated["threads"] = 1
-                changes.append("threads->1")
-
-        elif tool_name == "ffuf":
-            threads = self._safe_int(updated.get("threads", 40), 40)
-            if threads > 20:
-                updated["threads"] = 20
-                changes.append("threads->20")
-
-        elif tool_name == "httpx":
-            threads = self._safe_int(updated.get("threads", 50), 50)
-            if threads > 25:
-                updated["threads"] = 25
-                changes.append("threads->25")
-
-        elif tool_name == "nuclei":
-            rate_limit = self._safe_int(updated.get("rate_limit", 150), 150)
-            if rate_limit > 75:
-                updated["rate_limit"] = 75
-                changes.append("rate_limit->75")
-
-        elif tool_name == "katana":
-            rate_limit = self._safe_int(updated.get("rate_limit", 150), 150)
-            if rate_limit > 75:
-                updated["rate_limit"] = 75
-                changes.append("rate_limit->75")
-
-        if changes:
-            return updated, f"Auto-backoff applied after timeout: {', '.join(changes)}"
-
-        return args, None
+        adjusted, note, stop_reason = apply_timeout_backoff(
+            tool_name=tool_name,
+            args=args,
+            timeout_count=timeout_count,
+        )
+        return adjusted, note, stop_reason
 
     def _should_skip_tool_call(self, tool_name: str, args: Dict[str, Any], fingerprint: str) -> Optional[str]:
         if fingerprint in self._persisted_do_not_repeat:
@@ -872,6 +842,34 @@ class KodiakAgent:
         except Exception as e:
             logger.warning(f"Failed to persist insight memory for {tool_name}: {e}")
 
+    async def _persist_central_memory(
+        self,
+        session: Any,
+        project_id: Any,
+        scan_id: Any,
+        tool_name: str,
+        target: str,
+        fingerprint: str,
+        args: Dict[str, Any],
+        result_dict: Dict[str, Any],
+    ) -> None:
+        if not settings.memory_central_enabled:
+            return
+        try:
+            await self._central_memory_service.record_attempt(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                agent_id=self.agent_id,
+                tool_name=tool_name,
+                target=target or "unknown",
+                fingerprint=fingerprint,
+                args=args,
+                result=result_dict,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist central memory for {tool_name}: {e}")
+
 
 
     async def act(
@@ -896,8 +894,49 @@ class KodiakAgent:
             await self.event_manager.emit_tool_start(tool_name, target, self.agent_id, str(scan_id))
         
         try:
-            # Prevent duplicate loops and auto-backoff after prior timeouts.
-            adjusted_args, backoff_note = self._maybe_backoff_tool_args(tool_name, args)
+            # Prevent duplicate loops and apply failure policy after prior timeouts.
+            target_key = self._extract_tool_target(tool_name, args)
+            in_run_timeouts = self._count_prior_timeouts_in_run(tool_name, target_key)
+            central_timeouts = await self._central_memory_service.timeout_count_for_target(
+                session=session,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target_key=target_key,
+            )
+            timeout_count = in_run_timeouts + central_timeouts
+            adjusted_args, backoff_note, stop_reason = self._maybe_backoff_tool_args(
+                tool_name,
+                args,
+                timeout_count=timeout_count,
+            )
+            if stop_reason:
+                skipped = ToolResult(success=False, output=stop_reason, error=stop_reason)
+                fingerprint = self._fingerprint_tool_call(tool_name, adjusted_args)
+                self._record_tool_attempt(tool_name, adjusted_args, fingerprint, skipped)
+                await self._persist_insight_memory(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=self._result_to_dict(skipped),
+                )
+                await self._persist_central_memory(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target_key or target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=self._result_to_dict(skipped),
+                )
+                if self.event_manager:
+                    await self.event_manager.emit_tool_complete(tool_name, skipped, str(scan_id))
+                return self._result_to_dict(skipped)
+
             fingerprint = self._fingerprint_tool_call(tool_name, adjusted_args)
             skip_reason = self._should_skip_tool_call(tool_name, adjusted_args, fingerprint)
             if skip_reason:
@@ -909,6 +948,16 @@ class KodiakAgent:
                     scan_id=scan_id,
                     tool_name=tool_name,
                     target=target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=self._result_to_dict(skipped),
+                )
+                await self._persist_central_memory(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target_key or target,
                     fingerprint=fingerprint,
                     args=adjusted_args,
                     result_dict=self._result_to_dict(skipped),
@@ -943,6 +992,16 @@ class KodiakAgent:
                 args=adjusted_args,
                 result_dict=result_dict,
             )
+            await self._persist_central_memory(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target_key or target,
+                fingerprint=fingerprint,
+                args=adjusted_args,
+                result_dict=result_dict,
+            )
             
             # Emit completion
             if self.event_manager:
@@ -964,11 +1023,27 @@ class KodiakAgent:
                 args=args,
                 result_dict=self._result_to_dict(failure),
             )
+            await self._persist_central_memory(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target_key if 'target_key' in locals() else target,
+                fingerprint=fingerprint,
+                args=args,
+                result_dict=self._result_to_dict(failure),
+            )
             if self.event_manager:
                 await self.event_manager.emit_tool_complete(tool_name, failure, str(scan_id))
             return self._result_to_dict(failure)
 
     async def _execute_tool_with_limits(self, tool_name: str, tool: Any, execution_args: Dict[str, Any]) -> Any:
+        if self._tool_scheduler is not None:
+            return await self._tool_scheduler.execute(
+                tool_name=tool_name,
+                coro_factory=lambda: tool.execute(**execution_args),
+            )
+
         per_tool_semaphore = self._tool_semaphores.get(tool_name)
         should_limit_global = tool_name in self._limited_heavy_tools and self._global_tool_semaphore is not None
 

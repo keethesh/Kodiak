@@ -16,6 +16,8 @@ from kodiak.core.agent import KodiakAgent
 from kodiak.core.tools.inventory import ToolInventory
 from kodiak.core.config import settings
 from kodiak.core.agent_scaling import resolve_agent_count
+from kodiak.core.tool_scheduler import ToolScheduler
+from kodiak.core.reporting import write_scan_report
 from kodiak.api.events import TUIEventManager
 from kodiak.database.engine import get_session
 from kodiak.database.models import Project, ScanJob, ScanStatus
@@ -46,6 +48,8 @@ class ScanRunner:
         self._finding_event_count = 0
         self._finding_keys: set[str] = set()
         self._finding_counts_by_severity: Dict[str, int] = {}
+        self._finding_records: Dict[str, Dict[str, Any]] = {}
+        self._tool_scheduler: Optional[ToolScheduler] = None
     
     async def run(
         self,
@@ -56,6 +60,8 @@ class ScanRunner:
         agent_count: int = 1,
         role_strategy: str = "role_hinted",
         force_agents: bool = False,
+        report_format: str = "json+md",
+        report_path: Optional[str] = None,
     ) -> ScanResult:
         """
         Execute a complete scan.
@@ -71,6 +77,7 @@ class ScanRunner:
         self._finding_event_count = 0
         self._finding_keys = set()
         self._finding_counts_by_severity = {}
+        self._finding_records = {}
 
         agent_resolution = resolve_agent_count(
             requested=agent_count,
@@ -85,7 +92,7 @@ class ScanRunner:
                 # 1. Create project and scan in database
                 project = await self._create_project(session, project_name)
                 scan_job = await self._create_scan_job(
-                    session, project.id, target, instructions
+                    session, project.id, target, instructions, report_format, report_path
                 )
                 
                 logger.info(f"🎯 Starting scan: {target}")
@@ -100,6 +107,7 @@ class ScanRunner:
                     if key in self._finding_keys:
                         return
                     self._finding_keys.add(key)
+                    self._finding_records[key] = finding
                     severity = str(finding.get("severity", "info")).lower()
                     self._finding_counts_by_severity[severity] = self._finding_counts_by_severity.get(severity, 0) + 1
 
@@ -115,6 +123,21 @@ class ScanRunner:
                 # 2. Setup Agents
                 effective_agents = agent_resolution.effective
                 per_agent_iterations = max(1, math.ceil(max_iterations / effective_agents))
+                if settings.tool_scheduler == "queue":
+                    self._tool_scheduler = ToolScheduler(queue_limit=settings.tool_queue_limit)
+                    self._tool_scheduler.register_tool("nmap", concurrency=1)
+                    self._tool_scheduler.register_tool("sqlmap", concurrency=1)
+                    self._tool_scheduler.register_tool(
+                        "nuclei", concurrency=max(1, settings.heavy_tool_parallel_limit)
+                    )
+                    self._tool_scheduler.register_tool(
+                        "ffuf", concurrency=max(1, settings.heavy_tool_parallel_limit)
+                    )
+                    self._tool_scheduler.register_tool(
+                        "katana", concurrency=max(1, settings.heavy_tool_parallel_limit)
+                    )
+                    await self._tool_scheduler.start()
+
                 global_heavy_semaphore = asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit))
                 per_tool_semaphores = {
                     "nmap": asyncio.Semaphore(1),
@@ -141,6 +164,7 @@ class ScanRunner:
                         project_id=project.id,
                         global_tool_semaphore=global_heavy_semaphore,
                         tool_semaphores=per_tool_semaphores,
+                        tool_scheduler=self._tool_scheduler,
                     )
                     await agent.register_with_hive_mind()
                     self._agents.append(agent)
@@ -195,6 +219,47 @@ class ScanRunner:
                     iterations=result.iterations
                 )
                 
+                attempts = await crud.attempt.get_attempts_by_scan(session, scan_job.id, limit=400)
+                report_data = {
+                    "scan_id": scan_id_str,
+                    "scan_name": project.name,
+                    "project_id": str(project.id),
+                    "target": target,
+                    "status": result.status,
+                    "summary": {
+                        "agents_requested": agent_resolution.requested,
+                        "agents_running": agent_resolution.effective,
+                        "nodes_discovered": len(nodes),
+                        "raw_findings": self._finding_event_count,
+                        "deduped_findings": len(self._finding_keys),
+                        "duplicate_findings_filtered": max(0, self._finding_event_count - len(self._finding_keys)),
+                        "findings_by_severity": self._finding_counts_by_severity,
+                        "findings_count": result.findings_count,
+                        "duration_seconds": duration,
+                        "iterations": result.iterations,
+                    },
+                    "findings": list(self._finding_records.values()),
+                    "attempts": [
+                        {
+                            "tool": a.tool,
+                            "target": a.target,
+                            "status": a.status,
+                            "reason": a.reason,
+                            "agent_id": (a.properties or {}).get("agent_id"),
+                            "created_at": a.created_at,
+                        }
+                        for a in attempts
+                    ],
+                }
+                report_paths: Dict[str, str] = {}
+                try:
+                    report_paths = write_scan_report(
+                        report_data=report_data,
+                        report_dir=report_path or settings.report_output_path,
+                        report_format=report_format,
+                    )
+                except Exception as report_error:
+                    logger.warning(f"Failed to write report artifact(s): {report_error}")
                 await self.event_manager.emit_scan_completed(
                     scan_id=scan_id_str,
                     scan_name=project.name,
@@ -208,7 +273,8 @@ class ScanRunner:
                         "duplicate_findings_filtered": max(0, self._finding_event_count - len(self._finding_keys)),
                         "findings_by_severity": self._finding_counts_by_severity,
                         "findings_count": result.findings_count,
-                        "duration": duration
+                        "duration": duration,
+                        "report_paths": report_paths,
                     }
                 )
                 
@@ -225,6 +291,12 @@ class ScanRunner:
                         await agent.unregister_from_hive_mind()
                     except Exception as unregister_error:
                         logger.warning(f"Failed to unregister agent {agent.agent_id}: {unregister_error}")
+                if self._tool_scheduler is not None:
+                    try:
+                        await self._tool_scheduler.stop()
+                    except Exception as scheduler_error:
+                        logger.warning(f"Failed to stop tool scheduler cleanly: {scheduler_error}")
+                    self._tool_scheduler = None
                 if 'scan_id_str' in locals():
                     try:
                         self.event_manager.unsubscribe_scan(scan_id_str, _capture_scan_event)
@@ -240,13 +312,20 @@ class ScanRunner:
         session: AsyncSession,
         project_id: UUID,
         target: str,
-        instructions: str
+        instructions: str,
+        report_format: str,
+        report_path: Optional[str],
     ) -> ScanJob:
         scan = ScanJob(
             project_id=project_id,
             name=f"Scan_{target}",
             status=ScanStatus.RUNNING,
-            config={"target": target, "instructions": instructions}
+            config={
+                "target": target,
+                "instructions": instructions,
+                "report_format": report_format,
+                "report_path": report_path,
+            }
         )
         return await crud.scan_job.create(session, scan)
     

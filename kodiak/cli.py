@@ -123,6 +123,13 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.option("--agents", "-a", type=int, default=None, help="Number of concurrent agents")
 @click.option("--force-agents", is_flag=True, help="Allow agent count above KODIAK_MAX_AGENTS")
 @click.option(
+    "--report-format",
+    type=click.Choice(["json", "json+md"], case_sensitive=False),
+    default="json+md",
+    help="Scan report output format",
+)
+@click.option("--report-path", type=str, default=None, help="Directory for scan report artifacts")
+@click.option(
     "--role-strategy",
     type=click.Choice(["role-hinted", "generic"], case_sensitive=False),
     default="role-hinted",
@@ -136,6 +143,8 @@ def scan(
     max_iterations: int,
     agents: Optional[int],
     force_agents: bool,
+    report_format: str,
+    report_path: Optional[str],
     role_strategy: str,
     verbose: bool,
 ):
@@ -189,6 +198,7 @@ def scan(
         console.print(f"📋 [bold]Instructions:[/bold] {instructions}\n")
         console.print(f"👥 [bold]Agents:[/bold] requested={resolved_agents.requested} effective={resolved_agents.effective}")
         console.print(f"🧩 [bold]Role Strategy:[/bold] {role_strategy}")
+        console.print(f"📝 [bold]Report:[/bold] format={report_format} path={report_path or settings.report_output_path}")
         if resolved_agents.warning:
             console.print(f"[yellow]{resolved_agents.warning}[/yellow]")
         console.print("")
@@ -202,6 +212,8 @@ def scan(
             agent_count=requested_agents,
             role_strategy=role_strategy.replace("-", "_"),
             force_agents=force_agents,
+            report_format=report_format.lower(),
+            report_path=report_path,
         )
         
         # If verbose, bypass the TUI overlay and just let logs stream freely
@@ -264,6 +276,7 @@ def scan(
             "raw_findings": 0,
             "deduped_findings": 0,
             "duplicate_findings_filtered": 0,
+            "report_paths": {},
         }
 
         def severity_breakdown(findings: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -369,6 +382,7 @@ def scan(
                         state["raw_findings"] = int(summary.get("raw_findings", 0) or 0)
                         state["deduped_findings"] = int(summary.get("deduped_findings", 0) or 0)
                         state["duplicate_findings_filtered"] = int(summary.get("duplicate_findings_filtered", 0) or 0)
+                        state["report_paths"] = summary.get("report_paths") or {}
                     elif event.type == "scan_failed":
                         state["status"] = "Scan failed"
                         state["last_error"] = str(payload.get("error", "Scan failed"))
@@ -410,6 +424,9 @@ def scan(
                 )
             if state["scan_id"]:
                 console.print(f"Scan ID: {state['scan_id']}")
+            if state["report_paths"]:
+                for label, path in state["report_paths"].items():
+                    console.print(f"Report ({label}): {path}")
             db_path = os.path.expanduser(settings.sqlite_path or "~/.kodiak/kodiak.db")
             log_path = str(Path.home() / ".kodiak" / "logs" / "scan.log")
             console.print(f"DB: {db_path}")

@@ -24,6 +24,8 @@ class _RunState:
     agent_count: int
     role_strategy: str
     force_agents: bool
+    report_format: str
+    report_path: Optional[str]
     queue: asyncio.Queue[CoreEvent] = field(default_factory=asyncio.Queue)
     task: Optional[asyncio.Task] = None
     result: Optional[ScanResult] = None
@@ -64,6 +66,8 @@ class CoreInterface:
         agent_count: Optional[int] = None,
         role_strategy: str = "role_hinted",
         force_agents: bool = False,
+        report_format: str = "json+md",
+        report_path: Optional[str] = None,
     ) -> str:
         await self._ensure_subscriptions()
 
@@ -79,6 +83,8 @@ class CoreInterface:
             agent_count=requested_agents,
             role_strategy=role_strategy,
             force_agents=force_agents,
+            report_format=report_format,
+            report_path=report_path,
         )
 
         async with self._lock:
@@ -149,6 +155,8 @@ class CoreInterface:
                     agent_count=state.agent_count,
                     role_strategy=state.role_strategy,
                     force_agents=state.force_agents,
+                    report_format=state.report_format,
+                    report_path=state.report_path,
                 )
                 state.result = result
             finally:

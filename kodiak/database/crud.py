@@ -262,6 +262,24 @@ class CRUDAttempt:
             })
 
     @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_attempts_by_scan(self, session: AsyncSession, scan_id: UUID, limit: int = 200) -> List[Attempt]:
+        """Get recent attempts for a scan across all agents."""
+        try:
+            statement = (
+                select(Attempt)
+                .where(Attempt.scan_id == scan_id)
+                .order_by(Attempt.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_attempts_by_scan", e, {
+                "scan_id": str(scan_id),
+                "limit": limit,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
     async def get_attempts_by_tool(self, session: AsyncSession, project_id: UUID, tool: str, limit: int = 20) -> List[Attempt]:
         """Get recent attempts for a specific tool within a project"""
         try:
