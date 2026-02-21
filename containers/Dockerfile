@@ -104,7 +104,9 @@ RUN npm cache clean --force && \
     rm -rf /root/.cache/pipx /root/.cache/pip /tmp/*
 
 # Install Playwright Chromium specifically (avoid bulky full installs)
-RUN pip3 install --break-system-packages --force-reinstall playwright && \
+# Avoid --force-reinstall on Kali/apt Python because distro-managed packages
+# (e.g. typing-extensions) may not have RECORD metadata for uninstall.
+RUN pip3 install --break-system-packages --upgrade playwright && \
     # Install ONLY chromium directly and delete the bloated unused package downloads
     playwright install chromium && \
     rm -rf /root/.cache/pip && \

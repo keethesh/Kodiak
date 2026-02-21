@@ -112,14 +112,34 @@ class NucleiTool(KodiakTool):
                 fallback_entrypoint=""
             )
             result = await executor.run_command(command)
+            execution_mode = "docker"
             
             if result.exit_code != 0:
-                error_detail = self._format_docker_failure(result, settings.toolbox_image)
-                return ToolResult(
-                    success=False,
-                    output=f"Nuclei scan failed: {error_detail}",
-                    error=f"Command failed with exit code {result.exit_code}: {error_detail}"
-                )
+                should_retry = self._is_tool_missing(result.stderr, "nuclei") or result.exit_code == 2
+                if should_retry:
+                    fallback_executor = await get_docker_executor(
+                        preferred_image="projectdiscovery/nuclei:latest",
+                        fallback_image="projectdiscovery/nuclei:latest",
+                        fallback_entrypoint=""
+                    )
+                    fallback_result = await fallback_executor.run_command(command)
+                    if fallback_result.exit_code == 0:
+                        result = fallback_result
+                        execution_mode = "docker-fallback"
+                    else:
+                        error_detail = self._format_docker_failure(fallback_result, "projectdiscovery/nuclei:latest")
+                        return ToolResult(
+                            success=False,
+                            output=f"Nuclei scan failed after fallback: {error_detail}",
+                            error=f"Command failed with exit code {fallback_result.exit_code}: {error_detail}"
+                        )
+                else:
+                    error_detail = self._format_docker_failure(result, settings.toolbox_image)
+                    return ToolResult(
+                        success=False,
+                        output=f"Nuclei scan failed: {error_detail}",
+                        error=f"Command failed with exit code {result.exit_code}: {error_detail}"
+                    )
             
             # Parse JSON output
             findings = self._parse_nuclei_output(result.stdout)
@@ -137,7 +157,7 @@ class NucleiTool(KodiakTool):
                     "total_findings": len(findings),
                     "severity_breakdown": self._get_severity_breakdown(findings),
                     "template_matches": [f.get("template-id", "unknown") for f in findings],
-                    "execution_mode": "docker",
+                    "execution_mode": execution_mode,
                 }
             )
             
@@ -150,6 +170,7 @@ class NucleiTool(KodiakTool):
     
     def _format_docker_failure(self, result: Any, toolbox_image: str) -> str:
         stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
         stderr_lower = stderr.lower()
         if result.exit_code == 127 and "docker is not installed" in stderr_lower:
             return (
@@ -163,7 +184,13 @@ class NucleiTool(KodiakTool):
             )
         if stderr:
             return stderr
-        return "nuclei failed without stderr output."
+        if stdout:
+            return stdout[:1000]
+        return "nuclei failed without stderr/stdout output."
+
+    def _is_tool_missing(self, stderr: str, tool_name: str) -> bool:
+        s = (stderr or "").lower()
+        return "executable file not found" in s or (tool_name.lower() in s and "not found" in s)
 
     def _parse_nuclei_output(self, output: str) -> List[Dict[str, Any]]:
         """Parse nuclei JSON output into structured findings"""
