@@ -504,7 +504,38 @@ class KodiakAgent:
                 if do_not_repeat:
                     self._persisted_do_not_repeat[record.fingerprint] = do_not_repeat
         except Exception as e:
-            logger.warning(f"Could not load persisted insight memory for scan {scan_id}: {e}")
+            error_text = str(e).lower()
+            if "no such table" in error_text and "insightmemory" in error_text:
+                try:
+                    from kodiak.database.engine import init_db
+                    from kodiak.database.crud import insight_memory
+
+                    await init_db()
+                    records = await insight_memory.list_by_scan(
+                        session=session,
+                        scan_id=scan_id,
+                        limit=settings.memory_max_entries,
+                    )
+                    self._persisted_insights = []
+                    self._persisted_do_not_repeat = {}
+                    for record in reversed(records):
+                        entry = {
+                            "tool": record.tool,
+                            "target": record.target,
+                            "fingerprint": record.fingerprint,
+                            "status": record.status,
+                            "insight": record.insight or {},
+                        }
+                        self._persisted_insights.append(entry)
+                        do_not_repeat = (record.insight or {}).get("do_not_repeat", "").strip()
+                        if do_not_repeat:
+                            self._persisted_do_not_repeat[record.fingerprint] = do_not_repeat
+                except Exception as retry_error:
+                    logger.warning(
+                        f"Could not load persisted insight memory for scan {scan_id} after init_db retry: {retry_error}"
+                    )
+            else:
+                logger.warning(f"Could not load persisted insight memory for scan {scan_id}: {e}")
 
     def _sanitize_for_gemini(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Remove any assistant+tool_calls messages that have no following tool response.
