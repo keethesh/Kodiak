@@ -222,6 +222,7 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
             "start_time": datetime.utcnow(),
             "tool_count": 0,
             "tool_failures": 0,
+            "failed_tools": [],
             "last_error": "",
             "scan_id": "",
             "scan_name": "",
@@ -311,8 +312,12 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
                             success = payload.get("success", True)
                             state["tools"][-1]["success"] = success
                             if success is False:
+                                tool_name = str(payload.get("tool_name", "unknown"))
+                                error_text = str(payload.get("error") or payload.get("output") or "Tool failed")
+                                short_error = " ".join(error_text.split())[:220]
                                 state["tool_failures"] += 1
-                                state["last_error"] = str(payload.get("error") or payload.get("output") or "Tool failed")
+                                state["last_error"] = short_error
+                                state["failed_tools"].append({"tool": tool_name, "error": short_error})
                         state["active_tool"] = ""
                         state["active_tool_started_at"] = None
                     elif event.type == "finding_discovered":
@@ -366,6 +371,10 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
             console.print(f"Logs: {log_path}")
             if state["last_error"]:
                 console.print(f"Last Error: {state['last_error'][:220]}")
+            if state["failed_tools"]:
+                console.print("Top Failed Tools:")
+                for item in state["failed_tools"][-3:]:
+                    console.print(f" - {item['tool']}: {item['error'][:180]}")
             console.print("Next: re-run with `--verbose` for detailed event stream if needed.")
             return 0 if result.status == "completed" else 1
 
