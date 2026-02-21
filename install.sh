@@ -502,7 +502,7 @@ verify_toolbox_tools() {
     local missing=0
 
     print_status "Verifying required tools inside $image..."
-    for tool in nuclei searchsploit katana; do
+    for tool in nuclei searchsploit; do
         if docker run --rm --entrypoint /bin/sh "$image" -lc "command -v $tool" >/dev/null 2>&1; then
             print_success "Tool '$tool' found in toolbox image"
         else
@@ -510,6 +510,14 @@ verify_toolbox_tools() {
             missing=1
         fi
     done
+
+    # Katana is optional at install time because runtime has Docker fallback
+    # to projectdiscovery/katana:latest inside the tool definition.
+    if docker run --rm --entrypoint /bin/sh "$image" -lc "command -v katana" >/dev/null 2>&1; then
+        print_success "Tool 'katana' found in toolbox image"
+    else
+        print_warning "Tool 'katana' not found in toolbox image (runtime fallback image will be used)"
+    fi
 
     return $missing
 }
@@ -581,7 +589,7 @@ setup_docker() {
 
             # Validate critical tools expected by the agent loop.
             if ! verify_toolbox_tools "ghcr.io/keethesh/kodiak-toolbox:latest"; then
-                print_error "Toolbox image is missing required tools (nuclei/searchsploit/katana)."
+                print_error "Toolbox image is missing required tools (nuclei/searchsploit)."
                 print_status "Rebuild with: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
                 return 1
             fi
