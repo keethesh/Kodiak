@@ -395,17 +395,15 @@ install_from_source() {
             fi
         fi
     else
-        # Use refactor branch for now (until merged to main)
-        if git show-ref --verify --quiet refs/remotes/origin/refactor/backend-rewrite; then
-            print_status "Using refactor/backend-rewrite branch..."
-            git checkout refactor/backend-rewrite
-            if [[ "$is_update" == "true" ]] && [[ "$source_dir" != "$PWD" || $(git symbolic-ref --short HEAD 2>/dev/null) == "refactor/backend-rewrite" ]]; then
-                git pull origin refactor/backend-rewrite --rebase || true
-            fi
-        else
+        # Latest tracks main branch by default.
+        if git show-ref --verify --quiet refs/remotes/origin/main; then
+            print_status "Using main branch..."
+            git checkout main || true
             if [[ "$is_update" == "true" ]] && [[ "$source_dir" != "$PWD" || $(git symbolic-ref --short HEAD 2>/dev/null) == "main" ]]; then
                 git pull origin main --rebase || true
             fi
+        else
+            print_warning "origin/main not found. Staying on current branch."
         fi
     fi
     
@@ -499,6 +497,31 @@ verify_installation() {
     fi
 }
 
+verify_toolbox_tools() {
+    local image="${1:-ghcr.io/keethesh/kodiak-toolbox:latest}"
+    local missing=0
+
+    print_status "Verifying required tools inside $image..."
+    for tool in nuclei searchsploit; do
+        if docker run --rm --entrypoint /bin/sh "$image" -lc "command -v $tool" >/dev/null 2>&1; then
+            print_success "Tool '$tool' found in toolbox image"
+        else
+            print_error "Tool '$tool' NOT found in toolbox image"
+            missing=1
+        fi
+    done
+
+    # Katana is optional at install time because runtime has Docker fallback
+    # to projectdiscovery/katana:latest inside the tool definition.
+    if docker run --rm --entrypoint /bin/sh "$image" -lc "command -v katana" >/dev/null 2>&1; then
+        print_success "Tool 'katana' found in toolbox image"
+    else
+        print_warning "Tool 'katana' not found in toolbox image (runtime fallback image will be used)"
+    fi
+
+    return $missing
+}
+
 # Setup Docker image
 setup_docker() {
     if [[ "$SKIP_DOCKER" == "true" ]]; then
@@ -562,6 +585,13 @@ setup_docker() {
             else
                 print_success "Kodiak toolbox image already exists locally. Skipping build."
                 print_status "Use --force to rebuild the image."
+            fi
+
+            # Validate critical tools expected by the agent loop.
+            if ! verify_toolbox_tools "ghcr.io/keethesh/kodiak-toolbox:latest"; then
+                print_error "Toolbox image is missing required tools (nuclei/searchsploit)."
+                print_status "Rebuild with: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
+                return 1
             fi
         else
             print_warning "Docker is installed but the daemon is not running."

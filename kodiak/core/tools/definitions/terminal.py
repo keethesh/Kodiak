@@ -19,9 +19,10 @@ from kodiak.services.executor import get_executor
 class TerminalSession:
     """Manages persistent terminal session state"""
     
-    def __init__(self, session_id: str, shell_type: str = "bash"):
+    def __init__(self, session_id: str, shell_type: str = "bash", docker_image: Optional[str] = None):
         self.session_id = session_id
         self.shell_type = shell_type
+        self.docker_image = docker_image
         self.history: List[Dict[str, Any]] = []
         self.environment: Dict[str, str] = {}
         self.working_directory = "/tmp"
@@ -105,12 +106,15 @@ class TerminalStartTool(KodiakTool):
         session_id = f"term_{uuid.uuid4().hex[:8]}"
         
         shell_type = args.get("shell_type", "bash")
-        environment = args.get("environment", {})
+        environment = args.get("environment") or {}
         working_directory = args.get("working_directory", "/tmp")
-        docker_image = args.get("docker_image")
+        
+        # Default to Docker toolbox for security workflows.
+        from kodiak.core.config import settings
+        docker_image = args.get("docker_image") or settings.toolbox_image
         
         # Create terminal session
-        session = TerminalSession(session_id, shell_type)
+        session = TerminalSession(session_id, shell_type, docker_image=docker_image)
         session.environment.update(environment)
         session.working_directory = working_directory
         
@@ -121,25 +125,31 @@ class TerminalStartTool(KodiakTool):
         try:
             test_command = "pwd" if shell_type != "python" else "import os; print(os.getcwd())"
             
-            if docker_image:
-                executor = get_executor("docker")
-                executor.image = docker_image
-            else:
-                executor = get_executor("local")
+            executor = get_executor("docker")
+            executor.image = docker_image
             
             # Test the session
             if shell_type == "python":
-                result = await executor.run_command(
-                    ["python3", "-c", test_command],
-                    cwd=working_directory,
-                    env=session.environment
+                result = await asyncio.wait_for(
+                    executor.run_command(
+                        ["python3", "-c", test_command],
+                        cwd=working_directory,
+                        env=session.environment
+                    ),
+                    timeout=30
                 )
             else:
-                result = await executor.run_command(
-                    [shell_type, "-c", test_command],
-                    cwd=working_directory,
-                    env=session.environment
+                result = await asyncio.wait_for(
+                    executor.run_command(
+                        [shell_type, "-c", test_command],
+                        cwd=working_directory,
+                        env=session.environment
+                    ),
+                    timeout=30
                 )
+
+            if result.exit_code != 0:
+                raise RuntimeError(result.stderr or result.stdout or f"Terminal bootstrap failed with exit code {result.exit_code}")
             
             session.add_command(test_command, result.stdout, result.exit_code)
             
@@ -165,7 +175,7 @@ class TerminalStartTool(KodiakTool):
             summary += f"Shell: {shell_type}\n"
             summary += f"Working Directory: {working_directory}\n"
             summary += f"Environment Variables: {len(environment)}\n"
-            summary += f"Execution Mode: {'Docker (' + docker_image + ')' if docker_image else 'Local'}\n"
+            summary += f"Execution Mode: Docker ({docker_image})\n"
             summary += f"Initial Test: {result.stdout.strip()}\n"
             
             return ToolResult(
@@ -186,10 +196,15 @@ class TerminalStartTool(KodiakTool):
             if session_id in _terminal_sessions:
                 del _terminal_sessions[session_id]
             
+            if isinstance(e, asyncio.TimeoutError):
+                message = "Terminal startup timed out after 30 seconds"
+            else:
+                message = str(e)
+
             return ToolResult(
                 success=False,
-                output=f"Failed to start terminal session: {str(e)}",
-                error=str(e)
+                output=f"Failed to start terminal session: {message}",
+                error=message
             )
 
 
@@ -249,7 +264,11 @@ class TerminalExecuteTool(KodiakTool):
         
         try:
             # Determine executor
-            executor = get_executor("local")  # Default to local, Docker sessions would be handled differently
+            if session.docker_image:
+                executor = get_executor("docker")
+                executor.image = session.docker_image
+            else:
+                executor = get_executor("local")
             
             # Handle special commands
             if command.startswith("cd "):
@@ -260,10 +279,13 @@ class TerminalExecuteTool(KodiakTool):
                     new_dir = f"{session.working_directory}/{new_dir}"
                 
                 # Test if directory exists
-                test_result = await executor.run_command(
-                    ["test", "-d", new_dir],
-                    cwd=session.working_directory,
-                    env=session.environment
+                test_result = await asyncio.wait_for(
+                    executor.run_command(
+                        ["test", "-d", new_dir],
+                        cwd=session.working_directory,
+                        env=session.environment
+                    ),
+                    timeout=timeout
                 )
                 
                 if test_result.exit_code == 0:
@@ -278,6 +300,7 @@ class TerminalExecuteTool(KodiakTool):
                             "session_id": session_id,
                             "command": command,
                             "working_directory": session.working_directory,
+                            "docker_image": session.docker_image,
                             "exit_code": 0
                         }
                     )
@@ -313,6 +336,7 @@ class TerminalExecuteTool(KodiakTool):
                             "session_id": session_id,
                             "command": command,
                             "environment_updated": {key: value},
+                            "docker_image": session.docker_image,
                             "exit_code": 0
                         }
                     )
@@ -325,10 +349,13 @@ class TerminalExecuteTool(KodiakTool):
                 # Shell command
                 full_command = [session.shell_type, "-c", command]
             
-            result = await executor.run_command(
-                full_command,
-                cwd=session.working_directory,
-                env=session.environment
+            result = await asyncio.wait_for(
+                executor.run_command(
+                    full_command,
+                    cwd=session.working_directory,
+                    env=session.environment
+                ),
+                timeout=timeout
             )
             
             # Store in session history
@@ -350,11 +377,21 @@ class TerminalExecuteTool(KodiakTool):
                     "stderr": result.stderr,
                     "exit_code": result.exit_code,
                     "working_directory": session.working_directory,
+                    "docker_image": session.docker_image,
                     "analysis": analysis,
                     "execution_time": time.time()
                 }
             )
             
+        except asyncio.TimeoutError:
+            error_msg = f"Command execution timed out after {timeout} seconds"
+            session.add_command(command, error_msg, 1)
+            return ToolResult(
+                success=False,
+                output=error_msg,
+                error="Command timeout"
+            )
+
         except Exception as e:
             error_msg = f"Command execution failed: {str(e)}"
             session.add_command(command, error_msg, 1)
@@ -593,6 +630,7 @@ class TerminalHistoryTool(KodiakTool):
                 "session_info": {
                     "shell_type": session.shell_type,
                     "working_directory": session.working_directory,
+                    "docker_image": session.docker_image,
                     "environment_vars": len(session.environment),
                     "created_at": session.created_at,
                     "last_activity": session.last_activity
@@ -668,7 +706,8 @@ class TerminalStopTool(KodiakTool):
                 "final_state": {
                     "working_directory": session.working_directory,
                     "environment": session.environment,
-                    "shell_type": session.shell_type
+                    "shell_type": session.shell_type,
+                    "docker_image": session.docker_image,
                 }
             }
         )

@@ -47,10 +47,34 @@ except ImportError:
 def check_docker_available() -> bool:
     """Check if Docker is available."""
     try:
-        subprocess.run(["docker", "info"], capture_output=True, check=True)
+        subprocess.run(["docker", "info"], capture_output=True, check=True, timeout=15)
         return True
     except Exception:
         return False
+
+
+def run_check(command: list[str], timeout: int = 20) -> tuple[bool, str]:
+    """Run a command and return (success, stderr/stdout detail)."""
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False, f"Command not found: {command[0]}"
+    except subprocess.TimeoutExpired:
+        return False, f"Command timed out after {timeout}s"
+    except Exception as e:
+        return False, str(e)
+    
+    if result.returncode == 0:
+        return True, result.stdout.strip()
+    
+    detail = (result.stderr or result.stdout or "").strip()
+    return False, detail or f"Command exited with code {result.returncode}"
 
 
 @click.group(invoke_without_command=True)
@@ -273,7 +297,36 @@ def docker(action: str):
 @main.command()
 def doctor():
     """Check installation status."""
-    console.print("🔍 [bold]Kodiak Doctor[/bold]\n")
+    from kodiak.core.config import settings
+
+    def status_label(ok: bool) -> str:
+        return "OK" if ok else "FAIL"
+
+    console.print("[bold]Kodiak Doctor[/bold]\n")
     console.print(f"Python: {sys.version.split()[0]}")
-    console.print(f"Database: {'✅' if HAS_DATABASE else '❌'}")
-    console.print(f"Docker: {'✅' if check_docker_available() else '❌'}")
+    console.print(f"Database: {status_label(HAS_DATABASE)}")
+    
+    docker_ok = check_docker_available()
+    console.print(f"Docker: {status_label(docker_ok)}")
+    console.print(f"Toolbox Image: {settings.toolbox_image}")
+
+    if not docker_ok:
+        console.print("[red]Docker is required for tool execution in this build.[/red]")
+        console.print("[yellow]Start Docker and re-run `kodiak doctor`.[/yellow]")
+        return
+
+    image_ok, image_detail = run_check(["docker", "image", "inspect", settings.toolbox_image], timeout=20)
+    console.print(f"Toolbox Image Available: {status_label(image_ok)}")
+    if not image_ok:
+        console.print(f"[yellow]Image inspect failed: {image_detail}[/yellow]")
+        console.print(f"[yellow]Try: docker pull {settings.toolbox_image}[/yellow]")
+        return
+
+    for tool_name in ["nuclei", "searchsploit", "katana"]:
+        tool_ok, tool_detail = run_check(
+            ["docker", "run", "--rm", "--entrypoint", "/bin/sh", settings.toolbox_image, "-lc", f"command -v {tool_name}"],
+            timeout=30,
+        )
+        console.print(f"{tool_name}: {status_label(tool_ok)}")
+        if not tool_ok:
+            console.print(f"[yellow]{tool_name} check failed: {tool_detail}[/yellow]")

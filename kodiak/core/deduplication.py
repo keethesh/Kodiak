@@ -123,7 +123,7 @@ class DeduplicationService:
                     tool in self.strict_dedup_tools):
                     
                     # Check if the success is still within cache duration
-                    time_since_success = datetime.now(timezone.utc) - existing_attempt.timestamp
+                    time_since_success = datetime.now(timezone.utc) - existing_attempt.created_at
                     if time_since_success < self.success_cache_duration:
                         return True, f"Tool {tool} already succeeded on {normalized_target} within {self.success_cache_duration}"
                 
@@ -137,7 +137,7 @@ class DeduplicationService:
                         return True, f"Tool {tool} has failed {failed_count} times on {normalized_target}, skipping"
                     
                     # Check if enough time has passed since last failure
-                    time_since_failure = datetime.now(timezone.utc) - existing_attempt.timestamp
+                    time_since_failure = datetime.now(timezone.utc) - existing_attempt.created_at
                     if time_since_failure < self.failure_retry_delay:
                         return True, f"Tool {tool} failed recently on {normalized_target}, waiting for retry delay"
             
@@ -168,7 +168,6 @@ class DeduplicationService:
                 target=normalized_target,
                 status=status,
                 reason=reason,
-                timestamp=datetime.now(timezone.utc)
             )
             
             return await attempt_crud.create(session, attempt_record)

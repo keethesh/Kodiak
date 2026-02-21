@@ -4,8 +4,8 @@
 
 set -e
 
-# Ensure PATH includes all tool directories
-export PATH="/home/kodiak/go/bin:/home/kodiak/.local/bin:/home/kodiak/.npm-global/bin:$PATH"
+# Ensure PATH includes all tool directories for both root and non-root layouts.
+export PATH="/root/go/bin:/root/.local/bin:/root/.npm-global/bin:/home/kodiak/go/bin:/home/kodiak/.local/bin:/home/kodiak/.npm-global/bin:$PATH"
 
 # Print banner
 echo "==============================================" 

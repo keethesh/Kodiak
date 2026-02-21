@@ -525,13 +525,33 @@ class KatanaTool(KodiakTool):
                 fallback_entrypoint=""
             )
             result = await executor.run_command(command)
+            execution_mode = "docker"
 
             if result.exit_code != 0:
-                return ToolResult(
-                    success=False,
-                    output=f"Katana failed: {result.stderr}",
-                    error=f"Command failed with exit code {result.exit_code}"
-                )
+                if self._is_tool_missing(result.stderr, "katana"):
+                    fallback_executor = await get_docker_executor(
+                        preferred_image="projectdiscovery/katana:latest",
+                        fallback_image="projectdiscovery/katana:latest",
+                        fallback_entrypoint=""
+                    )
+                    fallback_result = await fallback_executor.run_command(command)
+                    if fallback_result.exit_code == 0:
+                        result = fallback_result
+                        execution_mode = "docker-fallback"
+                    else:
+                        error_detail = self._format_katana_failure(fallback_result, "projectdiscovery/katana:latest")
+                        return ToolResult(
+                            success=False,
+                            output=f"Katana failed after fallback: {error_detail}",
+                            error=f"Command failed with exit code {fallback_result.exit_code}: {error_detail}"
+                        )
+                else:
+                    error_detail = self._format_katana_failure(result, settings.toolbox_image)
+                    return ToolResult(
+                        success=False,
+                        output=f"Katana failed: {error_detail}",
+                        error=f"Command failed with exit code {result.exit_code}: {error_detail}"
+                    )
 
             urls = self._parse_urls(result.stdout)
             summary = self._generate_summary(url, urls)
@@ -547,6 +567,7 @@ class KatanaTool(KodiakTool):
                     "endpoints": [u for u in urls if any(p in u for p in ["api", "graphql", "v1", "v2", "rest"])],
                     "js_files": [u for u in urls if u.endswith(".js")],
                     "forms": [u for u in urls if "?" in u],
+                    "execution_mode": execution_mode,
                 }
             )
 
@@ -556,6 +577,19 @@ class KatanaTool(KodiakTool):
                 output=f"Katana execution failed: {str(e)}",
                 error=str(e)
             )
+
+    def _is_tool_missing(self, stderr: str, tool_name: str) -> bool:
+        s = (stderr or "").lower()
+        return "executable file not found" in s or (tool_name.lower() in s and "not found" in s)
+
+    def _format_katana_failure(self, result: Any, image_name: str) -> str:
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        if stderr:
+            return stderr
+        if stdout:
+            return stdout[:1000]
+        return f"Katana failed in image '{image_name}' without stderr/stdout output."
 
     def _parse_urls(self, output: str) -> List[str]:
         """Parse katana's line-separated URL output"""

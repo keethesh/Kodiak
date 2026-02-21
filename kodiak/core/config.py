@@ -79,6 +79,10 @@ class KodiakSettings(BaseSettings):
     # Tool Configuration
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")  # 5 minutes
     enable_hive_mind: bool = Field(default=True, alias="KODIAK_ENABLE_HIVE_MIND")
+    memory_enabled: bool = Field(default=True, alias="KODIAK_MEMORY_ENABLED")
+    memory_max_entries: int = Field(default=200, alias="KODIAK_MEMORY_MAX_ENTRIES")
+    memory_recent_in_prompt: int = Field(default=10, alias="KODIAK_MEMORY_RECENT")
+    memory_output_chars: int = Field(default=1500, alias="KODIAK_MEMORY_OUTPUT_CHARS")
     
     # Toolbox Container Configuration
     toolbox_image: str = Field(default="ghcr.io/keethesh/kodiak-toolbox:latest", alias="KODIAK_TOOLBOX_IMAGE")
@@ -369,6 +373,7 @@ def validate_startup_config():
         logger.info(f"🛡️  Safety Checks: {settings.enable_safety_checks}")
         logger.info(f"🐝 Hive Mind: {settings.enable_hive_mind}")
         logger.info(f"⚙️  Tool Timeout: {settings.tool_timeout}s")
+        logger.info(f"🧠 Insight Memory: {'enabled' if settings.memory_enabled else 'disabled'}")
         logger.info(f"👥 Max Agents: {settings.max_concurrent_agents}")
         
         # Log configuration source information

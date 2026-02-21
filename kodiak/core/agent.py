@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 import json
 import asyncio
 import time
+import hashlib
 from uuid import uuid4, UUID
 from dataclasses import dataclass
 from loguru import logger
@@ -10,6 +11,8 @@ import litellm
 from litellm import acompletion
 
 from kodiak.core.config import settings
+from kodiak.core.memory import InsightMemoryService
+from kodiak.core.tools.base import ToolResult
 from kodiak.services import llm
 
 
@@ -55,6 +58,26 @@ class KodiakAgent:
         self.loaded_skills: List[str] = skills or []
         self.skills_knowledge: str = ""
         self._hive_mind = None
+        self._current_iteration = 0
+        self.scan_id: Optional[UUID] = None
+
+        # Lightweight in-run memory for tool deduplication/backoff.
+        self._tool_attempts: List[Dict[str, Any]] = []
+        self._attempts_by_fingerprint: Dict[str, List[Dict[str, Any]]] = {}
+        self._persisted_insights: List[Dict[str, Any]] = []
+        self._persisted_do_not_repeat: Dict[str, str] = {}
+        self._insight_memory_service = InsightMemoryService(self.model_name)
+        self._strict_dedupe_tools = {
+            "nmap",
+            "nuclei",
+            "sqlmap",
+            "ffuf",
+            "katana",
+            "httpx",
+            "whatweb",
+            "searchsploit",
+        }
+        self._page_fetch_commands = ("curl ", "wget ", "http ")
         
         # Use actual tool names from inventory
         self.available_tools = [tool_name for tool_name in self.tool_inventory.list_tools().keys()]
@@ -142,6 +165,8 @@ class KodiakAgent:
         - Error occurs
         """
         logger.info(f"🚀 Agent {self.agent_id} starting run for goal: {goal}")
+        self.scan_id = scan_id
+        await self._load_persisted_insight_memory(session, scan_id)
         
         history = [
             {
@@ -155,6 +180,7 @@ class KodiakAgent:
         
         while iterations < max_iterations:
             iterations += 1
+            self._current_iteration = iterations
             logger.debug(f"🔄 Iteration {iterations}/{max_iterations}")
             
             # --- Max Iteration Warning System ---
@@ -270,6 +296,9 @@ class KodiakAgent:
         try:
             # Load context from DB
             context_str = await self._load_context(self.session, self.project_id)
+            runtime_memory = self._build_runtime_memory_context()
+            if runtime_memory:
+                context_str = f"{context_str}\n{runtime_memory}" if context_str else runtime_memory
             system_prompt = self._build_system_prompt(custom_prompt, context_str)
             
             # Prepare tools
@@ -367,6 +396,9 @@ class KodiakAgent:
             "- Use tools systematically and interpret results carefully.\n"
             "- Chain vulnerabilities for maximum impact.\n"
             "- Focus on high-impact vulnerabilities (RCE, SQLi, SSRF, XSS, IDOR).\n"
+            "- NEVER repeat the exact same tool call with identical arguments in the same scan unless parameters changed.\n"
+            "- For page analysis, fetch once and extract headers, forms, hidden fields, CSRF tokens, and cookies from the same response.\n"
+            "- If a tool times out, retry once with less aggressive settings (lower concurrency/intensity). Do not repeat unchanged.\n"
             "- CALL complete_scan tool only when you have absolutely exhausted all avenues.\n\n"
             "CRITICAL REASONING RULE:\n"
             "YOU MUST ALWAYS EXPLAIN YOUR REASONING IN DETAIL BEFORE CALLING A TOOL.\n"
@@ -435,7 +467,7 @@ class KodiakAgent:
         3. Never have two consecutive non-assistant messages without an assistant
            message in between.
         """
-        max_messages = 20  # keep last N messages
+        max_messages = 28  # keep last N messages
         if len(history) <= max_messages:
             return self._sanitize_for_gemini(history)
 
@@ -445,6 +477,90 @@ class KodiakAgent:
             cut += 1
 
         return self._sanitize_for_gemini(history[cut:])
+
+    async def _load_persisted_insight_memory(self, session: Any, scan_id: UUID) -> None:
+        if not session or not scan_id:
+            return
+        await self._ensure_insight_table_ready(session)
+        try:
+            from kodiak.database.crud import insight_memory
+
+            records = await insight_memory.list_by_scan(
+                session=session,
+                scan_id=scan_id,
+                limit=settings.memory_max_entries,
+            )
+            self._persisted_insights = []
+            self._persisted_do_not_repeat = {}
+            for record in reversed(records):
+                entry = {
+                    "tool": record.tool,
+                    "target": record.target,
+                    "fingerprint": record.fingerprint,
+                    "status": record.status,
+                    "insight": record.insight or {},
+                }
+                self._persisted_insights.append(entry)
+                do_not_repeat = (record.insight or {}).get("do_not_repeat", "").strip()
+                if do_not_repeat:
+                    self._persisted_do_not_repeat[record.fingerprint] = do_not_repeat
+        except Exception as e:
+            error_text = str(e).lower()
+            if "no such table" in error_text and "insightmemory" in error_text:
+                try:
+                    from kodiak.database.engine import init_db
+                    from kodiak.database.crud import insight_memory
+
+                    await init_db()
+                    records = await insight_memory.list_by_scan(
+                        session=session,
+                        scan_id=scan_id,
+                        limit=settings.memory_max_entries,
+                    )
+                    self._persisted_insights = []
+                    self._persisted_do_not_repeat = {}
+                    for record in reversed(records):
+                        entry = {
+                            "tool": record.tool,
+                            "target": record.target,
+                            "fingerprint": record.fingerprint,
+                            "status": record.status,
+                            "insight": record.insight or {},
+                        }
+                        self._persisted_insights.append(entry)
+                        do_not_repeat = (record.insight or {}).get("do_not_repeat", "").strip()
+                        if do_not_repeat:
+                            self._persisted_do_not_repeat[record.fingerprint] = do_not_repeat
+                except Exception as retry_error:
+                    logger.warning(
+                        f"Could not load persisted insight memory for scan {scan_id} after init_db retry: {retry_error}"
+                    )
+            else:
+                logger.warning(f"Could not load persisted insight memory for scan {scan_id}: {e}")
+
+    async def _ensure_insight_table_ready(self, session: Any) -> None:
+        """Avoid noisy first-query failures on upgraded databases missing insightmemory."""
+        if not settings.memory_enabled or not session:
+            return
+        try:
+            from sqlalchemy import text
+
+            table_exists = False
+            if settings.is_sqlite:
+                check = await session.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table' AND name='insightmemory'")
+                )
+                table_exists = check.scalar_one_or_none() is not None
+            else:
+                check = await session.execute(text("SELECT to_regclass('public.insightmemory')"))
+                table_exists = check.scalar_one_or_none() is not None
+
+            if not table_exists:
+                from kodiak.database.engine import init_db
+
+                await init_db()
+        except Exception as e:
+            logger.warning(f"Could not verify/prepare insightmemory table: {e}")
 
     def _sanitize_for_gemini(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Remove any assistant+tool_calls messages that have no following tool response.
@@ -480,6 +596,276 @@ class KodiakAgent:
 
         return result
 
+    def _build_runtime_memory_context(self) -> str:
+        """Build compact run-state memory to reduce repeated tool calls."""
+        if not self._tool_attempts and not self._persisted_insights:
+            return ""
+
+        lines = ["RUNTIME MEMORY (reuse these results and avoid duplicates):"]
+
+        recent_persisted = self._persisted_insights[-settings.memory_recent_in_prompt:]
+        if recent_persisted:
+            lines.append("RECENT INSIGHTS:")
+            for entry in recent_persisted:
+                insight = entry.get("insight", {})
+                what = (insight.get("what_was_tested") or f"{entry.get('tool')} {entry.get('target')}").strip()
+                observations = insight.get("key_observations") or []
+                next_actions = insight.get("next_best_actions") or []
+                do_not_repeat = (insight.get("do_not_repeat") or "").strip()
+                obs_text = observations[0] if observations else ""
+                next_text = next_actions[0] if next_actions else ""
+                line = f"- [{entry.get('status', 'unknown').upper()}] {what}"
+                if obs_text:
+                    line += f" | obs: {obs_text}"
+                if next_text:
+                    line += f" | next: {next_text}"
+                if do_not_repeat:
+                    line += f" | avoid: {do_not_repeat}"
+                lines.append(line)
+
+        for attempt in self._tool_attempts[-settings.memory_recent_in_prompt:]:
+            status = "SUCCESS"
+            if not attempt.get("success"):
+                status = "TIMEOUT" if attempt.get("timed_out") else "FAILED"
+            lines.append(
+                f"- Iter {attempt.get('iteration', '?')}: {attempt.get('tool')} [{status}] "
+                f"{attempt.get('summary', '')}"
+            )
+
+        return "\n".join(lines)
+
+    def _normalize_command(self, command: str) -> str:
+        return " ".join((command or "").split()).strip()
+
+    def _normalize_args_for_fingerprint(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = {k: v for k, v in args.items() if k not in {"agent_id", "scan_id", "thought"}}
+
+        if tool_name == "terminal_execute":
+            # Session IDs vary, but command identity is what matters for repeated fetches.
+            normalized.pop("session_id", None)
+            normalized.pop("capture_output", None)
+            normalized["command"] = self._normalize_command(str(args.get("command", "")))
+
+        return normalized
+
+    def _build_tool_summary(self, tool_name: str, args: Dict[str, Any]) -> str:
+        if tool_name == "terminal_execute":
+            command = self._normalize_command(str(args.get("command", "")))
+            if len(command) > 120:
+                command = command[:117] + "..."
+            return command
+
+        for key in ("target", "url", "domain", "query", "exploit_id"):
+            if args.get(key):
+                value = str(args.get(key))
+                if len(value) > 120:
+                    value = value[:117] + "..."
+                return f"{key}={value}"
+
+        return "args=" + json.dumps(args, sort_keys=True, default=str)[:120]
+
+    def _fingerprint_tool_call(self, tool_name: str, args: Dict[str, Any]) -> str:
+        normalized_args = self._normalize_args_for_fingerprint(tool_name, args)
+        payload = json.dumps(normalized_args, sort_keys=True, default=str, separators=(",", ":"))
+        digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
+        return f"{tool_name}:{digest}"
+
+    def _extract_tool_target(self, tool_name: str, args: Dict[str, Any]) -> str:
+        if tool_name == "sqlmap":
+            return str(args.get("url", "")).strip().lower()
+        if tool_name == "ffuf":
+            return str(args.get("url", "")).strip().lower()
+        if tool_name == "nuclei":
+            return str(args.get("target", "")).strip().lower()
+        if tool_name == "terminal_execute":
+            return self._normalize_command(str(args.get("command", ""))).lower()
+
+        return str(args.get("target") or args.get("url") or args.get("domain") or "").strip().lower()
+
+    def _has_prior_timeout(self, tool_name: str, target_key: str) -> bool:
+        if not target_key:
+            return False
+        for attempt in reversed(self._tool_attempts):
+            if attempt.get("tool") != tool_name:
+                continue
+            if attempt.get("target_key") != target_key:
+                continue
+            if attempt.get("timed_out"):
+                return True
+        return False
+
+    def _safe_int(self, value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _maybe_backoff_tool_args(self, tool_name: str, args: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[str]]:
+        """
+        If we already saw timeouts for this tool+target in this run,
+        reduce aggressiveness before retrying.
+        """
+        target_key = self._extract_tool_target(tool_name, args)
+        if not self._has_prior_timeout(tool_name, target_key):
+            return args, None
+
+        updated = dict(args)
+        changes: List[str] = []
+
+        if tool_name == "sqlmap":
+            level = self._safe_int(updated.get("level", 1), 1)
+            risk = self._safe_int(updated.get("risk", 1), 1)
+            threads = self._safe_int(updated.get("threads", 1), 1)
+
+            if level > 2:
+                updated["level"] = 2
+                changes.append("level->2")
+            if risk > 1:
+                updated["risk"] = 1
+                changes.append("risk->1")
+            if threads > 1:
+                updated["threads"] = 1
+                changes.append("threads->1")
+
+        elif tool_name == "ffuf":
+            threads = self._safe_int(updated.get("threads", 40), 40)
+            if threads > 20:
+                updated["threads"] = 20
+                changes.append("threads->20")
+
+        elif tool_name == "httpx":
+            threads = self._safe_int(updated.get("threads", 50), 50)
+            if threads > 25:
+                updated["threads"] = 25
+                changes.append("threads->25")
+
+        elif tool_name == "nuclei":
+            rate_limit = self._safe_int(updated.get("rate_limit", 150), 150)
+            if rate_limit > 75:
+                updated["rate_limit"] = 75
+                changes.append("rate_limit->75")
+
+        elif tool_name == "katana":
+            rate_limit = self._safe_int(updated.get("rate_limit", 150), 150)
+            if rate_limit > 75:
+                updated["rate_limit"] = 75
+                changes.append("rate_limit->75")
+
+        if changes:
+            return updated, f"Auto-backoff applied after timeout: {', '.join(changes)}"
+
+        return args, None
+
+    def _should_skip_tool_call(self, tool_name: str, args: Dict[str, Any], fingerprint: str) -> Optional[str]:
+        if fingerprint in self._persisted_do_not_repeat:
+            return (
+                f"Skipping {tool_name} with previously blocked fingerprint: "
+                f"{self._persisted_do_not_repeat[fingerprint]}"
+            )
+
+        prior_attempts = self._attempts_by_fingerprint.get(fingerprint, [])
+        if not prior_attempts:
+            return None
+
+        last = prior_attempts[-1]
+        if last.get("success"):
+            if tool_name in self._strict_dedupe_tools:
+                return (
+                    f"Skipping duplicate {tool_name} call with identical parameters. "
+                    "Reuse prior output and pivot to a different scope/tool/parameter set."
+                )
+            if tool_name == "terminal_execute":
+                command = self._normalize_command(str(args.get("command", ""))).lower()
+                if command.startswith(self._page_fetch_commands):
+                    return (
+                        "Skipping duplicate page fetch command. Reuse the previous HTTP response and extract all needed "
+                        "details (headers/forms/tokens/cookies) from that cached output."
+                    )
+
+        if last.get("timed_out"):
+            return (
+                f"Skipping identical retry for {tool_name}: previous attempt timed out. "
+                "Reduce intensity before retrying."
+            )
+
+        return None
+
+    def _result_to_dict(self, result: ToolResult | Dict[str, Any]) -> Dict[str, Any]:
+        if isinstance(result, ToolResult):
+            return result.model_dump() if hasattr(result, "model_dump") else result.dict()
+        return result
+
+    def _is_timeout_result(self, result: ToolResult | Dict[str, Any]) -> bool:
+        if isinstance(result, ToolResult):
+            text = f"{result.error or ''} {result.output or ''}".lower()
+        else:
+            text = f"{result.get('error', '')} {result.get('output', '')}".lower()
+        return "timeout" in text or "timed out" in text
+
+    def _record_tool_attempt(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        fingerprint: str,
+        result: ToolResult | Dict[str, Any],
+    ) -> None:
+        result_dict = self._result_to_dict(result)
+        target_key = self._extract_tool_target(tool_name, args)
+
+        attempt_record = {
+            "iteration": self._current_iteration,
+            "tool": tool_name,
+            "fingerprint": fingerprint,
+            "target_key": target_key,
+            "args": self._normalize_args_for_fingerprint(tool_name, args),
+            "summary": self._build_tool_summary(tool_name, args),
+            "success": bool(result_dict.get("success", False)),
+            "timed_out": self._is_timeout_result(result),
+            "error": result_dict.get("error"),
+            "output_preview": str(result_dict.get("output", ""))[:300],
+            "timestamp": time.time(),
+        }
+
+        self._tool_attempts.append(attempt_record)
+        self._attempts_by_fingerprint.setdefault(fingerprint, []).append(attempt_record)
+
+    async def _persist_insight_memory(
+        self,
+        session: Any,
+        project_id: Any,
+        scan_id: Any,
+        tool_name: str,
+        target: str,
+        fingerprint: str,
+        args: Dict[str, Any],
+        result_dict: Dict[str, Any],
+    ) -> None:
+        if not session or not project_id or not scan_id:
+            return
+        try:
+            insight_entry = await self._insight_memory_service.generate_and_store(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target,
+                fingerprint=fingerprint,
+                args=args,
+                result=result_dict,
+            )
+            if not insight_entry:
+                return
+
+            self._persisted_insights.append(insight_entry)
+            do_not_repeat = (insight_entry.get("insight", {}) or {}).get("do_not_repeat", "").strip()
+            if do_not_repeat:
+                self._persisted_do_not_repeat[fingerprint] = do_not_repeat
+
+            if len(self._persisted_insights) > settings.memory_max_entries:
+                self._persisted_insights = self._persisted_insights[-settings.memory_max_entries:]
+        except Exception as e:
+            logger.warning(f"Failed to persist insight memory for {tool_name}: {e}")
+
 
 
     async def act(
@@ -504,9 +890,33 @@ class KodiakAgent:
             await self.event_manager.emit_tool_start(tool_name, target, self.agent_id, str(scan_id))
         
         try:
+            # Prevent duplicate loops and auto-backoff after prior timeouts.
+            adjusted_args, backoff_note = self._maybe_backoff_tool_args(tool_name, args)
+            fingerprint = self._fingerprint_tool_call(tool_name, adjusted_args)
+            skip_reason = self._should_skip_tool_call(tool_name, adjusted_args, fingerprint)
+            if skip_reason:
+                skipped = ToolResult(success=False, output=skip_reason, error=skip_reason)
+                self._record_tool_attempt(tool_name, adjusted_args, fingerprint, skipped)
+                await self._persist_insight_memory(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=self._result_to_dict(skipped),
+                )
+                if self.event_manager:
+                    await self.event_manager.emit_tool_complete(tool_name, skipped, str(scan_id))
+                return self._result_to_dict(skipped)
+
             # Execute tool
-            execution_args = {**args, "agent_id": self.agent_id, "scan_id": str(scan_id)}
+            execution_args = {**adjusted_args, "agent_id": self.agent_id, "scan_id": str(scan_id)}
             result = await tool.execute(**execution_args)
+
+            if backoff_note and hasattr(result, "output") and result.output:
+                result.output = f"{backoff_note}\n\n{result.output}"
             
             # Normalize result
             if hasattr(result, 'dict'):
@@ -515,6 +925,18 @@ class KodiakAgent:
                 result_dict = result
             else:
                 result_dict = {"success": True, "output": str(result), "data": {}}
+
+            self._record_tool_attempt(tool_name, adjusted_args, fingerprint, result_dict)
+            await self._persist_insight_memory(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target,
+                fingerprint=fingerprint,
+                args=adjusted_args,
+                result_dict=result_dict,
+            )
             
             # Emit completion
             if self.event_manager:
@@ -523,4 +945,19 @@ class KodiakAgent:
             return result_dict
         except Exception as e:
             logger.error(f"Tool {tool_name} failed: {e}")
-            return {"error": str(e), "success": False, "output": f"Error: {e}"}
+            failure = ToolResult(success=False, output=f"Error: {e}", error=str(e))
+            fingerprint = self._fingerprint_tool_call(tool_name, args)
+            self._record_tool_attempt(tool_name, args, fingerprint, failure)
+            await self._persist_insight_memory(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target,
+                fingerprint=fingerprint,
+                args=args,
+                result_dict=self._result_to_dict(failure),
+            )
+            if self.event_manager:
+                await self.event_manager.emit_tool_complete(tool_name, failure, str(scan_id))
+            return self._result_to_dict(failure)
