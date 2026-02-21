@@ -119,9 +119,26 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.argument("target")
 @click.option("--instructions", "-i", help="Custom scan instructions", default="Conduct a security assessment")
 @click.option("--model", "-m", help="LLM model to use")
-@click.option("--max-iterations", "-n", default=100, help="Maximum agent iterations")
+@click.option("--max-iterations", "-n", default=100, help="Total iteration budget shared across agents")
+@click.option("--agents", "-a", type=int, default=None, help="Number of concurrent agents")
+@click.option("--force-agents", is_flag=True, help="Allow agent count above KODIAK_MAX_AGENTS")
+@click.option(
+    "--role-strategy",
+    type=click.Choice(["role-hinted", "generic"], case_sensitive=False),
+    default="role-hinted",
+    help="How to assign agent roles",
+)
 @click.option("--verbose", "-v", is_flag=True, help="Show verbose real-time logging output")
-def scan(target: str, instructions: str, model: Optional[str], max_iterations: int, verbose: bool):
+def scan(
+    target: str,
+    instructions: str,
+    model: Optional[str],
+    max_iterations: int,
+    agents: Optional[int],
+    force_agents: bool,
+    role_strategy: str,
+    verbose: bool,
+):
     """Run a security scan on the target."""
     if not HAS_DATABASE:
         console.print("[red]Database dependencies not installed! Please install sqlalchemy and sqlmodel.[/red]")
@@ -147,6 +164,7 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
     async def run_scan_internal() -> int:
         from kodiak.core.interface import CoreInterface
         from kodiak.core.config import settings
+        from kodiak.core.agent_scaling import resolve_agent_count
         
         # If not verbose, silence loguru so messages don't break the Rich Live display
         if not verbose:
@@ -158,10 +176,22 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         
         if model:
             settings.llm_model = model
+
+        requested_agents = agents or settings.default_agent_count
+        resolved_agents = resolve_agent_count(
+            requested=requested_agents,
+            max_agents=settings.max_concurrent_agents,
+            force_agents=force_agents,
+        )
             
         console.print(f"\n🎯 [bold]Target:[/bold] {target}")
         console.print(f"🧠 [bold]Model:[/bold] {settings.llm_model}")
         console.print(f"📋 [bold]Instructions:[/bold] {instructions}\n")
+        console.print(f"👥 [bold]Agents:[/bold] requested={resolved_agents.requested} effective={resolved_agents.effective}")
+        console.print(f"🧩 [bold]Role Strategy:[/bold] {role_strategy}")
+        if resolved_agents.warning:
+            console.print(f"[yellow]{resolved_agents.warning}[/yellow]")
+        console.print("")
         
         interface = CoreInterface()
         run_id = await interface.start_scan(
@@ -169,6 +199,9 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
             instructions=instructions,
             model=model,
             max_iterations=max_iterations,
+            agent_count=requested_agents,
+            role_strategy=role_strategy.replace("-", "_"),
+            force_agents=force_agents,
         )
         
         # If verbose, bypass the TUI overlay and just let logs stream freely

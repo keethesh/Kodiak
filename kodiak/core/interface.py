@@ -8,6 +8,7 @@ from loguru import logger
 from kodiak.api.events import TUIEvent, TUIEventManager, event_manager as default_event_manager
 from kodiak.core.interface_events import CoreEvent, map_tui_event_payload
 from kodiak.core.scan_runner import ScanRunner, ScanResult
+from kodiak.core.config import settings
 
 
 TERMINAL_EVENTS = {"scan_completed", "scan_failed"}
@@ -20,6 +21,9 @@ class _RunState:
     instructions: str
     max_iterations: int
     model: Optional[str]
+    agent_count: int
+    role_strategy: str
+    force_agents: bool
     queue: asyncio.Queue[CoreEvent] = field(default_factory=asyncio.Queue)
     task: Optional[asyncio.Task] = None
     result: Optional[ScanResult] = None
@@ -57,8 +61,13 @@ class CoreInterface:
         instructions: str = "Conduct a security assessment",
         model: Optional[str] = None,
         max_iterations: int = 100,
+        agent_count: Optional[int] = None,
+        role_strategy: str = "role_hinted",
+        force_agents: bool = False,
     ) -> str:
         await self._ensure_subscriptions()
+
+        requested_agents = agent_count or settings.default_agent_count
 
         run_id = str(uuid.uuid4())
         state = _RunState(
@@ -67,6 +76,9 @@ class CoreInterface:
             instructions=instructions,
             max_iterations=max_iterations,
             model=model,
+            agent_count=requested_agents,
+            role_strategy=role_strategy,
+            force_agents=force_agents,
         )
 
         async with self._lock:
@@ -134,6 +146,9 @@ class CoreInterface:
                     target=state.target,
                     instructions=state.instructions,
                     max_iterations=state.max_iterations,
+                    agent_count=state.agent_count,
+                    role_strategy=state.role_strategy,
+                    force_agents=state.force_agents,
                 )
                 state.result = result
             finally:
