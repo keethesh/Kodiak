@@ -77,6 +77,21 @@ def run_check(command: list[str], timeout: int = 20) -> tuple[bool, str]:
     return False, detail or f"Command exited with code {result.returncode}"
 
 
+def run_docker_compose(args: list[str]) -> tuple[bool, str]:
+    """Run docker compose with fallback between `docker compose` and `docker-compose`."""
+    commands = [
+        ["docker", "compose", *args],
+        ["docker-compose", *args],
+    ]
+    errors: list[str] = []
+    for cmd in commands:
+        ok, detail = run_check(cmd, timeout=60)
+        if ok:
+            return True, detail
+        errors.append(f"{' '.join(cmd)} -> {detail}")
+    return False, " | ".join(errors)
+
+
 @click.group(invoke_without_command=True)
 @click.option("--version", is_flag=True, help="Show version information")
 @click.option("--target", "-t", help="Target to scan (launches TUI)")
@@ -129,7 +144,7 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         asyncio.run(init_db())
         console.print("[green]Database initialized![/green]")
 
-    async def run_scan_internal():
+    async def run_scan_internal() -> int:
         from kodiak.core.interface import CoreInterface
         from kodiak.core.config import settings
         
@@ -160,24 +175,53 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         if verbose:
             console.print("[yellow]Verbose mode enabled. Streaming real-time execution logs...[/yellow]\n")
             try:
+                async for event in interface.subscribe_events(run_id):
+                    payload = event.payload or {}
+                    if event.type == "tool_start":
+                        console.print(
+                            f"[cyan][tool:start][/cyan] {payload.get('tool_name', 'unknown')} -> {payload.get('target', '')}"
+                        )
+                    elif event.type == "tool_complete":
+                        success = payload.get("success")
+                        symbol = "[green]ok[/green]" if success else "[red]fail[/red]"
+                        console.print(
+                            f"[cyan][tool:end][/cyan] {payload.get('tool_name', 'unknown')} {symbol}"
+                        )
+                    elif event.type == "finding_discovered":
+                        finding = payload.get("finding", {})
+                        title = finding.get("title", "Unnamed finding")
+                        sev = finding.get("severity", "info").upper()
+                        console.print(f"[magenta][finding][/magenta] {sev} {title}")
+                    elif event.type == "scan_failed":
+                        console.print(f"[red][scan][/red] failed: {payload.get('error', 'unknown error')}")
+
                 result = await interface.get_scan_result(run_id)
                 if result:
                     console.print(f"\n[green]Scan {result.status}![/green]")
+                    console.print(
+                        f"[bold]Summary:[/bold] nodes={result.nodes_discovered} findings={result.findings_count} "
+                        f"iterations={result.iterations} duration={int(result.duration_seconds)}s"
+                    )
+                    return 0 if result.status == "completed" else 1
                 else:
                     console.print("\n[yellow]Scan finished without a result object.[/yellow]")
+                    return 1
             except KeyboardInterrupt:
                 console.print("\n[yellow]Scan interrupted.[/yellow]")
                 await interface.stop_scan(run_id)
+                return 130
             except Exception as e:
                 console.print(f"\n[red]Scan failed: {e}[/red]")
-            return
+                return 1
 
         # State for live display (Non-Verbose Mode)
         state = {
             "status": "Initializing...",
             "tools": [],
             "findings": [],
-            "start_time": datetime.utcnow()
+            "start_time": datetime.utcnow(),
+            "tool_count": 0,
+            "tool_failures": 0,
         }
         
         def create_view():
@@ -224,12 +268,16 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
                     elif event.type == "tool_start":
                         tool_name = payload.get("tool_name", "unknown")
                         state["status"] = f"Running {tool_name}"
+                        state["tool_count"] += 1
                         state["tools"].append(
                             {"name": tool_name, "target": payload.get("target", ""), "success": None}
                         )
                     elif event.type == "tool_complete":
                         if state["tools"]:
-                            state["tools"][-1]["success"] = payload.get("success", True)
+                            success = payload.get("success", True)
+                            state["tools"][-1]["success"] = success
+                            if success is False:
+                                state["tool_failures"] += 1
                     elif event.type == "finding_discovered":
                         finding = payload.get("finding", {})
                         if finding:
@@ -247,16 +295,34 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         except KeyboardInterrupt:
             console.print("\n[yellow]Scan interrupted.[/yellow]")
             await interface.stop_scan(run_id)
+            return 130
         except Exception as e:
             console.print(f"\n[red]Scan failed: {e}[/red]")
             logger.exception("CLI Scan failure")
+            return 1
 
         console.print("\n" + "="*50)
         console.print("[bold green]📊 Final Results[/bold green]")
         console.print("="*50)
-        console.print(f"Nodes: {len(state['tools'])} | Findings: {len(state['findings'])}")
+        if result:
+            console.print(
+                f"Status: {result.status} | Nodes: {result.nodes_discovered} | Findings: {result.findings_count}"
+            )
+            console.print(
+                f"Iterations: {result.iterations} | Duration: {int(result.duration_seconds)}s | "
+                f"Tools Run: {state['tool_count']} | Tool Failures: {state['tool_failures']}"
+            )
+            return 0 if result.status == "completed" else 1
+
+        console.print(
+            f"Status: unknown | Findings (observed): {len(state['findings'])} | "
+            f"Tools Run: {state['tool_count']}"
+        )
+        return 1
         
-    asyncio.run(run_scan_internal())
+    exit_code = asyncio.run(run_scan_internal())
+    if exit_code != 0:
+        raise click.exceptions.Exit(exit_code)
 
 
 @main.command()
@@ -293,16 +359,28 @@ def tui(target: Optional[str]):
 def docker(action: str):
     """Manage Docker backend."""
     kodiak_dir = Path.home() / ".kodiak"
+    kodiak_dir.mkdir(parents=True, exist_ok=True)
     os.chdir(kodiak_dir)
-    
+
+    cmd_ok = True
+    detail = ""
     if action == "start":
-        subprocess.run(["docker-compose", "up", "-d"])
+        cmd_ok, detail = run_docker_compose(["up", "-d"])
     elif action == "stop":
-        subprocess.run(["docker-compose", "down"])
+        cmd_ok, detail = run_docker_compose(["down"])
+    elif action == "restart":
+        stop_ok, stop_detail = run_docker_compose(["down"])
+        start_ok, start_detail = run_docker_compose(["up", "-d"])
+        cmd_ok = stop_ok and start_ok
+        detail = f"down={stop_detail}; up={start_detail}"
     elif action == "status":
-        subprocess.run(["docker-compose", "ps"])
+        cmd_ok, detail = run_docker_compose(["ps"])
     elif action == "logs":
-        subprocess.run(["docker-compose", "logs", "-f"])
+        cmd_ok, detail = run_docker_compose(["logs", "-f"])
+
+    if not cmd_ok:
+        console.print(f"[red]Docker command failed:[/red] {detail}")
+        raise click.exceptions.Exit(1)
 
 
 @main.command()
@@ -311,7 +389,7 @@ def doctor():
     from kodiak.core.config import settings
 
     def status_label(ok: bool) -> str:
-        return "OK" if ok else "FAIL"
+        return "[green]OK[/green]" if ok else "[red]FAIL[/red]"
 
     console.print("[bold]Kodiak Doctor[/bold]\n")
     console.print(f"Python: {sys.version.split()[0]}")
