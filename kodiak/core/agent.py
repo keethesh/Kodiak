@@ -481,6 +481,7 @@ class KodiakAgent:
     async def _load_persisted_insight_memory(self, session: Any, scan_id: UUID) -> None:
         if not session or not scan_id:
             return
+        await self._ensure_insight_table_ready(session)
         try:
             from kodiak.database.crud import insight_memory
 
@@ -536,6 +537,30 @@ class KodiakAgent:
                     )
             else:
                 logger.warning(f"Could not load persisted insight memory for scan {scan_id}: {e}")
+
+    async def _ensure_insight_table_ready(self, session: Any) -> None:
+        """Avoid noisy first-query failures on upgraded databases missing insightmemory."""
+        if not settings.memory_enabled or not session:
+            return
+        try:
+            from sqlalchemy import text
+
+            table_exists = False
+            if settings.is_sqlite:
+                check = await session.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table' AND name='insightmemory'")
+                )
+                table_exists = check.scalar_one_or_none() is not None
+            else:
+                check = await session.execute(text("SELECT to_regclass('public.insightmemory')"))
+                table_exists = check.scalar_one_or_none() is not None
+
+            if not table_exists:
+                from kodiak.database.engine import init_db
+
+                await init_db()
+        except Exception as e:
+            logger.warning(f"Could not verify/prepare insightmemory table: {e}")
 
     def _sanitize_for_gemini(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Remove any assistant+tool_calls messages that have no following tool response.
