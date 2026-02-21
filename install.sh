@@ -282,6 +282,23 @@ install_kodiak() {
     install_from_source
 }
 
+resolve_python_project_dir() {
+    local base_dir="$1"
+
+    if [[ -f "$base_dir/pyproject.toml" ]] || [[ -f "$base_dir/setup.py" ]]; then
+        echo "$base_dir"
+        return 0
+    fi
+
+    # Defensive fallback for nested layouts.
+    if [[ -f "$base_dir/Kodiak/pyproject.toml" ]] || [[ -f "$base_dir/Kodiak/setup.py" ]]; then
+        echo "$base_dir/Kodiak"
+        return 0
+    fi
+
+    return 1
+}
+
 # Install from source
 install_from_source() {
     print_step "Installing Kodiak from source..."
@@ -406,6 +423,38 @@ install_from_source() {
             print_warning "origin/main not found. Staying on current branch."
         fi
     fi
+
+    # Validate source checkout layout before invoking uv.
+    local project_dir
+    project_dir="$(resolve_python_project_dir "$source_dir" || true)"
+
+    if [[ -z "$project_dir" ]] && [[ "$source_dir" != "$PWD" ]]; then
+        print_warning "Source checkout missing pyproject.toml/setup.py. Re-cloning repository..."
+        rm -rf "$source_dir"
+        if ! git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
+            print_error "Failed to re-clone repository"
+            exit 1
+        fi
+        cd "$source_dir"
+
+        if [[ "$KODIAK_VERSION" != "latest" ]]; then
+            git checkout "$KODIAK_VERSION" || true
+        elif git show-ref --verify --quiet refs/remotes/origin/main; then
+            git checkout main || true
+        fi
+
+        project_dir="$(resolve_python_project_dir "$source_dir" || true)"
+    fi
+
+    if [[ -z "$project_dir" ]]; then
+        print_error "Source installation directory is missing pyproject.toml/setup.py: $source_dir"
+        print_status "Directory snapshot:"
+        ls -la "$source_dir" || true
+        exit 1
+    fi
+
+    cd "$project_dir"
+    print_status "Using source project directory: $project_dir"
     
     # Install using UV with force flag to always overwrite
     print_status "Installing dependencies and Kodiak..."

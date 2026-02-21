@@ -53,6 +53,7 @@ class KodiakAgent:
         global_tool_semaphore: Optional[asyncio.Semaphore] = None,
         tool_semaphores: Optional[Dict[str, asyncio.Semaphore]] = None,
         tool_scheduler: Any = None,
+        allowed_tools: Optional[List[str]] = None,
     ):
         self.agent_id = agent_id
         self.model_name = model_name or settings.llm_model
@@ -91,8 +92,13 @@ class KodiakAgent:
         }
         self._page_fetch_commands = ("curl ", "wget ", "http ")
         
-        # Use actual tool names from inventory
-        self.available_tools = [tool_name for tool_name in self.tool_inventory.list_tools().keys()]
+        # Use actual tool names from inventory, optionally gated per-scan.
+        registered_tools = [tool_name for tool_name in self.tool_inventory.list_tools().keys()]
+        if allowed_tools:
+            allowed_set = set(allowed_tools)
+            self.available_tools = [name for name in registered_tools if name in allowed_set]
+        else:
+            self.available_tools = registered_tools
         
         # Load skills if provided
         if self.loaded_skills:
@@ -437,7 +443,7 @@ class KodiakAgent:
         available_tools = []
         all_tools = self.tool_inventory.list_tools()
         
-        filtered_names = allowed_tools if allowed_tools else all_tools.keys()
+        filtered_names = allowed_tools if allowed_tools else self.available_tools
         
         for tool_name in filtered_names:
             tool_instance = self.tool_inventory.get(tool_name)

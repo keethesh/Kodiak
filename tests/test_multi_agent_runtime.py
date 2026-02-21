@@ -90,3 +90,61 @@ class TestScanRunnerHelpers:
 
         assert all(task.done() for task in runner._agent_tasks)
         assert all(task.cancelled() for task in runner._agent_tasks)
+
+    @pytest.mark.asyncio
+    async def test_preflight_gates_missing_docker_tools(self, monkeypatch):
+        runner = self._runner()
+
+        class FakeInventory:
+            def list_tools(self):
+                return {
+                    "nuclei": "nuclei",
+                    "katana": "katana",
+                    "searchsploit": "searchsploit",
+                    "web_search": "web_search",
+                    "complete_scan": "complete_scan",
+                }
+
+        class FakeExecutor:
+            async def run_command(self, command, cwd=None, env=None, stdin=None):
+                return SimpleNamespace(
+                    exit_code=0,
+                    stdout="nuclei=1\nkatana=0\nsearchsploit=0\n",
+                    stderr="",
+                )
+
+        async def fake_get_docker_executor(*args, **kwargs):
+            return FakeExecutor()
+
+        monkeypatch.setattr("kodiak.core.scan_runner.get_docker_executor", fake_get_docker_executor)
+
+        allowed, missing = await runner._preflight_available_tools(FakeInventory())
+
+        assert set(missing) == {"katana", "searchsploit"}
+        assert "nuclei" in allowed
+        assert "katana" not in allowed
+        assert "searchsploit" not in allowed
+        assert "web_search" in allowed
+        assert "complete_scan" in allowed
+
+    @pytest.mark.asyncio
+    async def test_preflight_failure_keeps_all_tools_enabled(self, monkeypatch):
+        runner = self._runner()
+
+        class FakeInventory:
+            def list_tools(self):
+                return {"nuclei": "nuclei", "katana": "katana", "web_search": "web_search"}
+
+        class FakeExecutor:
+            async def run_command(self, command, cwd=None, env=None, stdin=None):
+                return SimpleNamespace(exit_code=2, stdout="", stderr="docker error")
+
+        async def fake_get_docker_executor(*args, **kwargs):
+            return FakeExecutor()
+
+        monkeypatch.setattr("kodiak.core.scan_runner.get_docker_executor", fake_get_docker_executor)
+
+        allowed, missing = await runner._preflight_available_tools(FakeInventory())
+
+        assert set(allowed) == {"nuclei", "katana", "web_search"}
+        assert missing == []

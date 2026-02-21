@@ -4,6 +4,7 @@ Scan Runner - Clean implementation of scan execution
 
 import asyncio
 import math
+import shlex
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from uuid import UUID
@@ -22,6 +23,7 @@ from kodiak.api.events import TUIEventManager
 from kodiak.database.engine import get_session
 from kodiak.database.models import Project, ScanJob, ScanStatus
 from kodiak.database import crud
+from kodiak.services.executor import get_docker_executor
 
 
 @dataclass
@@ -50,6 +52,18 @@ class ScanRunner:
         self._finding_counts_by_severity: Dict[str, int] = {}
         self._finding_records: Dict[str, Dict[str, Any]] = {}
         self._tool_scheduler: Optional[ToolScheduler] = None
+        self._docker_tool_map = {
+            "nmap": "nmap",
+            "nuclei": "nuclei",
+            "subfinder": "subfinder",
+            "httpx": "httpx",
+            "katana": "katana",
+            "ffuf": "ffuf",
+            "whatweb": "whatweb",
+            "sqlmap": "sqlmap",
+            "commix": "commix",
+            "searchsploit": "searchsploit",
+        }
     
     async def run(
         self,
@@ -123,6 +137,18 @@ class ScanRunner:
                 # 2. Setup Agents
                 effective_agents = agent_resolution.effective
                 per_agent_iterations = max(1, math.ceil(max_iterations / effective_agents))
+                preflight_inventory = ToolInventory()
+                preflight_inventory.initialize_tools()
+                allowed_tools, missing_tools = await self._preflight_available_tools(preflight_inventory)
+                if missing_tools:
+                    logger.warning(
+                        "Tool preflight disabled unavailable toolbox tools for this scan: "
+                        + ", ".join(sorted(missing_tools))
+                    )
+                logger.info(
+                    f"Tool preflight complete: {len(allowed_tools)} enabled, {len(missing_tools)} disabled"
+                )
+
                 if settings.tool_scheduler == "queue":
                     self._tool_scheduler = ToolScheduler(queue_limit=settings.tool_queue_limit)
                     self._tool_scheduler.register_tool("nmap", concurrency=1)
@@ -165,6 +191,7 @@ class ScanRunner:
                         global_tool_semaphore=global_heavy_semaphore,
                         tool_semaphores=per_tool_semaphores,
                         tool_scheduler=self._tool_scheduler,
+                        allowed_tools=allowed_tools,
                     )
                     await agent.register_with_hive_mind()
                     self._agents.append(agent)
@@ -344,6 +371,71 @@ class ScanRunner:
             return "generalist"
         roles = ["scout", "mapper", "attacker", "analyst", "reporter"]
         return roles[index % len(roles)]
+
+    async def _preflight_available_tools(self, inventory: ToolInventory) -> tuple[List[str], List[str]]:
+        """
+        Probe Docker toolbox capabilities once per scan and gate unavailable
+        Docker-backed tools from agent tool lists.
+        """
+        registered_tools = list(inventory.list_tools().keys())
+        probe_tools = [tool for tool in registered_tools if tool in self._docker_tool_map]
+        if not probe_tools:
+            return registered_tools, []
+
+        try:
+            executor = await get_docker_executor(
+                settings.toolbox_image,
+                fallback_image=settings.toolbox_image,
+                fallback_entrypoint="",
+            )
+
+            probe_pairs = [f"{tool}:{self._docker_tool_map[tool]}" for tool in probe_tools]
+            script_parts = [
+                f"for pair in {' '.join(shlex.quote(pair) for pair in probe_pairs)}; do",
+                "  tool=${pair%%:*}",
+                "  bin=${pair##*:}",
+                "  if command -v \"$bin\" >/dev/null 2>&1; then",
+                "    echo \"$tool=1\"",
+                "  else",
+                "    echo \"$tool=0\"",
+                "  fi",
+                "done",
+            ]
+            command = ["/bin/bash", "-lc", " ".join(script_parts)]
+            result = await executor.run_command(command)
+            if result.exit_code != 0:
+                logger.warning(
+                    "Tool preflight probe failed (non-zero exit). Keeping all tools enabled. "
+                    f"stderr={result.stderr}"
+                )
+                return registered_tools, []
+
+            status_map: Dict[str, bool] = {}
+            for line in (result.stdout or "").splitlines():
+                cleaned = line.strip()
+                if "=" not in cleaned:
+                    continue
+                name, value = cleaned.split("=", 1)
+                name = name.strip()
+                if name in self._docker_tool_map:
+                    status_map[name] = value.strip() == "1"
+
+            unknown = [name for name in probe_tools if name not in status_map]
+            if unknown:
+                logger.warning(
+                    "Tool preflight received incomplete probe output; keeping these tools enabled: "
+                    + ", ".join(sorted(unknown))
+                )
+
+            missing = sorted([name for name in probe_tools if status_map.get(name) is False])
+            if not missing:
+                return registered_tools, []
+
+            allowed = [name for name in registered_tools if name not in set(missing)]
+            return allowed, missing
+        except Exception as e:
+            logger.warning(f"Tool preflight probe failed unexpectedly. Keeping all tools enabled: {e}")
+            return registered_tools, []
 
     def _build_agent_goal(
         self,

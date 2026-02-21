@@ -58,6 +58,24 @@ def _make_agent() -> KodiakAgent:
     )
 
 
+def _make_agent_with_tools(tool_names, allowed_tools=None) -> KodiakAgent:
+    inventory = Mock()
+    inventory.list_tools.return_value = {name: name for name in tool_names}
+    inventory.get.side_effect = lambda name: Mock(
+        to_openai_schema=Mock(return_value={"type": "function", "function": {"name": name}})
+    )
+    event_manager = Mock()
+    event_manager.emit_tool_start = AsyncMock()
+    event_manager.emit_tool_complete = AsyncMock()
+    return KodiakAgent(
+        agent_id="agent-filter-test",
+        tool_inventory=inventory,
+        event_manager=event_manager,
+        role="scout",
+        allowed_tools=allowed_tools,
+    )
+
+
 @pytest.mark.asyncio
 async def test_terminal_execute_does_not_treat_equals_as_env_assignment(monkeypatch):
     fake_executor = FakeExecutor(stdout="/tmp")
@@ -236,3 +254,14 @@ def test_agent_history_content_includes_compact_tool_data():
     assert "SQLMap completed" in content
     assert "[tool_data]" in content
     assert '"vulnerable":true' in content
+
+
+def test_agent_prepares_only_gated_tools():
+    agent = _make_agent_with_tools(
+        tool_names=["nuclei", "katana", "complete_scan"],
+        allowed_tools=["nuclei", "complete_scan"],
+    )
+    prepared = agent._prepare_tools()
+    names = [item["function"]["name"] for item in prepared]
+
+    assert names == ["nuclei", "complete_scan"]
