@@ -4,7 +4,6 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
 from kodiak.core.tools.base import KodiakTool, ToolResult
-from kodiak.services.executor import get_executor
 
 
 class NucleiArgs(BaseModel):
@@ -114,13 +113,12 @@ class NucleiTool(KodiakTool):
             )
             result = await executor.run_command(command)
             
-            # Nuclei returns 0 even when vulnerabilities are found
-            # Only consider it an error if there's a genuine failure
-            if result.exit_code != 0 and "No results found" not in result.stderr:
+            if result.exit_code != 0:
+                error_detail = self._format_docker_failure(result, settings.toolbox_image)
                 return ToolResult(
                     success=False,
-                    output=f"Nuclei scan failed: {result.stderr}",
-                    error=f"Command failed with exit code {result.exit_code}: {result.stderr}"
+                    output=f"Nuclei scan failed: {error_detail}",
+                    error=f"Command failed with exit code {result.exit_code}: {error_detail}"
                 )
             
             # Parse JSON output
@@ -138,7 +136,8 @@ class NucleiTool(KodiakTool):
                     "findings": findings,
                     "total_findings": len(findings),
                     "severity_breakdown": self._get_severity_breakdown(findings),
-                    "template_matches": [f.get("template-id", "unknown") for f in findings]
+                    "template_matches": [f.get("template-id", "unknown") for f in findings],
+                    "execution_mode": "docker",
                 }
             )
             
@@ -148,6 +147,23 @@ class NucleiTool(KodiakTool):
                 output=f"Nuclei execution failed: {str(e)}",
                 error=str(e)
             )
+    
+    def _format_docker_failure(self, result: Any, toolbox_image: str) -> str:
+        stderr = (result.stderr or "").strip()
+        stderr_lower = stderr.lower()
+        if result.exit_code == 127 and "docker is not installed" in stderr_lower:
+            return (
+                "Docker is required for nuclei in this build and was not found in PATH. "
+                f"Ensure Docker daemon is running and image '{toolbox_image}' is accessible."
+            )
+        if "executable file not found" in stderr_lower or ("nuclei" in stderr_lower and "not found" in stderr_lower):
+            return (
+                "nuclei is not available in the configured Docker image. "
+                f"Verify '{toolbox_image}' contains nuclei."
+            )
+        if stderr:
+            return stderr
+        return "nuclei failed without stderr output."
 
     def _parse_nuclei_output(self, output: str) -> List[Dict[str, Any]]:
         """Parse nuclei JSON output into structured findings"""

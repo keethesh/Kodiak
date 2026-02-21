@@ -2,13 +2,13 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Type, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ToolResult(BaseModel):
     success: bool
     output: str
-    data: Dict[str, Any] = {}  # Structured data (parsed JSON, etc.)
+    data: Dict[str, Any] = Field(default_factory=dict)  # Structured data (parsed JSON, etc.)
     error: str | None = None
 
 
@@ -92,14 +92,16 @@ class BaseTool(ABC):
             
             # Execute the actual tool logic with timeout
             try:
+                from kodiak.core.config import settings
+                tool_timeout = settings.tool_timeout
                 # Convert kwargs to args dict for tool execution
                 # Only exclude internal framework parameters, keep tool parameters
                 args_dict = {k: v for k, v in kwargs.items() if k not in ['agent_id', 'scan_id']}
-                result = await asyncio.wait_for(self._execute(args_dict), timeout=300)  # 5 minute timeout
+                result = await asyncio.wait_for(self._execute(args_dict), timeout=tool_timeout)
             except asyncio.TimeoutError:
                 return ToolResult(
                     success=False,
-                    output=f"Tool execution timed out after 300 seconds",
+                    output=f"Tool execution timed out after {tool_timeout} seconds",
                     error="Tool execution timeout"
                 )
             

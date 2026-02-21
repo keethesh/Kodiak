@@ -5,6 +5,7 @@ Legacy orchestrator that used a task-polling pattern is now replaced
 by a streamlined ScanRunner execution model.
 """
 
+import asyncio
 from typing import Dict, Optional, List
 from uuid import UUID
 from loguru import logger
