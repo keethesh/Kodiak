@@ -626,11 +626,20 @@ class FfufArgs(BaseModel):
         "/usr/share/seclists/Discovery/Web-Content/common.txt",
         description="Path to wordlist file inside the Docker container"
     )
+    wordlists: Optional[List[str]] = Field(
+        None,
+        description="Optional multiple wordlists (e.g., ['/tmp/users.txt:USER','/tmp/passwords.txt:PASS'])"
+    )
     extensions: Optional[str] = Field(None, description="File extensions to append to each word (e.g., 'php,html,asp')")
     filter_status: Optional[str] = Field("404", description="HTTP status codes to filter OUT of results (comma-separated, e.g., '404,403')")
+    match_status: Optional[str] = Field(None, description="HTTP status codes to include (comma-separated)")
+    filter_regex: Optional[str] = Field(None, description="Regex to filter out responses")
+    match_regex: Optional[str] = Field(None, description="Regex to include matching responses")
     threads: int = Field(40, description="Number of concurrent threads")
     timeout: int = Field(10, description="Request timeout in seconds")
     method: str = Field("GET", description="HTTP method (GET, POST, etc.)")
+    data: Optional[str] = Field(None, description="Request body (for POST/PUT fuzzing)")
+    mode: Optional[str] = Field(None, description="Fuzz mode: sniper, clusterbomb, pitchfork")
     headers: Optional[str] = Field(None, description="Additional HTTP headers (e.g., 'Authorization: Bearer token')")
     cookies: Optional[str] = Field(None, description="Cookie string to include with requests")
 
@@ -653,6 +662,11 @@ class FfufTool(KodiakTool):
                     "type": "string",
                     "description": "Wordlist file path (default: /usr/share/seclists/Discovery/Web-Content/common.txt). Other options: /usr/share/seclists/Discovery/Web-Content/big.txt"
                 },
+                "wordlists": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of multiple wordlists with keyword aliases, e.g. ['/tmp/users.txt:USER','/tmp/passwords.txt:PASS']"
+                },
                 "extensions": {
                     "type": "string",
                     "description": "Comma-separated file extensions to try (e.g., 'php,html,txt,bak')"
@@ -660,6 +674,18 @@ class FfufTool(KodiakTool):
                 "filter_status": {
                     "type": "string",
                     "description": "HTTP status codes to HIDE from results (e.g., '404' or '404,403,400')"
+                },
+                "match_status": {
+                    "type": "string",
+                    "description": "HTTP status codes to INCLUDE (e.g., '200,301,302')"
+                },
+                "filter_regex": {
+                    "type": "string",
+                    "description": "Regex to exclude response bodies containing this pattern"
+                },
+                "match_regex": {
+                    "type": "string",
+                    "description": "Regex to include only response bodies containing this pattern"
                 },
                 "threads": {
                     "type": "integer",
@@ -672,6 +698,14 @@ class FfufTool(KodiakTool):
                 "method": {
                     "type": "string",
                     "description": "HTTP method to use (default: GET)"
+                },
+                "data": {
+                    "type": "string",
+                    "description": "Raw request body for POST/PUT fuzzing"
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Fuzz mode: sniper (default), clusterbomb, or pitchfork"
                 },
                 "headers": {
                     "type": "string",
@@ -689,22 +723,41 @@ class FfufTool(KodiakTool):
         url = args["url"]
         # HARDCODED: Default wordlist path inside the Kodiak Docker container (from seclists)
         wordlist = args.get("wordlist", "/usr/share/seclists/Discovery/Web-Content/common.txt")
+        method = str(args.get("method", "GET")).upper()
 
         command = [
             "ffuf",
             "-u", url,
-            "-w", wordlist,
             "-t", str(args.get("threads", 40)),
             "-timeout", str(args.get("timeout", 10)),
-            "-X", args.get("method", "GET"),
+            "-X", method,
             "-json",
             "-s",  # Silent mode
         ]
+
+        multi_wordlists = args.get("wordlists") or []
+        if multi_wordlists:
+            for wl in multi_wordlists:
+                wl_value = str(wl).strip()
+                if wl_value:
+                    command.extend(["-w", wl_value])
+        else:
+            command.extend(["-w", wordlist])
 
         if args.get("extensions"):
             command.extend(["-e", args["extensions"]])
         if args.get("filter_status"):
             command.extend(["-fc", args["filter_status"]])
+        if args.get("match_status"):
+            command.extend(["-mc", args["match_status"]])
+        if args.get("filter_regex"):
+            command.extend(["-fr", args["filter_regex"]])
+        if args.get("match_regex"):
+            command.extend(["-mr", args["match_regex"]])
+        if args.get("data"):
+            command.extend(["-d", args["data"]])
+        if args.get("mode"):
+            command.extend(["-mode", args["mode"]])
         if args.get("headers"):
             command.extend(["-H", args["headers"]])
         if args.get("cookies"):
@@ -759,22 +812,36 @@ class FfufTool(KodiakTool):
                 # ffuf JSON output has a top-level 'results' array when using -json flag
                 if "results" in data:
                     for r in data["results"]:
+                        input_data = r.get("input", {}) or {}
+                        if isinstance(input_data, dict):
+                            input_summary = ", ".join(
+                                f"{k}={v}" for k, v in sorted(input_data.items())
+                            )
+                        else:
+                            input_summary = str(input_data)
                         results.append({
                             "url": r.get("url", ""),
                             "status": r.get("status", 0),
                             "length": r.get("length", 0),
                             "words": r.get("words", 0),
                             "lines": r.get("lines", 0),
-                            "input": r.get("input", {}).get("FUZZ", ""),
+                            "input": input_summary or "",
                         })
                 elif "url" in data:
+                    input_data = data.get("input", {}) or {}
+                    if isinstance(input_data, dict):
+                        input_summary = ", ".join(
+                            f"{k}={v}" for k, v in sorted(input_data.items())
+                        )
+                    else:
+                        input_summary = str(input_data)
                     results.append({
                         "url": data.get("url", ""),
                         "status": data.get("status", 0),
                         "length": data.get("length", 0),
                         "words": data.get("words", 0),
                         "lines": data.get("lines", 0),
-                        "input": data.get("input", {}).get("FUZZ", ""),
+                        "input": input_summary or "",
                     })
             except json.JSONDecodeError:
                 continue

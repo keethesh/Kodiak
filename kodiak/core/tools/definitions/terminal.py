@@ -56,6 +56,38 @@ class TerminalSession:
 
 # Global terminal sessions
 _terminal_sessions: Dict[str, TerminalSession] = {}
+_SUPPORTED_SHELLS = {"bash", "sh", "zsh", "python"}
+_SHELL_ALIASES = {"py": "python", "python3": "python"}
+_STALE_INACTIVE_SECONDS = 900  # 15 minutes
+_MAX_SESSION_AGE_SECONDS = 86400  # 24 hours
+
+
+def _cleanup_stale_terminal_sessions() -> int:
+    """Drop very old or inactive sessions to avoid stale state buildup."""
+    now = time.time()
+    stale_ids = []
+    for session_id, session in _terminal_sessions.items():
+        age = now - session.created_at
+        inactive_for = now - session.last_activity
+        if age > _MAX_SESSION_AGE_SECONDS or (not session.is_active and inactive_for > _STALE_INACTIVE_SECONDS):
+            stale_ids.append(session_id)
+
+    for session_id in stale_ids:
+        _terminal_sessions.pop(session_id, None)
+    return len(stale_ids)
+
+
+def _format_session_not_found_output(session_id: str) -> str:
+    active = [
+        sid
+        for sid, s in _terminal_sessions.items()
+        if s.is_active
+    ]
+    sample = ", ".join(sorted(active)[:3]) if active else "none"
+    return (
+        f"Terminal session {session_id} not found. Start a session first with terminal_start. "
+        f"Active sessions: {len(active)} ({sample})."
+    )
 
 
 class TerminalStartArgs(BaseModel):
@@ -103,11 +135,23 @@ class TerminalStartTool(KodiakTool):
 
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
         global _terminal_sessions
+        _cleanup_stale_terminal_sessions()
         
         # Generate unique session ID
         session_id = f"term_{uuid.uuid4().hex[:8]}"
         
-        shell_type = args.get("shell_type", "bash")
+        raw_shell = str(args.get("shell_type", "bash")).strip().lower()
+        shell_type = _SHELL_ALIASES.get(raw_shell, raw_shell)
+        if shell_type not in _SUPPORTED_SHELLS:
+            return ToolResult(
+                success=False,
+                output=(
+                    f"Unsupported shell type: {raw_shell}. "
+                    f"Supported shells: {', '.join(sorted(_SUPPORTED_SHELLS))}."
+                ),
+                error="Unsupported shell type"
+            )
+
         environment = args.get("environment") or {}
         working_directory = args.get("working_directory", "/tmp")
         
@@ -141,6 +185,18 @@ class TerminalStartTool(KodiakTool):
                     timeout=30
                 )
             else:
+                shell_probe = await asyncio.wait_for(
+                    executor.run_command(
+                        ["/bin/sh", "-c", f"command -v {shell_type} >/dev/null 2>&1"],
+                        cwd=working_directory,
+                        env=session.environment
+                    ),
+                    timeout=30
+                )
+                if shell_probe.exit_code != 0:
+                    raise RuntimeError(
+                        f"Requested shell '{shell_type}' is not available in container {docker_image}"
+                    )
                 result = await asyncio.wait_for(
                     executor.run_command(
                         [shell_type, "-c", test_command],
@@ -242,6 +298,7 @@ class TerminalExecuteTool(KodiakTool):
 
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
         global _terminal_sessions
+        _cleanup_stale_terminal_sessions()
         
         session_id = args["session_id"]
         command = args["command"]
@@ -253,14 +310,17 @@ class TerminalExecuteTool(KodiakTool):
         if not session:
             return ToolResult(
                 success=False,
-                output=f"Terminal session {session_id} not found. Start a session first with terminal_start.",
+                output=_format_session_not_found_output(session_id),
                 error="Session not found"
             )
         
         if not session.is_active:
             return ToolResult(
                 success=False,
-                output=f"Terminal session {session_id} is not active.",
+                output=(
+                    f"Terminal session {session_id} is not active. "
+                    "Start a new one with terminal_start."
+                ),
                 error="Session inactive"
             )
         
@@ -612,6 +672,7 @@ class TerminalHistoryTool(KodiakTool):
 
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
         global _terminal_sessions
+        _cleanup_stale_terminal_sessions()
         
         session_id = args["session_id"]
         limit = args.get("limit", 20)
@@ -621,7 +682,7 @@ class TerminalHistoryTool(KodiakTool):
         if not session:
             return ToolResult(
                 success=False,
-                output=f"Terminal session {session_id} not found.",
+                output=_format_session_not_found_output(session_id),
                 error="Session not found"
             )
         
@@ -704,6 +765,7 @@ class TerminalStopTool(KodiakTool):
 
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
         global _terminal_sessions
+        _cleanup_stale_terminal_sessions()
         
         session_id = args["session_id"]
         
@@ -711,7 +773,7 @@ class TerminalStopTool(KodiakTool):
         if not session:
             return ToolResult(
                 success=False,
-                output=f"Terminal session {session_id} not found.",
+                output=_format_session_not_found_output(session_id),
                 error="Session not found"
             )
         

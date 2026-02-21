@@ -6,6 +6,7 @@ import kodiak.core.memory_central as memory_central_module
 import kodiak.services.executor as executor_module
 from kodiak.core.agent import KodiakAgent
 from kodiak.core.memory_central import CentralMemoryService
+from kodiak.core.tools.definitions.discovery import FfufTool
 from kodiak.core.tools.definitions.exploitation import SQLMapTool
 from kodiak.core.tools.definitions.terminal import (
     TerminalExecuteTool,
@@ -96,8 +97,8 @@ async def test_terminal_execute_does_not_treat_equals_as_env_assignment(monkeypa
     )
 
     assert result.success is True
-    assert len(fake_executor.calls) == 2
-    assert fake_executor.calls[1]["command"] == ["bash", "-c", command]
+    assert len(fake_executor.calls) == 3
+    assert fake_executor.calls[2]["command"] == ["bash", "-c", command]
     assert _terminal_sessions[session_id].environment == {}
 
 
@@ -121,7 +122,7 @@ async def test_terminal_execute_explicit_export_updates_session_environment(monk
     assert result.success is True
     assert "TOKEN=abc123" in result.output
     assert "REGION=us-east-1" in result.output
-    assert len(fake_executor.calls) == 1  # startup only; export handled in-memory
+    assert len(fake_executor.calls) == 2  # startup shell probe + pwd; export handled in-memory
     assert _terminal_sessions[session_id].environment["TOKEN"] == "abc123"
     assert _terminal_sessions[session_id].environment["REGION"] == "us-east-1"
 
@@ -146,9 +147,43 @@ async def test_terminal_execute_chained_export_is_executed_normally(monkeypatch)
     )
 
     assert result.success is True
-    assert len(fake_executor.calls) == 2
-    assert fake_executor.calls[1]["command"] == ["bash", "-c", command]
+    assert len(fake_executor.calls) == 3
+    assert fake_executor.calls[2]["command"] == ["bash", "-c", command]
     assert "TOKEN" not in _terminal_sessions[session_id].environment
+
+
+@pytest.mark.asyncio
+async def test_terminal_start_rejects_unsupported_shell(monkeypatch):
+    fake_executor = FakeExecutor(stdout="/tmp")
+    monkeypatch.setattr(
+        "kodiak.core.tools.definitions.terminal.get_executor",
+        lambda mode="local": fake_executor,
+    )
+
+    result = await TerminalStartTool().execute(shell_type="fish")
+
+    assert result.success is False
+    assert "Unsupported shell type" in result.output
+
+
+@pytest.mark.asyncio
+async def test_terminal_execute_session_not_found_message_lists_active_sessions(monkeypatch):
+    fake_executor = FakeExecutor(stdout="/tmp")
+    monkeypatch.setattr(
+        "kodiak.core.tools.definitions.terminal.get_executor",
+        lambda mode="local": fake_executor,
+    )
+
+    started = await TerminalStartTool().execute(shell_type="bash")
+    assert started.success is True
+
+    result = await TerminalExecuteTool().execute(
+        session_id="term_missing",
+        command="echo hello",
+    )
+
+    assert result.success is False
+    assert "Active sessions: 1" in result.output
 
 
 @pytest.mark.asyncio
@@ -240,6 +275,45 @@ async def test_sqlmap_appends_privilege_and_context_flags(monkeypatch):
     command = captured["command"]
     for flag in ["--is-dba", "--privileges", "--users", "--passwords", "--current-user", "--current-db"]:
         assert flag in command
+
+
+@pytest.mark.asyncio
+async def test_ffuf_supports_multi_wordlists_post_and_match_filters(monkeypatch):
+    captured = {}
+
+    class FakeDockerExecutor:
+        async def run_command(self, command, cwd=None, env=None, stdin=None):
+            captured["command"] = command
+            return CommandResult(exit_code=0, stdout='{"results":[]}', stderr="")
+
+    async def fake_get_docker_executor(preferred_image=None, fallback_image=None, fallback_entrypoint=None):
+        return FakeDockerExecutor()
+
+    monkeypatch.setattr(executor_module, "get_docker_executor", fake_get_docker_executor)
+
+    tool = FfufTool()
+    result = await tool.execute(
+        url="https://example.com/login",
+        method="POST",
+        data="username=USER&password=PASS",
+        wordlists=["/tmp/users.txt:USER", "/tmp/passwords.txt:PASS"],
+        mode="clusterbomb",
+        match_status="302",
+        filter_regex="Invalid username or password",
+        headers="Content-Type: application/x-www-form-urlencoded",
+    )
+
+    assert result.success is True
+    command = captured["command"]
+    assert command.count("-w") == 2
+    assert "/tmp/users.txt:USER" in command
+    assert "/tmp/passwords.txt:PASS" in command
+    assert "-d" in command
+    assert "username=USER&password=PASS" in command
+    assert "-mode" in command
+    assert "clusterbomb" in command
+    assert "-mc" in command and "302" in command
+    assert "-fr" in command
 
 
 def test_agent_history_content_includes_compact_tool_data():
