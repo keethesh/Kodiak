@@ -261,6 +261,9 @@ def scan(
             "scan_name": "",
             "active_tool": "",
             "active_tool_started_at": None,
+            "raw_findings": 0,
+            "deduped_findings": 0,
+            "duplicate_findings_filtered": 0,
         }
 
         def severity_breakdown(findings: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -362,6 +365,10 @@ def scan(
                         state["scan_name"] = str(payload.get("scan_name", ""))
                     elif event.type == "scan_completed":
                         state["status"] = "Scan completed"
+                        summary = payload.get("summary", {}) or {}
+                        state["raw_findings"] = int(summary.get("raw_findings", 0) or 0)
+                        state["deduped_findings"] = int(summary.get("deduped_findings", 0) or 0)
+                        state["duplicate_findings_filtered"] = int(summary.get("duplicate_findings_filtered", 0) or 0)
                     elif event.type == "scan_failed":
                         state["status"] = "Scan failed"
                         state["last_error"] = str(payload.get("error", "Scan failed"))
@@ -396,6 +403,11 @@ def scan(
                 "Severity: "
                 f"C={sev['critical']} H={sev['high']} M={sev['medium']} L={sev['low']} I={sev['info']}"
             )
+            if state["raw_findings"] > 0:
+                console.print(
+                    f"Findings Dedup: raw={state['raw_findings']} unique={state['deduped_findings']} "
+                    f"filtered={state['duplicate_findings_filtered']}"
+                )
             if state["scan_id"]:
                 console.print(f"Scan ID: {state['scan_id']}")
             db_path = os.path.expanduser(settings.sqlite_path or "~/.kodiak/kodiak.db")

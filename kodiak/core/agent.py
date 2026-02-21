@@ -3,6 +3,7 @@ import json
 import asyncio
 import time
 import hashlib
+from contextlib import AsyncExitStack
 from uuid import uuid4, UUID
 from dataclasses import dataclass
 from loguru import logger
@@ -46,7 +47,9 @@ class KodiakAgent:
         session: Any = None, 
         role: str = "generalist", 
         project_id: Any = None, 
-        skills: Optional[List[str]] = None
+        skills: Optional[List[str]] = None,
+        global_tool_semaphore: Optional[asyncio.Semaphore] = None,
+        tool_semaphores: Optional[Dict[str, asyncio.Semaphore]] = None,
     ):
         self.agent_id = agent_id
         self.model_name = model_name or settings.llm_model
@@ -60,6 +63,9 @@ class KodiakAgent:
         self._hive_mind = None
         self._current_iteration = 0
         self.scan_id: Optional[UUID] = None
+        self._global_tool_semaphore = global_tool_semaphore
+        self._tool_semaphores = tool_semaphores or {}
+        self._limited_heavy_tools = {"nmap", "sqlmap", "nuclei", "ffuf", "katana"}
 
         # Lightweight in-run memory for tool deduplication/backoff.
         self._tool_attempts: List[Dict[str, Any]] = []
@@ -911,9 +917,9 @@ class KodiakAgent:
                     await self.event_manager.emit_tool_complete(tool_name, skipped, str(scan_id))
                 return self._result_to_dict(skipped)
 
-            # Execute tool
+            # Execute tool with concurrency limits for heavy scanners.
             execution_args = {**adjusted_args, "agent_id": self.agent_id, "scan_id": str(scan_id)}
-            result = await tool.execute(**execution_args)
+            result = await self._execute_tool_with_limits(tool_name, tool, execution_args)
 
             if backoff_note and hasattr(result, "output") and result.output:
                 result.output = f"{backoff_note}\n\n{result.output}"
@@ -961,3 +967,17 @@ class KodiakAgent:
             if self.event_manager:
                 await self.event_manager.emit_tool_complete(tool_name, failure, str(scan_id))
             return self._result_to_dict(failure)
+
+    async def _execute_tool_with_limits(self, tool_name: str, tool: Any, execution_args: Dict[str, Any]) -> Any:
+        per_tool_semaphore = self._tool_semaphores.get(tool_name)
+        should_limit_global = tool_name in self._limited_heavy_tools and self._global_tool_semaphore is not None
+
+        if not per_tool_semaphore and not should_limit_global:
+            return await tool.execute(**execution_args)
+
+        async with AsyncExitStack() as stack:
+            if should_limit_global:
+                await stack.enter_async_context(self._global_tool_semaphore)
+            if per_tool_semaphore:
+                await stack.enter_async_context(per_tool_semaphore)
+            return await tool.execute(**execution_args)

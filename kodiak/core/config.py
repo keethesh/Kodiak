@@ -79,6 +79,7 @@ class KodiakSettings(BaseSettings):
     
     # Tool Configuration
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")  # 5 minutes
+    heavy_tool_parallel_limit: int = Field(default=2, alias="KODIAK_HEAVY_TOOL_PARALLEL_LIMIT")
     enable_hive_mind: bool = Field(default=True, alias="KODIAK_ENABLE_HIVE_MIND")
     memory_enabled: bool = Field(default=True, alias="KODIAK_MEMORY_ENABLED")
     memory_max_entries: int = Field(default=200, alias="KODIAK_MEMORY_MAX_ENTRIES")

@@ -43,6 +43,9 @@ class ScanRunner:
         self._agents: List[KodiakAgent] = []
         self._agent_tasks: List[asyncio.Task] = []
         self._cancel_requested = False
+        self._finding_event_count = 0
+        self._finding_keys: set[str] = set()
+        self._finding_counts_by_severity: Dict[str, int] = {}
     
     async def run(
         self,
@@ -65,6 +68,9 @@ class ScanRunner:
         self._cancel_requested = False
         self._agents = []
         self._agent_tasks = []
+        self._finding_event_count = 0
+        self._finding_keys = set()
+        self._finding_counts_by_severity = {}
 
         agent_resolution = resolve_agent_count(
             requested=agent_count,
@@ -83,10 +89,25 @@ class ScanRunner:
                 )
                 
                 logger.info(f"🎯 Starting scan: {target}")
+                scan_id_str = str(scan_job.id)
+
+                async def _capture_scan_event(event: Any) -> None:
+                    if event.type != "finding_discovered":
+                        return
+                    finding = (event.data or {}).get("finding", {})
+                    key = self._finding_key(finding)
+                    self._finding_event_count += 1
+                    if key in self._finding_keys:
+                        return
+                    self._finding_keys.add(key)
+                    severity = str(finding.get("severity", "info")).lower()
+                    self._finding_counts_by_severity[severity] = self._finding_counts_by_severity.get(severity, 0) + 1
+
+                self.event_manager.subscribe_scan(scan_id_str, _capture_scan_event)
                 
                 # Emit scan started event
                 await self.event_manager.emit_scan_started(
-                    scan_id=str(scan_job.id),
+                    scan_id=scan_id_str,
                     scan_name=project.name,
                     target=target
                 )
@@ -94,6 +115,14 @@ class ScanRunner:
                 # 2. Setup Agents
                 effective_agents = agent_resolution.effective
                 per_agent_iterations = max(1, math.ceil(max_iterations / effective_agents))
+                global_heavy_semaphore = asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit))
+                per_tool_semaphores = {
+                    "nmap": asyncio.Semaphore(1),
+                    "sqlmap": asyncio.Semaphore(1),
+                    "nuclei": asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit)),
+                    "ffuf": asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit)),
+                    "katana": asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit)),
+                }
                 logger.info(
                     f"Starting {effective_agents} agent(s) with {per_agent_iterations} max iterations each"
                 )
@@ -109,7 +138,9 @@ class ScanRunner:
                         event_manager=self.event_manager,
                         session=session,
                         role=role,
-                        project_id=project.id
+                        project_id=project.id,
+                        global_tool_semaphore=global_heavy_semaphore,
+                        tool_semaphores=per_tool_semaphores,
                     )
                     await agent.register_with_hive_mind()
                     self._agents.append(agent)
@@ -138,7 +169,11 @@ class ScanRunner:
                     self._agent_tasks.append(task)
 
                 agent_results = await asyncio.gather(*self._agent_tasks, return_exceptions=True)
-                result = self._aggregate_agent_results(agent_results, max_iterations=max_iterations)
+                result = self._aggregate_agent_results(
+                    agent_results,
+                    max_iterations=max_iterations,
+                    deduped_finding_count=len(self._finding_keys),
+                )
                 
                 # 4. Finalize
                 final_status = (
@@ -161,13 +196,17 @@ class ScanRunner:
                 )
                 
                 await self.event_manager.emit_scan_completed(
-                    scan_id=str(scan_job.id),
+                    scan_id=scan_id_str,
                     scan_name=project.name,
                     status=final_status,
                     summary={
                         "agents_requested": agent_resolution.requested,
                         "agents_running": agent_resolution.effective,
                         "nodes_discovered": len(nodes),
+                        "raw_findings": self._finding_event_count,
+                        "deduped_findings": len(self._finding_keys),
+                        "duplicate_findings_filtered": max(0, self._finding_event_count - len(self._finding_keys)),
+                        "findings_by_severity": self._finding_counts_by_severity,
                         "findings_count": result.findings_count,
                         "duration": duration
                     }
@@ -186,6 +225,11 @@ class ScanRunner:
                         await agent.unregister_from_hive_mind()
                     except Exception as unregister_error:
                         logger.warning(f"Failed to unregister agent {agent.agent_id}: {unregister_error}")
+                if 'scan_id_str' in locals():
+                    try:
+                        self.event_manager.unsubscribe_scan(scan_id_str, _capture_scan_event)
+                    except Exception as unsubscribe_error:
+                        logger.warning(f"Failed to unsubscribe finding capture handler: {unsubscribe_error}")
     
     async def _create_project(self, session: AsyncSession, name: str) -> Project:
         project = Project(name=name, description=f"Security scan project: {name}")
@@ -254,6 +298,7 @@ class ScanRunner:
         self,
         raw_results: List[Any],
         max_iterations: int,
+        deduped_finding_count: int = 0,
     ) -> ScanResult:
         successful_results = []
         failures = 0
@@ -270,7 +315,8 @@ class ScanRunner:
             successful_results.append(item)
 
         total_iterations = sum(r.iterations for r in successful_results)
-        findings_count = sum(r.findings_count for r in successful_results)
+        aggregated_findings = sum(r.findings_count for r in successful_results)
+        findings_count = deduped_finding_count if deduped_finding_count > 0 else aggregated_findings
         summaries = [r.summary for r in successful_results if r.summary]
 
         if self._cancel_requested or (cancelled > 0 and not successful_results):
@@ -297,3 +343,17 @@ class ScanRunner:
             duration_seconds=0,
             iterations=total_iterations,
         )
+
+    def _finding_key(self, finding: Dict[str, Any]) -> str:
+        title = str(finding.get("title", "")).strip().lower()
+        severity = str(finding.get("severity", "info")).strip().lower()
+        target = str(finding.get("target", "")).strip().lower()
+        evidence = finding.get("evidence") or {}
+        evidence_signature = ""
+        if isinstance(evidence, dict):
+            for k in ("template_id", "cve_id", "matched_at", "endpoint", "url"):
+                value = evidence.get(k)
+                if value:
+                    evidence_signature = str(value).strip().lower()
+                    break
+        return "|".join([title, severity, target, evidence_signature])
