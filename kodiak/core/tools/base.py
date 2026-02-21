@@ -66,6 +66,7 @@ class BaseTool(ABC):
     
     # Optional Pydantic support
     args_schema: Type[BaseModel] | None = None
+    execution_timeout: int | None = None
 
     async def execute(self, **kwargs) -> ToolResult:
         """
@@ -93,7 +94,8 @@ class BaseTool(ABC):
             # Execute the actual tool logic with timeout
             try:
                 from kodiak.core.config import settings
-                tool_timeout = settings.tool_timeout
+                configured_timeout = getattr(self, "execution_timeout", None)
+                tool_timeout = configured_timeout if configured_timeout and configured_timeout > 0 else settings.tool_timeout
                 # Convert kwargs to args dict for tool execution
                 # Only exclude internal framework parameters, keep tool parameters
                 args_dict = {k: v for k, v in kwargs.items() if k not in ['agent_id', 'scan_id']}
