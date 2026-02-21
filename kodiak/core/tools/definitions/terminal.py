@@ -7,6 +7,8 @@ and custom security testing workflows.
 
 import asyncio
 import json
+import re
+import shlex
 import time
 import uuid
 from typing import Dict, Any, List, Optional, AsyncGenerator
@@ -313,29 +315,30 @@ class TerminalExecuteTool(KodiakTool):
                         error="Directory not found"
                     )
             
-            elif command.startswith("export ") or "=" in command and not command.startswith(("echo", "printf")):
-                # Environment variable setting
-                if command.startswith("export "):
-                    env_part = command[7:]
-                else:
-                    env_part = command
-                
-                if "=" in env_part:
-                    key, value = env_part.split("=", 1)
-                    key = key.strip()
-                    value = value.strip().strip('"\'')
-                    
-                    session.set_environment({key: value})
-                    output = f"Set environment variable: {key}={value}"
+            elif command.startswith("export "):
+                # Only intercept explicit, assignment-only export commands.
+                # Commands containing '=' (curl/sqlmap/etc.) must execute normally.
+                env_updates, parse_error = self._parse_export_command(command)
+                if parse_error:
+                    session.add_command(command, parse_error, 1)
+                    return ToolResult(
+                        success=False,
+                        output=parse_error,
+                        error="Invalid export syntax"
+                    )
+                if env_updates is not None:
+                    session.set_environment(env_updates)
+                    updates_text = ", ".join(f"{k}={v}" for k, v in env_updates.items())
+                    output = f"Set environment variable(s): {updates_text}"
                     session.add_command(command, output, 0)
-                    
+
                     return ToolResult(
                         success=True,
                         output=output,
                         data={
                             "session_id": session_id,
                             "command": command,
-                            "environment_updated": {key: value},
+                            "environment_updated": env_updates,
                             "docker_image": session.docker_image,
                             "exit_code": 0
                         }
@@ -401,6 +404,45 @@ class TerminalExecuteTool(KodiakTool):
                 output=error_msg,
                 error=str(e)
             )
+
+    def _parse_export_command(self, command: str) -> tuple[Optional[Dict[str, str]], Optional[str]]:
+        """
+        Parse explicit `export KEY=VALUE` updates for persistent session env.
+
+        Returns:
+          - (dict, None) when it is a supported export assignment command
+          - (None, None) when command should be executed normally by the shell
+          - (None, error_message) when command is an explicit export but malformed
+        """
+        payload = command[len("export "):].strip()
+        if not payload:
+            return None, "Invalid export syntax: expected at least one KEY=VALUE assignment."
+
+        # If export is chained with shell operators, don't intercept; let shell execute it.
+        if any(op in payload for op in ("&&", "||", ";", "|", "$(", "`")):
+            return None, None
+
+        try:
+            tokens = shlex.split(payload)
+        except ValueError as e:
+            return None, f"Invalid export syntax: {e}"
+
+        if not tokens:
+            return None, "Invalid export syntax: expected KEY=VALUE assignment."
+
+        updates: Dict[str, str] = {}
+        for token in tokens:
+            if "=" not in token:
+                # Non-assignment export forms (e.g. `export VAR`) should be executed by shell.
+                return None, None
+
+            key, value = token.split("=", 1)
+            key = key.strip()
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                return None, f"Invalid environment variable name: {key}"
+            updates[key] = value
+
+        return updates, None
 
     def _analyze_command_output(self, command: str, stdout: str, stderr: str) -> Dict[str, Any]:
         """Analyze command output for security-relevant information"""
@@ -513,16 +555,19 @@ class TerminalExecuteTool(KodiakTool):
         summary += f"Exit Code: {result.exit_code}\n"
         summary += f"Output Length: {len(result.stdout)} chars\n\n"
         
+        stdout_preview_chars = 2000
+        stderr_preview_chars = 500
+
         # Show output (truncated if too long)
         if result.stdout:
-            output_preview = result.stdout[:500]
-            if len(result.stdout) > 500:
+            output_preview = result.stdout[:stdout_preview_chars]
+            if len(result.stdout) > stdout_preview_chars:
                 output_preview += "\n... (truncated)"
             summary += f"Output:\n{output_preview}\n\n"
         
         if result.stderr:
-            error_preview = result.stderr[:200]
-            if len(result.stderr) > 200:
+            error_preview = result.stderr[:stderr_preview_chars]
+            if len(result.stderr) > stderr_preview_chars:
                 error_preview += "\n... (truncated)"
             summary += f"Errors:\n{error_preview}\n\n"
         

@@ -33,7 +33,8 @@ class CentralMemoryService:
         status = "success" if result.get("success") else "failure"
         if self._is_timeout_result(result):
             status = "timeout"
-        if status == "failure" and result.get("error", "").startswith("Skipping "):
+        error_text = str(result.get("error") or "")
+        if status == "failure" and error_text.startswith("Skipping "):
             status = "skipped"
 
         record = Attempt(

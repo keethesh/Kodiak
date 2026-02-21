@@ -271,7 +271,7 @@ class KodiakAgent:
                     history.append({
                         "role": "tool",
                         "tool_call_id": clean_id,
-                        "content": result.get("output", "")
+                        "content": self._build_tool_history_content(result)
                     })
                     
                     # Check for structured completion
@@ -519,7 +519,7 @@ class KodiakAgent:
                     "insight": record.insight or {},
                 }
                 self._persisted_insights.append(entry)
-                do_not_repeat = (record.insight or {}).get("do_not_repeat", "").strip()
+                do_not_repeat = str((record.insight or {}).get("do_not_repeat") or "").strip()
                 if do_not_repeat:
                     self._persisted_do_not_repeat[record.fingerprint] = do_not_repeat
         except Exception as e:
@@ -546,7 +546,7 @@ class KodiakAgent:
                             "insight": record.insight or {},
                         }
                         self._persisted_insights.append(entry)
-                        do_not_repeat = (record.insight or {}).get("do_not_repeat", "").strip()
+                        do_not_repeat = str((record.insight or {}).get("do_not_repeat") or "").strip()
                         if do_not_repeat:
                             self._persisted_do_not_repeat[record.fingerprint] = do_not_repeat
                 except Exception as retry_error:
@@ -632,7 +632,7 @@ class KodiakAgent:
                 what = (insight.get("what_was_tested") or f"{entry.get('tool')} {entry.get('target')}").strip()
                 observations = insight.get("key_observations") or []
                 next_actions = insight.get("next_best_actions") or []
-                do_not_repeat = (insight.get("do_not_repeat") or "").strip()
+                do_not_repeat = str(insight.get("do_not_repeat") or "").strip()
                 obs_text = observations[0] if observations else ""
                 next_text = next_actions[0] if next_actions else ""
                 line = f"- [{entry.get('status', 'unknown').upper()}] {what}"
@@ -733,12 +733,6 @@ class KodiakAgent:
         return adjusted, note, stop_reason
 
     def _should_skip_tool_call(self, tool_name: str, args: Dict[str, Any], fingerprint: str) -> Optional[str]:
-        if fingerprint in self._persisted_do_not_repeat:
-            return (
-                f"Skipping {tool_name} with previously blocked fingerprint: "
-                f"{self._persisted_do_not_repeat[fingerprint]}"
-            )
-
         prior_attempts = self._attempts_by_fingerprint.get(fingerprint, [])
         if not prior_attempts:
             return None
@@ -833,7 +827,7 @@ class KodiakAgent:
                 return
 
             self._persisted_insights.append(insight_entry)
-            do_not_repeat = (insight_entry.get("insight", {}) or {}).get("do_not_repeat", "").strip()
+            do_not_repeat = str((insight_entry.get("insight", {}) or {}).get("do_not_repeat") or "").strip()
             if do_not_repeat:
                 self._persisted_do_not_repeat[fingerprint] = do_not_repeat
 
@@ -1036,6 +1030,51 @@ class KodiakAgent:
             if self.event_manager:
                 await self.event_manager.emit_tool_complete(tool_name, failure, str(scan_id))
             return self._result_to_dict(failure)
+
+    def _build_tool_history_content(self, result: Dict[str, Any]) -> str:
+        """
+        Include tool output plus compact structured fields to improve agent visibility
+        without exploding token usage.
+        """
+        output = str(result.get("output") or "").strip()
+        if len(output) > 3500:
+            output = output[:3497] + "..."
+
+        data = result.get("data")
+        if not isinstance(data, dict) or not data:
+            return output
+
+        preferred_keys = (
+            "exit_code",
+            "vulnerable",
+            "total_found",
+            "summary",
+            "url",
+            "target_url",
+            "status",
+            "command",
+        )
+        compact: Dict[str, Any] = {}
+        for key in preferred_keys:
+            if key in data:
+                compact[key] = data[key]
+
+        if not compact:
+            for key, value in data.items():
+                if len(compact) >= 3:
+                    break
+                if isinstance(value, (str, int, float, bool)):
+                    compact[key] = value
+
+        if not compact:
+            return output
+
+        compact_json = json.dumps(compact, sort_keys=True, default=str, separators=(",", ":"))
+        if len(compact_json) > 700:
+            compact_json = compact_json[:697] + "..."
+
+        data_tail = f"[tool_data]{compact_json}[/tool_data]"
+        return f"{output}\n\n{data_tail}" if output else data_tail
 
     async def _execute_tool_with_limits(self, tool_name: str, tool: Any, execution_args: Dict[str, Any]) -> Any:
         if self._tool_scheduler is not None:
