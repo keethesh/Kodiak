@@ -75,6 +75,7 @@ class KodiakSettings(BaseSettings):
     # Security Configuration
     enable_safety_checks: bool = Field(default=True, alias="KODIAK_ENABLE_SAFETY")
     max_concurrent_agents: int = Field(default=5, alias="KODIAK_MAX_AGENTS")
+    default_agent_count: int = Field(default=3, alias="KODIAK_DEFAULT_AGENTS")
     
     # Tool Configuration
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")  # 5 minutes
