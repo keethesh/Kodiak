@@ -222,7 +222,22 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
             "start_time": datetime.utcnow(),
             "tool_count": 0,
             "tool_failures": 0,
+            "last_error": "",
+            "scan_id": "",
+            "scan_name": "",
+            "active_tool": "",
+            "active_tool_started_at": None,
         }
+
+        def severity_breakdown(findings: List[Dict[str, Any]]) -> Dict[str, int]:
+            counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+            for finding in findings:
+                sev = str(finding.get("severity", "info")).lower()
+                if sev in counts:
+                    counts[sev] += 1
+                else:
+                    counts["info"] += 1
+            return counts
         
         def create_view():
             elapsed = (datetime.utcnow() - state["start_time"]).total_seconds()
@@ -236,6 +251,18 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
             # Activity
             activity = Table(show_header=False, box=box.SIMPLE)
             activity.add_row("🤖 Status:", state["status"])
+            if state["scan_id"]:
+                activity.add_row("🧾 Scan ID:", state["scan_id"])
+            if state["active_tool"]:
+                active_for = (
+                    int((datetime.utcnow() - state["active_tool_started_at"]).total_seconds())
+                    if state["active_tool_started_at"]
+                    else 0
+                )
+                activity.add_row("🛠️ Active Tool:", f"{state['active_tool']} ({active_for}s)")
+            activity.add_row("📈 Tools:", f"{state['tool_count']} total / {state['tool_failures']} failed")
+            if state["last_error"]:
+                activity.add_row("❗ Last Error:", state["last_error"][:140])
             
             # Tools
             tools_table = Table(title="🔧 Recent Tools", box=box.SIMPLE)
@@ -249,9 +276,14 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
             # Findings
             findings_table = Table(title="⚠️ Findings", box=box.SIMPLE)
             findings_table.add_column("Sev", style="red")
+            findings_table.add_column("Target")
             findings_table.add_column("Title")
             for f in state["findings"][-5:]:
-                findings_table.add_row(f['severity'].upper(), f['title'])
+                findings_table.add_row(
+                    str(f.get("severity", "info")).upper(),
+                    str(f.get("target", ""))[:36],
+                    str(f.get("title", "Untitled"))[:72],
+                )
             
             from rich.console import Group
             return Group(header, activity, tools_table, findings_table)
@@ -268,6 +300,8 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
                     elif event.type == "tool_start":
                         tool_name = payload.get("tool_name", "unknown")
                         state["status"] = f"Running {tool_name}"
+                        state["active_tool"] = tool_name
+                        state["active_tool_started_at"] = datetime.utcnow()
                         state["tool_count"] += 1
                         state["tools"].append(
                             {"name": tool_name, "target": payload.get("target", ""), "success": None}
@@ -278,14 +312,21 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
                             state["tools"][-1]["success"] = success
                             if success is False:
                                 state["tool_failures"] += 1
+                                state["last_error"] = str(payload.get("error") or payload.get("output") or "Tool failed")
+                        state["active_tool"] = ""
+                        state["active_tool_started_at"] = None
                     elif event.type == "finding_discovered":
                         finding = payload.get("finding", {})
                         if finding:
                             state["findings"].append(finding)
+                    elif event.type == "scan_started":
+                        state["scan_id"] = str(payload.get("scan_id", ""))
+                        state["scan_name"] = str(payload.get("scan_name", ""))
                     elif event.type == "scan_completed":
                         state["status"] = "Scan completed"
                     elif event.type == "scan_failed":
                         state["status"] = "Scan failed"
+                        state["last_error"] = str(payload.get("error", "Scan failed"))
 
                     live.update(create_view())
 
@@ -305,6 +346,7 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         console.print("[bold green]📊 Final Results[/bold green]")
         console.print("="*50)
         if result:
+            sev = severity_breakdown(state["findings"])
             console.print(
                 f"Status: {result.status} | Nodes: {result.nodes_discovered} | Findings: {result.findings_count}"
             )
@@ -312,6 +354,19 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
                 f"Iterations: {result.iterations} | Duration: {int(result.duration_seconds)}s | "
                 f"Tools Run: {state['tool_count']} | Tool Failures: {state['tool_failures']}"
             )
+            console.print(
+                "Severity: "
+                f"C={sev['critical']} H={sev['high']} M={sev['medium']} L={sev['low']} I={sev['info']}"
+            )
+            if state["scan_id"]:
+                console.print(f"Scan ID: {state['scan_id']}")
+            db_path = os.path.expanduser(settings.sqlite_path or "~/.kodiak/kodiak.db")
+            log_path = str(Path.home() / ".kodiak" / "logs" / "scan.log")
+            console.print(f"DB: {db_path}")
+            console.print(f"Logs: {log_path}")
+            if state["last_error"]:
+                console.print(f"Last Error: {state['last_error'][:220]}")
+            console.print("Next: re-run with `--verbose` for detailed event stream if needed.")
             return 0 if result.status == "completed" else 1
 
         console.print(
