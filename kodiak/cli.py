@@ -130,8 +130,7 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         console.print("[green]Database initialized![/green]")
 
     async def run_scan_internal():
-        from kodiak.core.scan_runner import ScanRunner
-        from kodiak.api.events import event_manager
+        from kodiak.core.interface import CoreInterface
         from kodiak.core.config import settings
         
         # If not verbose, silence loguru so messages don't break the Rich Live display
@@ -149,20 +148,26 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
         console.print(f"🧠 [bold]Model:[/bold] {settings.llm_model}")
         console.print(f"📋 [bold]Instructions:[/bold] {instructions}\n")
         
-        runner = ScanRunner(event_manager)
+        interface = CoreInterface()
+        run_id = await interface.start_scan(
+            target=target,
+            instructions=instructions,
+            model=model,
+            max_iterations=max_iterations,
+        )
         
         # If verbose, bypass the TUI overlay and just let logs stream freely
         if verbose:
             console.print("[yellow]Verbose mode enabled. Streaming real-time execution logs...[/yellow]\n")
             try:
-                result = await runner.run(
-                    target=target,
-                    instructions=instructions,
-                    max_iterations=max_iterations
-                )
-                console.print(f"\n[green]Scan {result.status}![/green]")
+                result = await interface.get_scan_result(run_id)
+                if result:
+                    console.print(f"\n[green]Scan {result.status}![/green]")
+                else:
+                    console.print("\n[yellow]Scan finished without a result object.[/yellow]")
             except KeyboardInterrupt:
                 console.print("\n[yellow]Scan interrupted.[/yellow]")
+                await interface.stop_scan(run_id)
             except Exception as e:
                 console.print(f"\n[red]Scan failed: {e}[/red]")
             return
@@ -207,35 +212,41 @@ def scan(target: str, instructions: str, model: Optional[str], max_iterations: i
             from rich.console import Group
             return Group(header, activity, tools_table, findings_table)
 
-        # Event Handlers
-        async def on_thinking(ev): state["status"] = ev.data.get("message", "Thinking...")
-        async def on_thought(ev): state["status"] = "Generating plan..."
-        async def on_tool_start(ev):
-            state["status"] = f"Running {ev.data['tool_name']}"
-            state["tools"].append({"name": ev.data['tool_name'], "target": ev.data.get("target", ""), "success": None})
-        async def on_tool_complete(ev):
-            if state["tools"]:
-                state["tools"][-1]["success"] = ev.data.get("success", True)
-        async def on_finding(ev):
-            state["findings"].append(ev.data.get("finding", {}))
-
-        event_manager.subscribe("agent_thinking", on_thinking)
-        event_manager.subscribe("agent_thought", on_thought)
-        event_manager.subscribe("tool_start", on_tool_start)
-        event_manager.subscribe("tool_complete", on_tool_complete)
-        event_manager.subscribe("finding_discovered", on_finding)
-        
+        result = None
         try:
             with Live(create_view(), refresh_per_second=2, console=console) as live:
-                result = await runner.run(
-                    target=target,
-                    instructions=instructions,
-                    max_iterations=max_iterations
-                )
-                state["status"] = f"Scan {result.status}!"
+                async for event in interface.subscribe_events(run_id):
+                    payload = event.payload
+                    if event.type == "agent_thinking":
+                        state["status"] = payload.get("message", "Thinking...")
+                    elif event.type == "agent_thought":
+                        state["status"] = "Generating plan..."
+                    elif event.type == "tool_start":
+                        tool_name = payload.get("tool_name", "unknown")
+                        state["status"] = f"Running {tool_name}"
+                        state["tools"].append(
+                            {"name": tool_name, "target": payload.get("target", ""), "success": None}
+                        )
+                    elif event.type == "tool_complete":
+                        if state["tools"]:
+                            state["tools"][-1]["success"] = payload.get("success", True)
+                    elif event.type == "finding_discovered":
+                        finding = payload.get("finding", {})
+                        if finding:
+                            state["findings"].append(finding)
+                    elif event.type == "scan_completed":
+                        state["status"] = "Scan completed"
+                    elif event.type == "scan_failed":
+                        state["status"] = "Scan failed"
+
+                    live.update(create_view())
+
+                result = await interface.get_scan_result(run_id)
+                state["status"] = f"Scan {result.status}!" if result else "Scan finished"
                 live.update(create_view())
         except KeyboardInterrupt:
             console.print("\n[yellow]Scan interrupted.[/yellow]")
+            await interface.stop_scan(run_id)
         except Exception as e:
             console.print(f"\n[red]Scan failed: {e}[/red]")
             logger.exception("CLI Scan failure")
