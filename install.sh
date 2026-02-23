@@ -333,7 +333,7 @@ install_from_source() {
                 dirty=true
             fi
             
-            git pull origin HEAD --rebase || {
+            git pull --rebase || {
                 print_error "Failed to pull updates from repository. You may need to fetch manually."
                 exit 1
             }
@@ -615,6 +615,7 @@ setup_docker() {
                     
                     # Check if we are in the source directory (either from git clone or manual download)
                     local dockerfile_path=""
+                    local build_context=""
                     if [[ -f "containers/Dockerfile" ]]; then
                         dockerfile_path="containers/Dockerfile"
                         build_context="containers"
@@ -662,13 +663,13 @@ show_next_steps() {
     echo
     echo "📋 Quick Start:"
     echo "  1. Set up Gemini model and API key (interactive wizard):"
-    echo "     ${CYAN}kodiak config${NC}"
+    echo -e "     ${CYAN}kodiak config${NC}"
     echo
     echo "  2. Initialize the database:"
-    echo "     ${CYAN}kodiak init${NC}"
+    echo -e "     ${CYAN}kodiak init${NC}"
     echo
     echo "  3. Start scanning:"
-    echo "     ${CYAN}kodiak --target ./my-app${NC}"
+    echo -e "     ${CYAN}kodiak --target ./my-app${NC}"
     echo
     echo "📦 What's Included:"
     echo "  • SQLite database (zero external dependencies)"
@@ -676,17 +677,17 @@ show_next_steps() {
     echo "  • TUI interface for real-time monitoring"
     echo
     echo "📚 Commands:"
-    echo "  ${CYAN}kodiak${NC}              Launch TUI interface"
-    echo "  ${CYAN}kodiak config${NC}       Configure LLM and settings"
-    echo "  ${CYAN}kodiak doctor${NC}       Check installation status"
-    echo "  ${CYAN}kodiak --help${NC}       Show all commands"
+    echo -e "  ${CYAN}kodiak${NC}              Launch TUI interface"
+    echo -e "  ${CYAN}kodiak config${NC}       Configure LLM and settings"
+    echo -e "  ${CYAN}kodiak doctor${NC}       Check installation status"
+    echo -e "  ${CYAN}kodiak --help${NC}       Show all commands"
     echo
     echo "🔗 Resources:"
     echo "  GitHub: https://github.com/keethesh/Kodiak"
     echo
     if [[ ! -f "$HOME/.local/bin/kodiak" ]]; then
         echo "⚠️  If 'kodiak' command is not found, restart your shell or run:"
-        echo "  ${CYAN}source ~/.bashrc${NC}  # or ~/.zshrc"
+        echo -e "  ${CYAN}source ~/.bashrc${NC}  # or ~/.zshrc"
     fi
 }
 
@@ -773,8 +774,10 @@ main() {
     # Set up error handling
     trap cleanup_on_error EXIT
     
-    echo "🐻 Kodiak Installation Script"
-    echo "=============================="
+    echo -e "${CYAN}┌─────────────────────────────────────────────┐${NC}"
+    echo -e "${CYAN}│${NC}  🐻  ${GREEN}Kodiak${NC} — Penetration Testing Suite      ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}     AI-Powered Security Testing Framework    ${CYAN}│${NC}"
+    echo -e "${CYAN}└─────────────────────────────────────────────┘${NC}"
     echo
     
     # Handle command line arguments

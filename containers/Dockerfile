@@ -48,8 +48,6 @@ RUN mkdir -p /root/tools \
              /workspace \
              /app
 
-
-
 # Install Python and Networking
 RUN apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv pipx \
@@ -63,8 +61,8 @@ RUN apt-get install -y --no-install-recommends \
 # Install Scanner tools & libcap
 RUN apt-get install -y --no-install-recommends \
     libcap2-bin nmap ncat ndiff masscan \
-    sqlmap nuclei subfinder naabu ffuf nikto wapiti whatweb wafw00f \
-    katana commix \
+    sqlmap naabu nikto wapiti whatweb \
+    commix \
     exploitdb seclists && \
     (setcap -r /usr/bin/nmap || true) && \
     (setcap -r /usr/lib/nmap/nmap || true)
@@ -84,7 +82,7 @@ RUN apt-get autoremove -y && \
 COPY --from=go-builder /go/bin/* /root/go/bin/
 
 # Update nuclei templates
-RUN /root/go/bin/nuclei -update-templates
+RUN /root/go/bin/nuclei -update-templates || echo "Warning: Failed to update nuclei templates"
 
 # Install Python and Node tools
 RUN pipx install arjun || echo "Warning: Failed to install arjun"
@@ -211,5 +209,5 @@ RUN set -eux; \
     done; \
     [ "$missing" -eq 0 ]
 
-ENTRYPOINT ["docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/bin/bash"]
