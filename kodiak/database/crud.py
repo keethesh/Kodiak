@@ -25,6 +25,24 @@ from kodiak.core.error_handling import (
 )
 
 
+async def _safe_rollback(session: AsyncSession) -> None:
+    """Attempt a session rollback, silently swallowing any error.
+
+    When a commit() is interrupted mid-flight (e.g. SQLite busy or an
+    async-cancellation), SQLAlchemy leaves the session in _prepare_impl()
+    or a CLOSED transaction state.  Calling rollback() in that state raises
+    another exception which (a) masks the original error and (b) prevents
+    the subsequent `raise` from executing, leaving callers without the real
+    error message and the session permanently broken.  Wrapping every
+    rollback call with this helper ensures the original exception always
+    propagates cleanly.
+    """
+    try:
+        await session.rollback()
+    except Exception:
+        pass
+
+
 class CRUDProject:
     @handle_errors(ErrorCategory.DATABASE, reraise=True)
     async def create(self, session: AsyncSession, project: Project) -> Project:
@@ -34,7 +52,7 @@ class CRUDProject:
             await session.refresh(project)
             return project
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_project", e, {
                 "project_name": getattr(project, 'name', 'unknown')
             })
@@ -69,7 +87,7 @@ class CRUDScanJob:
             await session.refresh(scan)
             return scan
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_scan_job", e, {
                 "scan_name": getattr(scan, 'name', 'unknown'),
                 "project_id": str(getattr(scan, 'project_id', 'unknown'))
@@ -98,7 +116,7 @@ class CRUDScanJob:
             await session.refresh(scan)
             return scan
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("update_scan_status", e, {
                 "scan_id": str(scan_id),
                 "new_status": status
@@ -115,7 +133,7 @@ class CRUDNode:
             await session.refresh(node)
             return node
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_node", e, {
                 "node_name": getattr(node, 'name', 'unknown'),
                 "node_type": getattr(node, 'type', 'unknown'),
@@ -181,7 +199,7 @@ class CRUDNode:
             await session.refresh(node)
             return node
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("update_node", e, {
                 "node_id": str(node_id),
                 "updates": updates
@@ -219,7 +237,7 @@ class CRUDNode:
             await session.commit()
             return True
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("delete_node", e, {
                 "node_id": str(node_id)
             })
@@ -235,7 +253,7 @@ class CRUDAttempt:
             await session.refresh(attempt)
             return attempt
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_attempt", e, {
                 "tool": getattr(attempt, 'tool', 'unknown'),
                 "target": getattr(attempt, 'target', 'unknown'),
@@ -359,7 +377,7 @@ class CRUDInsightMemory:
             await session.refresh(memory)
             return memory
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_insight_memory", e, {
                 "project_id": str(getattr(memory, "project_id", "unknown")),
                 "scan_id": str(getattr(memory, "scan_id", "unknown")),
@@ -430,7 +448,7 @@ class CRUDBlackboardEvent:
             await session.refresh(event)
             return event
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_blackboard_event", e, {
                 "project_id": str(getattr(event, "project_id", "unknown")),
                 "scan_id": str(getattr(event, "scan_id", "unknown")),
@@ -495,7 +513,7 @@ class CRUDBlackboardFact:
             await session.refresh(fact)
             return fact
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_blackboard_fact", e, {
                 "project_id": str(getattr(fact, "project_id", "unknown")),
                 "scan_id": str(getattr(fact, "scan_id", "unknown")),
@@ -538,7 +556,7 @@ class CRUDBlackboardFact:
             await session.refresh(fact)
             return fact
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("save_blackboard_fact", e, {
                 "fact_id": str(getattr(fact, "id", "unknown")),
             })
@@ -608,7 +626,7 @@ class CRUDBlackboardEdge:
             await session.refresh(edge)
             return edge
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_blackboard_edge", e, {
                 "scan_id": str(getattr(edge, "scan_id", "unknown")),
                 "relation": getattr(edge, "relation", "unknown"),
@@ -622,7 +640,7 @@ class CRUDBlackboardEdge:
             await session.refresh(edge)
             return edge
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("save_blackboard_edge", e, {
                 "edge_id": str(getattr(edge, "id", "unknown")),
             })
@@ -654,7 +672,7 @@ class CRUDVerificationQueue:
             await session.refresh(item)
             return item
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("create_verification_queue_item", e, {
                 "scan_id": str(getattr(item, "scan_id", "unknown")),
                 "entity_type": getattr(item, "entity_type", "unknown"),
@@ -734,7 +752,7 @@ class CRUDVerificationQueue:
             await session.refresh(item)
             return item
         except SQLAlchemyError as e:
-            await session.rollback()
+            await _safe_rollback(session)
             raise ErrorHandler.handle_database_error("resolve_verification_item", e, {
                 "item_id": str(item_id),
                 "status": str(status),
