@@ -127,11 +127,25 @@ RUN echo 'export PATH="/root/go/bin:/root/.local/bin:/root/.npm-global/bin:$PATH
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
+# Normalize known Kali command naming differences.
+RUN set -eux; \
+    if ! command -v commix >/dev/null 2>&1 && command -v commix.py >/dev/null 2>&1; then \
+        ln -sf "$(command -v commix.py)" /usr/local/bin/commix; \
+    fi; \
+    if ! command -v searchsploit >/dev/null 2>&1 && [ -x /usr/share/exploitdb/searchsploit ]; then \
+        ln -sf /usr/share/exploitdb/searchsploit /usr/local/bin/searchsploit; \
+    fi
+
 # Fail fast if required toolbox binaries are missing.
 RUN set -eux; \
+    missing=0; \
     for tool in nuclei searchsploit katana commix; do \
-        command -v "$tool" >/dev/null 2>&1; \
-    done
+        if ! command -v "$tool" >/dev/null 2>&1; then \
+            echo "Missing required toolbox binary: $tool" >&2; \
+            missing=1; \
+        fi; \
+    done; \
+    [ "$missing" -eq 0 ]
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["/bin/bash"]
