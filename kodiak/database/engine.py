@@ -4,6 +4,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text, event
+from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 
 from kodiak.core.config import settings
@@ -12,20 +13,39 @@ from kodiak.core.config import settings
 def _create_engine():
     """Create the async database engine with appropriate settings for the database type."""
     connect_args = {}
-    
+    engine_kwargs: dict = {
+        "echo": settings.debug,
+        "future": True,
+    }
+
     if settings.is_sqlite:
-        # SQLite-specific configuration
         connect_args = {"check_same_thread": False}
+        # Each AsyncSession gets its own connection so concurrent sessions
+        # never share a connection object and cannot corrupt each other's
+        # transaction state machine.
+        engine_kwargs["poolclass"] = NullPool
         logger.info(f"Using SQLite database at: {settings.sqlite_path or '~/.kodiak/kodiak.db'}")
     else:
         logger.info(f"Using PostgreSQL database at: {settings.postgres_server}:{settings.postgres_port}/{settings.postgres_db}")
-    
-    return create_async_engine(
-        settings.async_database_url,
-        echo=settings.debug,
-        future=True,
-        connect_args=connect_args,
-    )
+
+    engine_kwargs["connect_args"] = connect_args
+    eng = create_async_engine(settings.async_database_url, **engine_kwargs)
+
+    if settings.is_sqlite:
+        # WAL mode: allows concurrent readers alongside a single writer so
+        # multiple agents do not starve each other on SELECT while one is
+        # committing.  busy_timeout: instead of immediately raising
+        # "database is locked", SQLite waits up to N ms for the lock to be
+        # released — prevents the OperationalError that propagates through
+        # SQLAlchemy and triggers rollback() during _prepare_impl().
+        @event.listens_for(eng.sync_engine, "connect")
+        def _set_sqlite_pragmas(dbapi_conn, _connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.close()
+
+    return eng
 
 
 
@@ -107,8 +127,11 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """
     Get a database session with proper error handling.
     """
-    # Use get_engine() to ensure we have the actual engine instance
-    async with AsyncSession(get_engine(), expire_on_commit=False) as session:
+    # autoflush=False: prevents SELECT queries from triggering an implicit
+    # flush mid-transaction, which can cause "Session.add() during flush"
+    # SAWarnings and downstream state-machine errors when concurrent agents
+    # share the event loop.  All write paths explicitly call commit().
+    async with AsyncSession(get_engine(), expire_on_commit=False, autoflush=False) as session:
         try:
             yield session
         except SQLAlchemyError as e:

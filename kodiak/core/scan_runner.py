@@ -210,7 +210,7 @@ class ScanRunner:
                         agent_id=f"scanner-{scan_job.id}-{index + 1}",
                         tool_inventory=tool_inventory,
                         event_manager=self.event_manager,
-                        session=session,
+                        session=None,
                         role=role,
                         project_id=project.id,
                         global_tool_semaphore=global_heavy_semaphore,
