@@ -12,14 +12,15 @@ ENV CGO_ENABLED=0
 
 RUN mkdir -p /go/bin
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest || echo "Warning: Failed to install httpx"
-RUN go install -v github.com/projectdiscovery/katana/cmd/katana@latest || echo "Warning: Failed to install katana"
+# Katana can require CGO in newer releases; install it as a required binary.
+RUN CGO_ENABLED=1 go install -v github.com/projectdiscovery/katana/cmd/katana@latest
 RUN go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest || echo "Warning: Failed to install dnsx"
 RUN go install -v github.com/jaeles-project/gospider@latest || echo "Warning: Failed to install gospider"
 RUN go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest || echo "Warning: Failed to install interactsh"
 RUN go install -v github.com/tomnomnom/waybackurls@latest || echo "Warning: Failed to install waybackurls"
 RUN go install -v github.com/tomnomnom/gf@latest || echo "Warning: Failed to install gf"
 RUN go install -v github.com/lc/gau/v2/cmd/gau@latest || echo "Warning: Failed to install gau"
-RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || echo "Warning: Failed to install nuclei"
+RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 
 # ============================================================
 # STAGE 2: FINAL KALI IMAGE
@@ -127,13 +128,42 @@ RUN echo 'export PATH="/root/go/bin:/root/.local/bin:/root/.npm-global/bin:$PATH
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Normalize known Kali command naming differences.
+# Normalize and enforce required tool command names.
 RUN set -eux; \
-    if ! command -v commix >/dev/null 2>&1 && command -v commix.py >/dev/null 2>&1; then \
-        ln -sf "$(command -v commix.py)" /usr/local/bin/commix; \
+    if ! command -v katana >/dev/null 2>&1; then \
+        for candidate in /root/go/bin/katana /usr/bin/katana-framework /usr/bin/katana-cli; do \
+            if [ -x "$candidate" ]; then \
+                ln -sf "$candidate" /usr/local/bin/katana; \
+                break; \
+            fi; \
+        done; \
     fi; \
-    if ! command -v searchsploit >/dev/null 2>&1 && [ -x /usr/share/exploitdb/searchsploit ]; then \
-        ln -sf /usr/share/exploitdb/searchsploit /usr/local/bin/searchsploit; \
+    if ! command -v searchsploit >/dev/null 2>&1; then \
+        for candidate in /usr/share/exploitdb/searchsploit /opt/exploitdb/searchsploit; do \
+            if [ -x "$candidate" ]; then \
+                ln -sf "$candidate" /usr/local/bin/searchsploit; \
+                break; \
+            fi; \
+        done; \
+    fi; \
+    if ! command -v searchsploit >/dev/null 2>&1; then \
+        git clone --depth 1 https://github.com/offensive-security/exploitdb.git /opt/exploitdb; \
+        chmod +x /opt/exploitdb/searchsploit; \
+        ln -sf /opt/exploitdb/searchsploit /usr/local/bin/searchsploit; \
+    fi; \
+    if ! command -v commix >/dev/null 2>&1; then \
+        for candidate in /usr/bin/commix.py /usr/share/commix/commix.py /opt/commix/commix.py; do \
+            if [ -f "$candidate" ]; then \
+                chmod +x "$candidate" || true; \
+                ln -sf "$candidate" /usr/local/bin/commix; \
+                break; \
+            fi; \
+        done; \
+    fi; \
+    if ! command -v commix >/dev/null 2>&1; then \
+        git clone --depth 1 https://github.com/commixproject/commix.git /opt/commix; \
+        chmod +x /opt/commix/commix.py; \
+        ln -sf /opt/commix/commix.py /usr/local/bin/commix; \
     fi
 
 # Fail fast if required toolbox binaries are missing.
