@@ -177,7 +177,7 @@ kodiak api --port 8000
 Kodiak uses [LiteLLM](https://docs.litellm.ai/) for unified access to multiple providers:
 
 ### Supported Providers
-- **Google Gemini**: `gemini/gemini-1.5-pro`, `gemini/gemini-3-pro-preview`
+- **Google Gemini**: `gemini/gemini-3.1-pro-preview`, `gemini/gemini-3-flash-preview`
 - **OpenAI**: `openai/gpt-4`, `openai/gpt-5`
 - **Anthropic**: `anthropic/claude-3-5-sonnet-20241022`, `anthropic/claude-4.5-sonnet`
 - **Local Models**: `ollama/llama3.1:70b`, `ollama/codellama:34b`
@@ -187,7 +187,7 @@ Kodiak uses [LiteLLM](https://docs.litellm.ai/) for unified access to multiple p
 ### Configuration Examples
 ```bash
 # Gemini (Recommended)
-export KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+export KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 export GOOGLE_API_KEY=your_api_key
 
 # OpenAI

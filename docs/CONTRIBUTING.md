@@ -244,7 +244,7 @@ Key environment variables for development:
 ```bash
 # LLM Configuration
 KODIAK_LLM_PROVIDER=gemini
-KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 GOOGLE_API_KEY=your_api_key
 
 # Database

@@ -83,7 +83,7 @@ Create a `.env` file in the project root:
 ```bash
 # Gemini (Recommended)
 KODIAK_LLM_PROVIDER=gemini
-KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 GOOGLE_API_KEY=your_google_api_key_here
 
 # Database Configuration
@@ -265,7 +265,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - KODIAK_LLM_PROVIDER=gemini
-      - KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+      - KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
     depends_on:
       - db
     restart: unless-stopped

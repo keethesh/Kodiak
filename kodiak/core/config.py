@@ -15,7 +15,7 @@ from enum import Enum
 
 # Error message templates for consistent error handling
 ERROR_MESSAGES = {
-    "missing_model": "KODIAK_LLM_MODEL is required. Example: gemini/gemini-3-pro-preview",
+    "missing_model": "KODIAK_LLM_MODEL is required. Example: gemini/gemini-3.1-pro-preview",
     "missing_api_key": "API key required for provider '{provider}': set {env_var}",
     "inference_failed": "Cannot infer provider from '{model}'. Set KODIAK_LLM_PROVIDER explicitly or use format 'provider/model'",
     "invalid_format": "Invalid model format '{model}'. Check LiteLLM documentation for supported formats: https://docs.litellm.ai/docs/providers"
@@ -57,7 +57,7 @@ class KodiakSettings(BaseSettings):
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     
     # LLM Configuration
-    llm_model: str = Field(default="gemini/gemini-3-pro-preview", alias="KODIAK_LLM_MODEL")
+    llm_model: str = Field(default="gemini/gemini-3.1-pro-preview", alias="KODIAK_LLM_MODEL")
     llm_api_key: Optional[str] = Field(default=None, alias="KODIAK_LLM_API_KEY")
     llm_base_url: Optional[str] = Field(default=None, alias="KODIAK_LLM_BASE_URL")
     llm_temperature: float = Field(default=0.1, alias="KODIAK_LLM_TEMPERATURE")
@@ -177,10 +177,8 @@ class KodiakSettings(BaseSettings):
     def get_model_display_name(self) -> str:
         """Get a human-readable model name"""
         model_map = {
-            "gemini/gemini-3-pro-preview": "Gemini 3 Pro",
+            "gemini/gemini-3.1-pro-preview": "Gemini 3.1 Pro",
             "gemini/gemini-3-flash-preview": "Gemini 3 Flash",
-            "gemini/gemini-1.5-pro": "Gemini 1.5 Pro",
-            "gemini/gemini-1.5-flash": "Gemini 1.5 Flash",
             "openai/gpt-4": "GPT-4",
             "openai/gpt-4-turbo": "GPT-4 Turbo",
             "openai/gpt-3.5-turbo": "GPT-3.5 Turbo",

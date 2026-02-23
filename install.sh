@@ -494,7 +494,7 @@ setup_configuration() {
 KODIAK_DB_TYPE=sqlite
 
 # LLM Provider: Configure with 'kodiak config'
-# KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
+# KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 # GOOGLE_API_KEY=your_api_key_here
 
 # Application Settings
