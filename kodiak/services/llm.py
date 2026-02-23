@@ -5,7 +5,7 @@ Provides utility functions for LLM provider inference and API key management.
 These functions are shared between config validation and agent code.
 """
 
-from typing import Optional
+from typing import Optional, Dict, Any
 
 
 def infer_provider_from_model(model_string: str) -> str:
@@ -23,6 +23,39 @@ def infer_provider_from_model(model_string: str) -> str:
             return "gemini"
         else:
             raise ValueError(f"Cannot infer provider from model string: {model_string}")
+
+
+def is_gemini_provider(provider: str) -> bool:
+    normalized = str(provider or "").strip().lower()
+    return normalized in {"gemini", "vertex_ai"}
+
+
+def normalize_gemini_thinking_level(level: str) -> str:
+    normalized = str(level or "").strip().lower()
+    if normalized in {"low", "medium", "high"}:
+        return normalized
+    return "high"
+
+
+def resolve_gemini_thinking_level(model_string: str, configured_level: str) -> str:
+    configured = str(configured_level or "").strip().lower()
+    if configured in {"low", "medium", "high"}:
+        return configured
+    # Safe default split for Gemini 3 families.
+    model = str(model_string or "").lower()
+    if "flash" in model:
+        return "low"
+    return "high"
+
+
+def build_gemini_extra_body(thinking_level: str) -> Dict[str, Any]:
+    return {
+        "google": {
+            "thinking_config": {
+                "thinking_level": normalize_gemini_thinking_level(thinking_level)
+            }
+        }
+    }
 
 
 def get_api_key_for_provider(provider: str) -> Optional[str]:

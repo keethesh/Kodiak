@@ -4,6 +4,7 @@ import asyncio
 import time
 import hashlib
 import re
+from datetime import datetime, timezone
 from contextlib import AsyncExitStack
 from uuid import uuid4, UUID
 from dataclasses import dataclass
@@ -282,7 +283,7 @@ class KodiakAgent:
                     except json.JSONDecodeError:
                         args = {}
                         
-                    # Extract the synthetic 'thought' parameter Gemini uses to explain actions
+                    # Backward-compatible support if the model includes optional 'thought' arg.
                     thought = args.pop("thought", None)
                     if thought and not response.content and self.event_manager:
                         await self.event_manager.emit_agent_thought(
@@ -393,26 +394,6 @@ class KodiakAgent:
                 })
                 
             messages.extend(condensed_history)
-            
-            # Enforce thinking before tool calls
-            # Models like Gemini 3 Flash often skip the 'content' block 
-            # if we don't explicitly prompt them at the end of the chain.
-            if len(messages) > 0 and messages[-1].get("role") != "user":
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Based on the context above, provide a concise CONTEXT/THEORY/PLAN explanation before any tool call. "
-                        "Then execute the best next action."
-                    )
-                })
-            elif len(messages) > 0 and messages[-1].get("role") == "user":
-                # Inject it into the existing user message if it's not empty
-                orig_content = messages[-1].get("content", "")
-                if orig_content and "context/theory/plan" not in orig_content.lower():
-                    messages[-1]["content"] = (
-                        orig_content
-                        + "\n\n(Based on the context above, include a concise CONTEXT/THEORY/PLAN before any tool call.)"
-                    )
                     
             # Get LLM configuration
             provider = llm.infer_provider_from_model(self.model_name)
@@ -427,6 +408,12 @@ class KodiakAgent:
                 "tools": tools if tools else None,
                 "tool_choice": "auto" if tools else None,
             }
+            if llm.is_gemini_provider(provider):
+                resolved_thinking_level = llm.resolve_gemini_thinking_level(
+                    self.model_name,
+                    settings.gemini_thinking_level,
+                )
+                completion_params["extra_body"] = llm.build_gemini_extra_body(resolved_thinking_level)
             
             if api_key:
                 completion_params["api_key"] = api_key
@@ -441,7 +428,16 @@ class KodiakAgent:
             
             # Call LLM
             response = await acompletion(**completion_params)
-            return response.choices[0].message
+            if not response or not getattr(response, "choices", None):
+                return FallbackResponse("Empty LLM response")
+            choice = response.choices[0]
+            finish_reason = str(getattr(choice, "finish_reason", "") or "").strip().lower()
+            if finish_reason in {"length", "max_tokens"}:
+                logger.warning(
+                    f"LLM response truncated for agent {self.agent_id} "
+                    f"(finish_reason={finish_reason}, max_tokens={settings.llm_max_tokens})"
+                )
+            return choice.message
             
         except Exception as e:
             logger.error(f"Agent thinking failed: {e}")
@@ -465,6 +461,10 @@ class KodiakAgent:
             "<role>",
             base_prompt,
             "</role>",
+            "<time_context>",
+            f"Current UTC date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+            f"Knowledge cutoff: {settings.llm_knowledge_cutoff}",
+            "</time_context>",
             "<objective>",
             "Find high-impact security issues with reproducible evidence.",
             "</objective>",
@@ -485,11 +485,11 @@ class KodiakAgent:
             "- Call complete_scan only after the objective is fully covered.",
             "</hard_constraints>",
             "<planning_format>",
-            "Before every tool call, set tool argument `thought` using this exact structure:",
+            "Before a tool call, include a short rationale in assistant text using:",
             "CONTEXT: relevant evidence from prior output.",
             "THEORY: concrete hypothesis to validate.",
-            "PLAN: why this tool+args is the best next action.",
-            "Keep `thought` concise (max 6 lines).",
+            "PLAN: why this tool and arguments are the best next action.",
+            "Keep this rationale concise (max 6 lines).",
             "</planning_format>",
         ]
 
@@ -521,13 +521,65 @@ class KodiakAgent:
         all_tools = self.tool_inventory.list_tools()
         
         filtered_names = allowed_tools if allowed_tools else self.available_tools
+        ranked_names = self._rank_tools_for_role(filtered_names, list(all_tools.keys()))
+        max_tools = max(6, int(settings.max_tools_in_prompt))
+        selected_names = ranked_names[:max_tools]
+        if "complete_scan" in ranked_names and "complete_scan" not in selected_names:
+            selected_names[-1] = "complete_scan"
         
-        for tool_name in filtered_names:
+        for tool_name in selected_names:
             tool_instance = self.tool_inventory.get(tool_name)
             if tool_instance:
                 available_tools.append(tool_instance.to_openai_schema())
         
         return available_tools
+
+    def _rank_tools_for_role(self, candidate_names: List[str], all_registered: List[str]) -> List[str]:
+        role_preferences = {
+            "scout": [
+                "nmap", "subfinder", "httpx", "whatweb", "katana", "ffuf", "nuclei",
+                "browser_navigate", "web_search", "blackboard_query_facts",
+                "blackboard_publish_fact", "complete_scan",
+            ],
+            "mapper": [
+                "subfinder", "httpx", "whatweb", "katana", "ffuf", "browser_navigate",
+                "nuclei", "web_search", "blackboard_query_facts", "blackboard_query_edges",
+                "blackboard_publish_fact", "complete_scan",
+            ],
+            "attacker": [
+                "nuclei", "sqlmap", "commix", "searchsploit", "ffuf", "httpx", "whatweb",
+                "browser_navigate", "proxy_start", "proxy_request", "proxy_history", "proxy_stop",
+                "terminal_start", "terminal_execute", "terminal_history", "terminal_stop",
+                "blackboard_query_facts", "blackboard_publish_fact", "blackboard_publish_edge",
+                "complete_scan",
+            ],
+            "verifier": [
+                "blackboard_query_verification_queue", "blackboard_query_facts",
+                "blackboard_query_edges", "blackboard_query_events",
+                "httpx", "whatweb", "nuclei", "ffuf", "sqlmap",
+                "blackboard_publish_fact", "blackboard_publish_edge", "complete_scan",
+            ],
+            "analyst": [
+                "blackboard_query_facts", "blackboard_query_edges", "blackboard_query_events",
+                "httpx", "whatweb", "nuclei", "searchsploit", "web_search",
+                "blackboard_publish_fact", "blackboard_publish_edge", "complete_scan",
+            ],
+            "reporter": [
+                "blackboard_query_facts", "blackboard_query_edges", "blackboard_query_events",
+                "blackboard_query_verification_queue", "web_search", "complete_scan",
+            ],
+        }
+
+        candidate_set = {name for name in candidate_names if name in all_registered}
+        preferred = role_preferences.get(self.role, [])
+        ordered: List[str] = []
+        for name in preferred:
+            if name in candidate_set and name not in ordered:
+                ordered.append(name)
+        for name in candidate_names:
+            if name in candidate_set and name not in ordered:
+                ordered.append(name)
+        return ordered
 
     async def _load_context(self, session: Any, project_id: Any) -> str:
         """Queries the DB for facts relevant to this project"""

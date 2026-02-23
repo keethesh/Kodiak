@@ -60,8 +60,11 @@ class KodiakSettings(BaseSettings):
     llm_model: str = Field(default="gemini/gemini-3.1-pro-preview", alias="KODIAK_LLM_MODEL")
     llm_api_key: Optional[str] = Field(default=None, alias="KODIAK_LLM_API_KEY")
     llm_base_url: Optional[str] = Field(default=None, alias="KODIAK_LLM_BASE_URL")
-    llm_temperature: float = Field(default=0.1, alias="KODIAK_LLM_TEMPERATURE")
+    llm_temperature: float = Field(default=1.0, alias="KODIAK_LLM_TEMPERATURE")
     llm_max_tokens: int = Field(default=4096, alias="KODIAK_LLM_MAX_TOKENS")
+    llm_knowledge_cutoff: str = Field(default="2025-01", alias="KODIAK_LLM_KNOWLEDGE_CUTOFF")
+    gemini_thinking_level: str = Field(default="high", alias="KODIAK_GEMINI_THINKING_LEVEL")
+    max_tools_in_prompt: int = Field(default=16, alias="KODIAK_MAX_TOOLS_IN_PROMPT")
     
     # Legacy environment variable support
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
@@ -209,7 +212,9 @@ class KodiakSettings(BaseSettings):
                 "provider_source": provider_source,
                 "api_key_configured": api_key_configured,
                 "temperature": self.llm_temperature,
-                "max_tokens": self.llm_max_tokens
+                "max_tokens": self.llm_max_tokens,
+                "gemini_thinking_level": self.gemini_thinking_level,
+                "max_tools_in_prompt": self.max_tools_in_prompt,
             }
         except Exception as e:
             return {

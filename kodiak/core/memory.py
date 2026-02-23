@@ -162,6 +162,9 @@ class InsightMemoryService:
                 "temperature": 0.0,
                 "max_tokens": 500,
             }
+            if provider in {"gemini", "vertex_ai", "openai"}:
+                # Prefer model-side JSON enforcement over prompt-only contracts.
+                params["response_format"] = {"type": "json_object"}
             if api_key:
                 params["api_key"] = api_key
 
