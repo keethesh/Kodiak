@@ -6,6 +6,7 @@ import os
 import sys
 import asyncio
 import subprocess
+import shlex
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -538,11 +539,90 @@ def doctor():
         console.print(f"[yellow]Try: docker pull {settings.toolbox_image}[/yellow]")
         return
 
-    for tool_name in ["nuclei", "searchsploit", "katana", "commix"]:
-        tool_ok, tool_detail = run_check(
-            ["docker", "run", "--rm", "--entrypoint", "/bin/sh", settings.toolbox_image, "-lc", f"command -v {tool_name}"],
-            timeout=30,
-        )
+    # Probe all docker-backed Kodiak tools in one container run.
+    docker_tool_map = {
+        "nmap": "nmap",
+        "nuclei": "nuclei",
+        "subfinder": "subfinder",
+        "httpx": "httpx",
+        "katana": "katana",
+        "ffuf": "ffuf",
+        "whatweb": "whatweb",
+        "sqlmap": "sqlmap",
+        "commix": "commix",
+        "searchsploit": "searchsploit",
+    }
+    probe_pairs = [f"{tool}:{binary}" for tool, binary in docker_tool_map.items()]
+    probe_wordlist = " ".join(shlex.quote(pair) for pair in probe_pairs)
+    probe_script = (
+        f"for pair in {probe_wordlist}; do\n"
+        "  tool=${pair%%:*}\n"
+        "  bin=${pair##*:}\n"
+        "  if command -v \"$bin\" >/dev/null 2>&1; then\n"
+        "    echo \"$tool=1\"\n"
+        "  else\n"
+        "    echo \"$tool=0\"\n"
+        "  fi\n"
+        "done"
+    )
+
+    probe_ok, probe_detail = run_check(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "/bin/bash",
+            settings.toolbox_image,
+            "-lc",
+            probe_script,
+        ],
+        timeout=45,
+    )
+
+    status_map: Dict[str, bool] = {}
+    if probe_ok:
+        for line in (probe_detail or "").splitlines():
+            cleaned = line.strip()
+            if "=" not in cleaned:
+                continue
+            name, value = cleaned.split("=", 1)
+            name = name.strip()
+            if name in docker_tool_map:
+                status_map[name] = value.strip() == "1"
+    else:
+        console.print(f"[yellow]Tool probe failed: {probe_detail}[/yellow]")
+        console.print("[yellow]Falling back to per-tool checks...[/yellow]")
+        for tool_name, binary_name in docker_tool_map.items():
+            tool_ok, _ = run_check(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--entrypoint",
+                    "/bin/sh",
+                    settings.toolbox_image,
+                    "-lc",
+                    f"command -v {binary_name}",
+                ],
+                timeout=30,
+            )
+            status_map[tool_name] = tool_ok
+
+    console.print("\n[bold]Docker Tool Availability[/bold]")
+    missing_tools: List[str] = []
+    for tool_name in sorted(docker_tool_map.keys()):
+        tool_ok = status_map.get(tool_name, False)
         console.print(f"{tool_name}: {status_label(tool_ok)}")
         if not tool_ok:
-            console.print(f"[yellow]{tool_name} check failed: {tool_detail}[/yellow]")
+            missing_tools.append(tool_name)
+
+    console.print(
+        f"Summary: {len(docker_tool_map) - len(missing_tools)}/{len(docker_tool_map)} available"
+    )
+    if missing_tools:
+        console.print(
+            "[yellow]Unavailable tools may be auto-disabled during scans: "
+            + ", ".join(missing_tools)
+            + "[/yellow]"
+        )
