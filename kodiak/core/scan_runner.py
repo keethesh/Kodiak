@@ -232,10 +232,10 @@ class ScanRunner:
                         role_strategy=role_strategy,
                     )
                     task = asyncio.create_task(
-                        agent.run(
+                        self._run_agent_with_own_session(
+                            agent=agent,
                             goal=goal,
                             target=target,
-                            session=session,
                             project_id=project.id,
                             scan_id=scan_job.id,
                             max_iterations=per_agent_iterations,
@@ -380,7 +380,33 @@ class ScanRunner:
             }
         )
         return await crud.scan_job.create(session, scan)
-    
+
+    async def _run_agent_with_own_session(
+        self,
+        agent: KodiakAgent,
+        goal: str,
+        target: str,
+        project_id: UUID,
+        scan_id: UUID,
+        max_iterations: int,
+    ) -> Any:
+        """Run an agent with its own isolated DB session.
+
+        Each concurrent agent must own its session exclusively.  Sharing a
+        single AsyncSession across asyncio.gather() tasks causes SQLAlchemy
+        to receive overlapping commit()/rollback() calls, corrupting the
+        session state.
+        """
+        async for agent_session in get_session():
+            return await agent.run(
+                goal=goal,
+                target=target,
+                session=agent_session,
+                project_id=project_id,
+                scan_id=scan_id,
+                max_iterations=max_iterations,
+            )
+
     async def cancel(self):
         """Cancel the scan"""
         logger.info("🛑 Scan cancellation requested")
