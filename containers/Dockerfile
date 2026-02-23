@@ -138,40 +138,13 @@ RUN set -eux; \
             fi; \
         done; \
     fi; \
-    if ! command -v searchsploit >/dev/null 2>&1; then \
-        candidate="$(dpkg -L exploitdb 2>/dev/null | grep -E '/searchsploit(\.py)?$' | head -n 1 || true)"; \
-        if [ -n "$candidate" ] && [ -f "$candidate" ]; then \
-            chmod +x "$candidate" || true; \
-            ln -sf "$candidate" /usr/local/bin/searchsploit; \
-        fi; \
-    fi; \
-    if ! command -v searchsploit >/dev/null 2>&1; then \
-        for base in /usr/share/exploitdb /opt/exploitdb /usr/local/share/exploitdb; do \
-            if [ -d "$base" ]; then \
-                candidate="$(find "$base" -maxdepth 10 -type f \( -name 'searchsploit' -o -name 'searchsploit.py' \) | head -n 1 || true)"; \
-                if [ -n "$candidate" ]; then \
-                    chmod +x "$candidate" || true; \
-                    ln -sf "$candidate" /usr/local/bin/searchsploit; \
-                    break; \
-                fi; \
-            fi; \
-        done; \
-    fi; \
+    # Install SearchSploit using the official git method from upstream docs when Kali package pathing is unavailable.
     if ! command -v searchsploit >/dev/null 2>&1; then \
         rm -rf /opt/exploitdb || true; \
         git clone --depth 1 https://gitlab.com/exploit-database/exploitdb.git /opt/exploitdb || \
         git clone --depth 1 https://github.com/offensive-security/exploitdb.git /opt/exploitdb; \
-        candidate="$(find /opt/exploitdb -maxdepth 10 -type f \( -name 'searchsploit' -o -name 'searchsploit.py' \) | head -n 1 || true)"; \
-        if [ -n "$candidate" ]; then \
-            chmod +x "$candidate" || true; \
-            ln -sf "$candidate" /usr/local/bin/searchsploit; \
-        fi; \
-    fi; \
-    if ! command -v searchsploit >/dev/null 2>&1; then \
-        printf '#!/bin/sh\n' > /usr/local/bin/searchsploit; \
-        printf 'echo \"searchsploit backend script not found in image\" >&2\n' >> /usr/local/bin/searchsploit; \
-        printf 'exit 127\n' >> /usr/local/bin/searchsploit; \
-        chmod +x /usr/local/bin/searchsploit; \
+        ln -sf /opt/exploitdb/searchsploit /usr/local/bin/searchsploit; \
+        sed 's|path_array+=(.*)|path_array+=("/opt/exploitdb")|g' /opt/exploitdb/.searchsploit_rc > /root/.searchsploit_rc; \
     fi; \
     if ! command -v commix >/dev/null 2>&1; then \
         for base in /usr/share/commix /opt/commix /usr/bin; do \
