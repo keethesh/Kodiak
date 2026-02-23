@@ -354,6 +354,7 @@ class KodiakAgent:
                     role=self.role,
                     target=self._scan_target,
                     limit=settings.blackboard_context_limit,
+                    max_chars=settings.blackboard_context_max_chars,
                 )
                 if self._blackboard_context:
                     context_str = (
@@ -454,6 +455,8 @@ class KodiakAgent:
             base_prompt = "You are a SCOUT agent specialized in reconnaissance."
         elif self.role == "attacker":
             base_prompt = "You are an ATTACKER agent specialized in exploitation."
+        elif self.role == "verifier":
+            base_prompt = "You are a VERIFIER agent specialized in conflict resolution and evidence validation."
         else:
             base_prompt = "You are KODIAK, an autonomous penetration testing agent."
 
@@ -468,6 +471,7 @@ class KodiakAgent:
             "<execution_environment>",
             "All tools execute inside a Kali Docker container.",
             "Use only registered tools and their schemas.",
+            "Use blackboard query tools for additional context instead of repeating scans.",
             "</execution_environment>",
             "<hard_constraints>",
             "- Do not repeat identical tool calls unless parameters or strategy changed.",
@@ -475,6 +479,8 @@ class KodiakAgent:
             "- If a tool times out, retry once with lower intensity; do not repeat unchanged calls.",
             "- If blocked/rate-limited, record as environment signal and pivot strategy.",
             "- Read BLACKBOARD peer outcomes before retrying; if you retry, state what changed.",
+            "- When you discover nuanced findings from tool output, call blackboard_publish_fact or blackboard_publish_edge.",
+            "- If role is verifier: start by checking blackboard_query_verification_queue and resolve conflicts first.",
             "- Keep responses concise by default.",
             "- Call complete_scan only after the objective is fully covered.",
             "</hard_constraints>",
@@ -1342,7 +1348,13 @@ class KodiakAgent:
                 await self.event_manager.emit_tool_start(tool_name, target, self.agent_id, str(scan_id))
 
             # Execute tool with concurrency limits for heavy scanners.
-            execution_args = {**adjusted_args, "agent_id": self.agent_id, "scan_id": str(scan_id)}
+            execution_args = {
+                **adjusted_args,
+                "agent_id": self.agent_id,
+                "scan_id": str(scan_id),
+                "project_id": str(project_id) if project_id else "",
+                "role": self.role,
+            }
             result, execution_meta = await self._execute_tool_with_limits(
                 tool_name,
                 tool,

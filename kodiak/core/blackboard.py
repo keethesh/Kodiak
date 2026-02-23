@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -14,6 +14,7 @@ from loguru import logger
 
 from kodiak.core.blackboard_schema import (
     CONFIDENCE_RANK,
+    ENTITY_TYPES,
     TOOL_TO_EVENT,
     confidence_max,
     normalize_entity_key,
@@ -160,19 +161,331 @@ class BlackboardService:
                 published.append(response)
         return published
 
+    async def publish_fact(
+        self,
+        session: Any,
+        project_id: UUID,
+        scan_id: UUID,
+        agent_id: str,
+        entity_type: str,
+        entity_key: str,
+        payload: Dict[str, Any],
+        confidence: str = "medium",
+        status: str = "observed",
+    ) -> Dict[str, Any]:
+        normalized_entity_type = normalize_entity_type(entity_type)
+        validated_payload = self._validate_manual_payload(normalized_entity_type, payload)
+        event_type = self._event_type_for_manual_fact(normalized_entity_type, status)
+        response = await self.publish_event(
+            session=session,
+            project_id=project_id,
+            scan_id=scan_id,
+            agent_id=agent_id,
+            event_type=event_type,
+            entity_type=normalized_entity_type,
+            entity_key=entity_key,
+            payload=validated_payload,
+            confidence=confidence,
+            status=status,
+        )
+        if response and str(status or "").lower() == "verified":
+            await self._resolve_pending_verification(
+                session=session,
+                scan_id=scan_id,
+                entity_type=normalized_entity_type,
+                entity_key=normalize_entity_key(entity_key, default_prefix=normalized_entity_type),
+            )
+        return response
+
+    async def publish_edge(
+        self,
+        session: Any,
+        project_id: UUID,
+        scan_id: UUID,
+        agent_id: str,
+        src_type: str,
+        src_key: str,
+        relation: str,
+        dst_type: str,
+        dst_key: str,
+        confidence: str = "medium",
+        status: str = "observed",
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        body = dict(payload or {})
+        body.update(
+            {
+                "src_type": normalize_entity_type(src_type),
+                "src_key": normalize_entity_key(src_key, default_prefix=normalize_entity_type(src_type)),
+                "relation": self._trim_text(relation, 60),
+                "dst_type": normalize_entity_type(dst_type),
+                "dst_key": normalize_entity_key(dst_key, default_prefix=normalize_entity_type(dst_type)),
+            }
+        )
+        body = self._validate_manual_payload("attack_path_edge", body)
+        return await self.publish_event(
+            session=session,
+            project_id=project_id,
+            scan_id=scan_id,
+            agent_id=agent_id,
+            event_type="attack_path_edge",
+            entity_type="attack_path_edge",
+            entity_key=f"edge:{body['src_key']}:{body['relation']}:{body['dst_key']}",
+            payload=body,
+            confidence=confidence,
+            status=status,
+        )
+
+    async def query_facts(
+        self,
+        session: Any,
+        scan_id: UUID,
+        role: str,
+        entity_type: Optional[str] = None,
+        keyword: Optional[str] = None,
+        target: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        if not settings.blackboard_enabled:
+            return []
+        scoped = role_scoped_entity_types(role)
+        normalized_type = normalize_entity_type(entity_type) if entity_type else None
+        entity_filters = [normalized_type] if normalized_type else scoped
+        try:
+            facts = await crud.blackboard_fact.list_by_scan(
+                session=session,
+                scan_id=scan_id,
+                limit=max(50, int(limit) * 6),
+                entity_types=entity_filters,
+            )
+        except Exception as e:
+            text = str(e).lower()
+            if "no such table" in text and "blackboard" in text:
+                from kodiak.database.engine import init_db
+
+                await init_db()
+                facts = await crud.blackboard_fact.list_by_scan(
+                    session=session,
+                    scan_id=scan_id,
+                    limit=max(50, int(limit) * 6),
+                    entity_types=entity_filters,
+                )
+            else:
+                raise
+        sorted_facts = self._sort_facts(facts)
+        needle = self._query_needle(keyword=keyword, target=target)
+        rows: List[Dict[str, Any]] = []
+        for fact in sorted_facts:
+            canonical = fact.canonical or {}
+            if needle:
+                blob = f"{fact.entity_key} {json.dumps(canonical, sort_keys=True, default=str)}".lower()
+                if needle not in blob:
+                    continue
+            rows.append(
+                {
+                    "entity_type": fact.entity_type,
+                    "entity_key": fact.entity_key,
+                    "confidence": str(fact.confidence or "medium").lower(),
+                    "verification_status": str(fact.verification_status or "unverified").lower(),
+                    "canonical": canonical,
+                    "updated_at": fact.updated_at.isoformat() if getattr(fact, "updated_at", None) else None,
+                }
+            )
+            if len(rows) >= max(1, int(limit)):
+                break
+        return rows
+
+    async def query_edges(
+        self,
+        session: Any,
+        scan_id: UUID,
+        entity_key: Optional[str] = None,
+        relation: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        if not settings.blackboard_enabled:
+            return []
+        rows: List[Dict[str, Any]] = []
+        rel_needle = str(relation or "").strip().lower()
+        key_needle = str(entity_key or "").strip().lower()
+        try:
+            edges = await crud.blackboard_edge.list_by_scan(session=session, scan_id=scan_id, limit=max(60, limit * 4))
+        except Exception as e:
+            text = str(e).lower()
+            if "no such table" in text and "blackboard" in text:
+                from kodiak.database.engine import init_db
+
+                await init_db()
+                edges = await crud.blackboard_edge.list_by_scan(
+                    session=session,
+                    scan_id=scan_id,
+                    limit=max(60, limit * 4),
+                )
+            else:
+                raise
+        for edge in edges:
+            if rel_needle and rel_needle not in str(edge.relation or "").lower():
+                continue
+            if key_needle:
+                src = f"{edge.src_type}:{edge.src_key}".lower()
+                dst = f"{edge.dst_type}:{edge.dst_key}".lower()
+                if key_needle not in src and key_needle not in dst:
+                    continue
+            rows.append(
+                {
+                    "src_type": edge.src_type,
+                    "src_key": edge.src_key,
+                    "relation": edge.relation,
+                    "dst_type": edge.dst_type,
+                    "dst_key": edge.dst_key,
+                    "confidence": str(edge.confidence or "medium").lower(),
+                    "updated_at": edge.updated_at.isoformat() if getattr(edge, "updated_at", None) else None,
+                }
+            )
+            if len(rows) >= max(1, int(limit)):
+                break
+        return rows
+
+    async def query_events(
+        self,
+        session: Any,
+        scan_id: UUID,
+        entity_type: Optional[str] = None,
+        entity_key: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        if not settings.blackboard_enabled:
+            return []
+        try:
+            if entity_type and entity_key:
+                events = await crud.blackboard_event.list_by_entity(
+                    session=session,
+                    scan_id=scan_id,
+                    entity_type=normalize_entity_type(entity_type),
+                    entity_key=normalize_entity_key(entity_key, default_prefix=normalize_entity_type(entity_type)),
+                    limit=max(20, int(limit)),
+                )
+            else:
+                events = await crud.blackboard_event.list_by_scan(
+                    session=session,
+                    scan_id=scan_id,
+                    limit=max(40, int(limit) * 2),
+                )
+        except Exception as e:
+            text = str(e).lower()
+            if "no such table" in text and "blackboard" in text:
+                from kodiak.database.engine import init_db
+
+                await init_db()
+                if entity_type and entity_key:
+                    events = await crud.blackboard_event.list_by_entity(
+                        session=session,
+                        scan_id=scan_id,
+                        entity_type=normalize_entity_type(entity_type),
+                        entity_key=normalize_entity_key(entity_key, default_prefix=normalize_entity_type(entity_type)),
+                        limit=max(20, int(limit)),
+                    )
+                else:
+                    events = await crud.blackboard_event.list_by_scan(
+                        session=session,
+                        scan_id=scan_id,
+                        limit=max(40, int(limit) * 2),
+                    )
+            else:
+                raise
+        rows: List[Dict[str, Any]] = []
+        for event in events[: max(1, int(limit))]:
+            if entity_type and not entity_key and event.entity_type != normalize_entity_type(entity_type):
+                continue
+            rows.append(
+                {
+                    "agent_id": event.agent_id,
+                    "event_type": event.event_type,
+                    "entity_type": event.entity_type,
+                    "entity_key": event.entity_key,
+                    "status": event.status,
+                    "confidence": str(event.confidence or "medium").lower(),
+                    "payload": event.payload or {},
+                    "created_at": event.created_at.isoformat() if getattr(event, "created_at", None) else None,
+                }
+            )
+        return rows
+
+    async def query_verification_queue(
+        self,
+        session: Any,
+        scan_id: UUID,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        if not settings.blackboard_enabled:
+            return []
+        try:
+            items = await crud.verification_queue.list_pending_by_scan(
+                session=session,
+                scan_id=scan_id,
+                limit=max(20, int(limit) * 3),
+            )
+        except Exception as e:
+            text = str(e).lower()
+            if "no such table" in text and ("verificationqueue" in text or "blackboard" in text):
+                from kodiak.database.engine import init_db
+
+                await init_db()
+                items = await crud.verification_queue.list_pending_by_scan(
+                    session=session,
+                    scan_id=scan_id,
+                    limit=max(20, int(limit) * 3),
+                )
+            else:
+                raise
+        rows: List[Dict[str, Any]] = []
+        for item in items[: max(1, int(limit))]:
+            rows.append(
+                {
+                    "id": str(item.id),
+                    "entity_type": item.entity_type,
+                    "entity_key": item.entity_key,
+                    "reason": item.reason,
+                    "requested_by_agent": item.requested_by_agent,
+                    "status": str(item.status),
+                    "created_at": item.created_at.isoformat() if getattr(item, "created_at", None) else None,
+                }
+            )
+        return rows
+
+    async def resolve_verification_item(
+        self,
+        session: Any,
+        item_id: UUID,
+        status: str = "resolved",
+    ) -> Optional[Dict[str, Any]]:
+        normalized = str(status or "resolved").strip().lower()
+        resolved_status = (
+            VerificationQueueStatus.IGNORED if normalized == "ignored" else VerificationQueueStatus.RESOLVED
+        )
+        item = await crud.verification_queue.resolve(session=session, item_id=item_id, status=resolved_status)
+        if not item:
+            return None
+        return {
+            "id": str(item.id),
+            "status": str(item.status),
+            "resolved_at": item.resolved_at.isoformat() if item.resolved_at else None,
+        }
+
     async def build_prompt_context(
         self,
         session: Any,
         scan_id: UUID,
         role: str,
         target: Optional[str] = None,
-        limit: int = 30,
+        limit: int = 10,
+        max_chars: int = 2000,
     ) -> str:
         if not settings.blackboard_enabled or not session or not scan_id:
             return ""
 
         scoped_entity_types = role_scoped_entity_types(role)
-        safe_limit = max(5, int(limit))
+        safe_limit = max(1, min(50, int(limit)))
         try:
             facts = await crud.blackboard_fact.list_by_scan(
                 session=session,
@@ -220,7 +533,7 @@ class BlackboardService:
                 logger.warning(f"Failed to build blackboard context for scan {scan_id}: {e}")
                 return ""
 
-        prioritized_facts = self._prioritize_facts(facts, target=target)
+        prioritized_facts = self._sort_facts(self._prioritize_facts(facts, target=target))
         execution_ledger = [fact for fact in prioritized_facts if fact.entity_type == "task"]
         canonical_facts = [fact for fact in prioritized_facts if fact.entity_type != "task"]
         lines: List[str] = ["BLACKBOARD FACTS (shared canonical state):"]
@@ -235,7 +548,7 @@ class BlackboardService:
 
         if execution_ledger:
             lines.append("PEER STRATEGIES & EXECUTION OUTCOMES:")
-            for fact in execution_ledger[: min(safe_limit, 12)]:
+            for fact in execution_ledger[: min(5, safe_limit)]:
                 payload = fact.canonical or {}
                 status = str(payload.get("status") or "unknown").lower()
                 tool = str(payload.get("tool") or "tool")
@@ -252,10 +565,10 @@ class BlackboardService:
                     line += f" next={next_step}"
                 lines.append(line)
 
-        if any(et == "attack_path_edge" for et in scoped_entity_types) or role in {"attacker", "analyst", "reporter"}:
+        if any(et == "attack_path_edge" for et in scoped_entity_types) or role in {"attacker", "analyst", "reporter", "verifier"}:
             if edges:
                 lines.append("BLACKBOARD EDGES (attack-path graph):")
-                for edge in edges[: min(safe_limit, 15)]:
+                for edge in edges[: min(5, safe_limit)]:
                     confidence = str(edge.confidence or "medium").lower()
                     lines.append(
                         f"- [{confidence}] {edge.src_type}:{edge.src_key} -[{edge.relation}]-> {edge.dst_type}:{edge.dst_key}"
@@ -263,11 +576,10 @@ class BlackboardService:
 
         if pending:
             lines.append("PENDING VERIFICATION:")
-            for item in pending[: min(10, safe_limit)]:
+            for item in pending[: min(5, safe_limit)]:
                 reason = self._trim_text(item.reason, 120)
                 lines.append(f"- {item.entity_type} {item.entity_key} reason={reason}")
-
-        return "\n".join(lines)
+        return self._truncate_context("\n".join(lines), max_chars=max_chars)
 
     async def _upsert_fact_from_event(
         self,
@@ -331,6 +643,12 @@ class BlackboardService:
         else:
             if str(event.status).lower() == "verified":
                 existing.verification_status = VerificationStatus.VERIFIED
+                await self._resolve_pending_verification(
+                    session=session,
+                    scan_id=scan_id,
+                    entity_type=existing.entity_type,
+                    entity_key=existing.entity_key,
+                )
 
         return await crud.blackboard_fact.save(session, existing)
 
@@ -410,6 +728,26 @@ class BlackboardService:
             status=VerificationQueueStatus.PENDING,
         )
         return await crud.verification_queue.create(session, item)
+
+    async def _resolve_pending_verification(
+        self,
+        session: Any,
+        scan_id: UUID,
+        entity_type: str,
+        entity_key: str,
+    ) -> None:
+        pending = await crud.verification_queue.find_pending(
+            session=session,
+            scan_id=scan_id,
+            entity_type=entity_type,
+            entity_key=entity_key,
+        )
+        if pending:
+            await crud.verification_queue.resolve(
+                session=session,
+                item_id=pending.id,
+                status=VerificationQueueStatus.RESOLVED,
+            )
 
     def _derive_events_for_tool(
         self,
@@ -646,6 +984,33 @@ class BlackboardService:
         )
         return events
 
+    def _event_type_for_manual_fact(self, entity_type: str, status: str) -> str:
+        verified = str(status or "").strip().lower() == "verified"
+        if entity_type == "host":
+            return "host_discovered"
+        if entity_type in {"service", "tech"}:
+            return "service_fingerprinted"
+        if entity_type == "endpoint":
+            return "endpoint_discovered"
+        if entity_type == "credential":
+            return "credential_validated" if verified else "credential_found"
+        if entity_type == "vulnerability":
+            return "vulnerability_validated" if verified else "vulnerability_found"
+        return "tool_execution"
+
+    def _validate_manual_payload(self, entity_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if entity_type not in ENTITY_TYPES:
+            raise ValueError(f"Unsupported entity_type '{entity_type}'")
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be an object")
+        source = str(payload.get("source_tool") or payload.get("source") or "").strip()
+        if not source:
+            raise ValueError("payload must include source_tool (or source)")
+        encoded = json.dumps(payload, sort_keys=True, default=str)
+        if len(encoded) > 4096:
+            raise ValueError("payload too large (max 4096 chars serialized)")
+        return payload
+
     def _prioritize_facts(self, facts: List[BlackboardFact], target: Optional[str]) -> List[BlackboardFact]:
         if not target:
             return facts
@@ -659,6 +1024,39 @@ class BlackboardService:
             else:
                 low.append(fact)
         return high + low
+
+    def _sort_facts(self, facts: List[BlackboardFact]) -> List[BlackboardFact]:
+        def score(fact: BlackboardFact) -> Tuple[int, int, float]:
+            verification = str(getattr(fact, "verification_status", "unverified")).lower()
+            verification_score = 2 if verification == "verified" else (1 if verification == "unverified" else 0)
+            confidence_score = CONFIDENCE_RANK.get(str(getattr(fact, "confidence", "medium")).lower(), 2)
+            updated = getattr(fact, "updated_at", None)
+            if hasattr(updated, "timestamp"):
+                recency = updated.timestamp()
+            elif isinstance(updated, (int, float)):
+                recency = float(updated)
+            else:
+                recency = 0.0
+            return verification_score, confidence_score, recency
+
+        return sorted(facts, key=score, reverse=True)
+
+    def _query_needle(self, keyword: Optional[str], target: Optional[str]) -> str:
+        for value in (keyword, target):
+            token = str(value or "").strip().lower()
+            if token:
+                return token
+        return ""
+
+    def _truncate_context(self, text: str, max_chars: int) -> str:
+        if max_chars <= 0:
+            return text
+        if len(text) <= max_chars:
+            return text
+        clipped = text[: max(0, max_chars - 3)]
+        if "\n" in clipped:
+            clipped = clipped.rsplit("\n", 1)[0]
+        return clipped + "..."
 
     def _extract_host(self, value: Optional[str]) -> str:
         if not value:

@@ -89,7 +89,8 @@ class KodiakSettings(BaseSettings):
     memory_recent_in_prompt: int = Field(default=10, alias="KODIAK_MEMORY_RECENT")
     memory_output_chars: int = Field(default=1500, alias="KODIAK_MEMORY_OUTPUT_CHARS")
     blackboard_enabled: bool = Field(default=True, alias="KODIAK_BLACKBOARD_ENABLED")
-    blackboard_context_limit: int = Field(default=30, alias="KODIAK_BLACKBOARD_CONTEXT_LIMIT")
+    blackboard_context_limit: int = Field(default=10, alias="KODIAK_BLACKBOARD_CONTEXT_LIMIT")
+    blackboard_context_max_chars: int = Field(default=2000, alias="KODIAK_BLACKBOARD_CONTEXT_MAX_CHARS")
     report_output_path: str = Field(default=str(Path.home() / ".kodiak" / "reports"), alias="KODIAK_REPORT_PATH")
     
     # Toolbox Container Configuration

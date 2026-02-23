@@ -41,6 +41,14 @@ class ToolInventory:
         from kodiak.core.tools.definitions.python_runtime import (
             PythonStartTool, PythonExecuteTool, PythonHistoryTool, PythonStopTool
         )
+        from kodiak.core.tools.definitions.blackboard import (
+            BlackboardQueryFactsTool,
+            BlackboardQueryEdgesTool,
+            BlackboardQueryEventsTool,
+            BlackboardQueryVerificationQueueTool,
+            BlackboardPublishFactTool,
+            BlackboardPublishEdgeTool,
+        )
         from kodiak.core.tools.definitions.complete_scan import CompleteScanTool
 
         # Register all tools
@@ -75,6 +83,14 @@ class ToolInventory:
         self.register(PythonExecuteTool())
         self.register(PythonHistoryTool())
         self.register(PythonStopTool())
+
+        # Register blackboard collaboration tools
+        self.register(BlackboardQueryFactsTool())
+        self.register(BlackboardQueryEdgesTool())
+        self.register(BlackboardQueryEventsTool())
+        self.register(BlackboardQueryVerificationQueueTool())
+        self.register(BlackboardPublishFactTool())
+        self.register(BlackboardPublishEdgeTool())
         
         # Register scan control tools
         self.register(CompleteScanTool())
@@ -131,6 +147,14 @@ AVAILABLE_TOOLS = {
     "python_execute": "Execute Python code in persistent session",
     "python_history": "View Python execution history",
     "python_stop": "Stop Python session",
+
+    # Blackboard Collaboration
+    "blackboard_query_facts": "Query shared blackboard facts for active scan",
+    "blackboard_query_edges": "Query shared blackboard attack-path edges",
+    "blackboard_query_events": "Query raw blackboard event provenance",
+    "blackboard_query_verification_queue": "Query pending blackboard verification conflicts",
+    "blackboard_publish_fact": "Publish analyzed finding as canonical blackboard fact",
+    "blackboard_publish_edge": "Publish attack-path relation to blackboard graph",
     
     # OSINT & Information Gathering
     "web_search": "Web search for reconnaissance",

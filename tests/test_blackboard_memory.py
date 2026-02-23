@@ -10,7 +10,7 @@ from kodiak.core.agent import KodiakAgent
 
 
 def test_role_scope_exposes_task_memory_for_primary_roles():
-    for role in ("scout", "mapper", "attacker"):
+    for role in ("scout", "mapper", "attacker", "verifier"):
         assert "task" in role_scoped_entity_types(role)
 
 
@@ -126,6 +126,59 @@ async def test_blackboard_prompt_context_includes_peer_execution_ledger(monkeypa
     assert "PEER STRATEGIES & EXECUTION OUTCOMES" in context
     assert "outcome=target_blocked_or_rate_limited" in context
     assert "why=target prestashop CVEs first" in context
+
+
+@pytest.mark.asyncio
+async def test_blackboard_prompt_context_respects_char_cap(monkeypatch):
+    service = BlackboardService()
+    long_obs = "x" * 2500
+    facts = [
+        SimpleNamespace(
+            entity_type="endpoint",
+            entity_key="endpoint:https://example.com/very/long",
+            canonical={"url": "https://example.com/very/long", "title": long_obs},
+            confidence="high",
+            verification_status="verified",
+            updated_at=1,
+        ),
+    ]
+
+    async def fake_list_facts(*args, **kwargs):
+        return facts
+
+    async def fake_list_edges(*args, **kwargs):
+        return []
+
+    async def fake_list_pending(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr("kodiak.core.blackboard.crud.blackboard_fact.list_by_scan", fake_list_facts)
+    monkeypatch.setattr("kodiak.core.blackboard.crud.blackboard_edge.list_by_scan", fake_list_edges)
+    monkeypatch.setattr("kodiak.core.blackboard.crud.verification_queue.list_pending_by_scan", fake_list_pending)
+
+    context = await service.build_prompt_context(
+        session=object(),
+        scan_id=uuid4(),
+        role="mapper",
+        target="example.com",
+        limit=10,
+        max_chars=220,
+    )
+
+    assert len(context) <= 220
+    assert context.endswith("...")
+
+
+def test_blackboard_manual_payload_validation_requires_source():
+    service = BlackboardService()
+    with pytest.raises(ValueError):
+        service._validate_manual_payload("endpoint", {"url": "https://example.com"})
+
+    ok = service._validate_manual_payload(
+        "endpoint",
+        {"url": "https://example.com", "source_tool": "httpx"},
+    )
+    assert ok["source_tool"] == "httpx"
 
 
 @pytest.mark.asyncio

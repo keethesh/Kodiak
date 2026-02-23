@@ -96,9 +96,9 @@ class BaseTool(ABC):
                 from kodiak.core.config import settings
                 configured_timeout = getattr(self, "execution_timeout", None)
                 tool_timeout = configured_timeout if configured_timeout and configured_timeout > 0 else settings.tool_timeout
-                # Convert kwargs to args dict for tool execution
-                # Only exclude internal framework parameters, keep tool parameters
-                args_dict = {k: v for k, v in kwargs.items() if k not in ['agent_id', 'scan_id']}
+                # Convert kwargs to args dict for tool execution.
+                # Keep full runtime context (agent_id/scan_id/project_id) for stateful tools.
+                args_dict = dict(kwargs)
                 result = await asyncio.wait_for(self._execute(args_dict), timeout=tool_timeout)
             except asyncio.TimeoutError:
                 return ToolResult(

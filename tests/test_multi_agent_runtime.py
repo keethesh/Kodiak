@@ -41,6 +41,11 @@ class TestScanRunnerHelpers:
         assert runner._role_for_index(1, "role_hinted") == "mapper"
         assert runner._role_for_index(5, "role_hinted") == "scout"
 
+    def test_role_strategy_assigns_verifier_when_enough_agents(self):
+        runner = self._runner()
+        assert runner._role_for_index(3, "role_hinted", total_agents=4) == "verifier"
+        assert runner._role_for_index(4, "role_hinted", total_agents=6) == "analyst"
+
     def test_role_strategy_generic(self):
         runner = self._runner()
         assert runner._role_for_index(0, "generic") == "generalist"
@@ -57,6 +62,19 @@ class TestScanRunnerHelpers:
         )
         assert "Role: scout" in goal
         assert "agent 1 of 3" in goal
+
+    def test_build_agent_goal_includes_verifier_instructions(self):
+        runner = self._runner()
+        goal = runner._build_agent_goal(
+            base_instructions="Conduct a security assessment",
+            target="https://example.com",
+            role="verifier",
+            index=3,
+            total=4,
+            role_strategy="role_hinted",
+        )
+        assert "Role: verifier" in goal
+        assert "blackboard_query_verification_queue" in goal
 
     def test_aggregate_prefers_deduped_finding_count(self):
         runner = self._runner()

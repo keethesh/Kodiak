@@ -40,6 +40,7 @@ ROLE_ENTITY_SCOPE: Dict[str, List[str]] = {
     "scout": ["host", "service", "endpoint", "tech", "task"],
     "mapper": ["endpoint", "service", "tech", "host", "task"],
     "attacker": ["vulnerability", "credential", "attack_path_edge", "service", "endpoint", "task"],
+    "verifier": ["host", "service", "endpoint", "vulnerability", "credential", "tech", "task", "attack_path_edge"],
     "analyst": ["host", "service", "endpoint", "vulnerability", "credential", "tech", "task", "attack_path_edge"],
     "reporter": ["host", "service", "endpoint", "vulnerability", "credential", "tech", "task", "attack_path_edge"],
     "generalist": ["host", "service", "endpoint", "vulnerability", "credential", "tech", "task", "attack_path_edge"],

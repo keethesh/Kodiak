@@ -181,9 +181,30 @@ class ScanRunner:
                 )
 
                 for index in range(effective_agents):
-                    role = self._role_for_index(index, role_strategy)
+                    role = self._role_for_index(index, role_strategy, effective_agents)
                     tool_inventory = ToolInventory()
                     tool_inventory.initialize_tools()
+                    agent_allowed_tools = allowed_tools
+                    if role == "verifier":
+                        verifier_tool_allowlist = {
+                            "blackboard_query_verification_queue",
+                            "blackboard_query_facts",
+                            "blackboard_query_edges",
+                            "blackboard_query_events",
+                            "blackboard_publish_fact",
+                            "blackboard_publish_edge",
+                            "httpx",
+                            "whatweb",
+                            "nmap",
+                            "nuclei",
+                            "sqlmap",
+                            "ffuf",
+                            "katana",
+                            "complete_scan",
+                        }
+                        agent_allowed_tools = [name for name in allowed_tools if name in verifier_tool_allowlist]
+                        if "complete_scan" not in agent_allowed_tools:
+                            agent_allowed_tools.append("complete_scan")
 
                     agent = KodiakAgent(
                         agent_id=f"scanner-{scan_job.id}-{index + 1}",
@@ -195,7 +216,7 @@ class ScanRunner:
                         global_tool_semaphore=global_heavy_semaphore,
                         tool_semaphores=per_tool_semaphores,
                         tool_scheduler=self._tool_scheduler,
-                        allowed_tools=allowed_tools,
+                        allowed_tools=agent_allowed_tools,
                     )
                     await agent.register_with_hive_mind()
                     self._agents.append(agent)
@@ -370,10 +391,13 @@ class ScanRunner:
         if self._agent_tasks:
             await asyncio.gather(*self._agent_tasks, return_exceptions=True)
 
-    def _role_for_index(self, index: int, role_strategy: str) -> str:
+    def _role_for_index(self, index: int, role_strategy: str, total_agents: int = 1) -> str:
         if role_strategy != "role_hinted":
             return "generalist"
-        roles = ["scout", "mapper", "attacker", "analyst", "reporter"]
+        if total_agents >= 4:
+            roles = ["scout", "mapper", "attacker", "verifier", "analyst", "reporter"]
+        else:
+            roles = ["scout", "mapper", "attacker", "analyst", "reporter"]
         return roles[index % len(roles)]
 
     async def _preflight_available_tools(self, inventory: ToolInventory) -> tuple[List[str], List[str]]:
@@ -458,9 +482,17 @@ class ScanRunner:
             "scout": "prioritize broad discovery and service enumeration",
             "mapper": "prioritize endpoint mapping and technology fingerprinting",
             "attacker": "prioritize focused vulnerability validation on high-value targets",
+            "verifier": "prioritize resolving blackboard conflicts and validating disputed evidence",
             "analyst": "prioritize triage, evidence quality, and false-positive reduction",
             "reporter": "prioritize consolidation, impact statements, and concise findings",
         }.get(role, "prioritize useful work without duplicating peers")
+        role_specific = ""
+        if role == "verifier":
+            role_specific = (
+                "- Start each iteration with blackboard_query_verification_queue.\n"
+                "- Validate one disputed fact at a time with focused tools.\n"
+                "- Publish verified updates via blackboard_publish_fact/blackboard_publish_edge.\n"
+            )
 
         return (
             "<agent_assignment>\n"
@@ -474,6 +506,7 @@ class ScanRunner:
             "- Reuse peer evidence before launching new scans.\n"
             "- Avoid repeating commands already attempted by peers unless you changed strategy.\n"
             "- If re-trying, state what changed and why.\n"
+            f"{role_specific}"
             "</coordination_rules>"
         )
 
