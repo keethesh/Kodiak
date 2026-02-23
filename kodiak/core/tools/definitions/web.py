@@ -115,8 +115,7 @@ class NucleiTool(KodiakTool):
             execution_mode = "docker"
             
             if result.exit_code != 0:
-                should_retry = self._is_tool_missing(result.stderr, "nuclei") or result.exit_code == 2
-                if should_retry:
+                if self._should_fallback_to_public_nuclei(result):
                     fallback_executor = await get_docker_executor(
                         preferred_image="projectdiscovery/nuclei:latest",
                         fallback_image="projectdiscovery/nuclei:latest",
@@ -191,6 +190,23 @@ class NucleiTool(KodiakTool):
     def _is_tool_missing(self, stderr: str, tool_name: str) -> bool:
         s = (stderr or "").lower()
         return "executable file not found" in s or (tool_name.lower() in s and "not found" in s)
+
+    def _should_fallback_to_public_nuclei(self, result: Any) -> bool:
+        """
+        Fallback only when the toolbox image likely lacks nuclei.
+        Avoid retrying on generic execution errors to prevent duplicate scans.
+        """
+        stderr = (result.stderr or "").lower()
+        stdout = (result.stdout or "").lower()
+        combined = f"{stderr}\n{stdout}"
+
+        if result.exit_code == 127:
+            return True
+        if self._is_tool_missing(stderr, "nuclei"):
+            return True
+        if "no such file or directory" in combined and "nuclei" in combined:
+            return True
+        return False
 
     def _parse_nuclei_output(self, output: str) -> List[Dict[str, Any]]:
         """Parse nuclei JSON output into structured findings"""

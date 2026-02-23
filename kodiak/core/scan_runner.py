@@ -151,17 +151,21 @@ class ScanRunner:
 
                 if settings.tool_scheduler == "queue":
                     self._tool_scheduler = ToolScheduler(queue_limit=settings.tool_queue_limit)
-                    self._tool_scheduler.register_tool("nmap", concurrency=1)
-                    self._tool_scheduler.register_tool("sqlmap", concurrency=1)
-                    self._tool_scheduler.register_tool(
-                        "nuclei", concurrency=max(1, settings.heavy_tool_parallel_limit)
-                    )
-                    self._tool_scheduler.register_tool(
-                        "ffuf", concurrency=max(1, settings.heavy_tool_parallel_limit)
-                    )
-                    self._tool_scheduler.register_tool(
-                        "katana", concurrency=max(1, settings.heavy_tool_parallel_limit)
-                    )
+                    heavy_parallel = max(1, settings.heavy_tool_parallel_limit)
+                    light_parallel = max(1, heavy_parallel * 2)
+                    scheduler_concurrency = {
+                        "nmap": 1,
+                        "sqlmap": 1,
+                        "nuclei": heavy_parallel,
+                        "ffuf": heavy_parallel,
+                        "katana": heavy_parallel,
+                        "whatweb": light_parallel,
+                        "httpx": light_parallel,
+                        "subfinder": light_parallel,
+                        "searchsploit": 1,
+                    }
+                    for tool_name, concurrency in scheduler_concurrency.items():
+                        self._tool_scheduler.register_tool(tool_name, concurrency=concurrency)
                     await self._tool_scheduler.start()
 
                 global_heavy_semaphore = asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit))
@@ -390,18 +394,18 @@ class ScanRunner:
             )
 
             probe_pairs = [f"{tool}:{self._docker_tool_map[tool]}" for tool in probe_tools]
-            script_parts = [
-                f"for pair in {' '.join(shlex.quote(pair) for pair in probe_pairs)}; do",
-                "  tool=${pair%%:*}",
-                "  bin=${pair##*:}",
-                "  if command -v \"$bin\" >/dev/null 2>&1; then",
-                "    echo \"$tool=1\"",
-                "  else",
-                "    echo \"$tool=0\"",
-                "  fi",
-                "done",
-            ]
-            command = ["/bin/bash", "-lc", " ".join(script_parts)]
+            script = (
+                f"for pair in {' '.join(shlex.quote(pair) for pair in probe_pairs)}; do "
+                "tool=${pair%%:*}; "
+                "bin=${pair##*:}; "
+                "if command -v \"$bin\" >/dev/null 2>&1; then "
+                "echo \"$tool=1\"; "
+                "else "
+                "echo \"$tool=0\"; "
+                "fi; "
+                "done"
+            )
+            command = ["/bin/bash", "-lc", script]
             result = await executor.run_command(command)
             if result.exit_code != 0:
                 logger.warning(

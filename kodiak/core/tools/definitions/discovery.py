@@ -724,6 +724,7 @@ class FfufTool(KodiakTool):
         # HARDCODED: Default wordlist path inside the Kodiak Docker container (from seclists)
         wordlist = args.get("wordlist", "/usr/share/seclists/Discovery/Web-Content/common.txt")
         method = str(args.get("method", "GET")).upper()
+        warnings: List[str] = []
 
         command = [
             "ffuf",
@@ -735,13 +736,14 @@ class FfufTool(KodiakTool):
             "-s",  # Silent mode
         ]
 
-        multi_wordlists = args.get("wordlists") or []
+        multi_wordlists = [str(w).strip() for w in (args.get("wordlists") or []) if str(w).strip()]
+        effective_wordlists: List[str] = []
         if multi_wordlists:
-            for wl in multi_wordlists:
-                wl_value = str(wl).strip()
-                if wl_value:
-                    command.extend(["-w", wl_value])
+            effective_wordlists = multi_wordlists
+            for wl in effective_wordlists:
+                command.extend(["-w", wl])
         else:
+            effective_wordlists = [wordlist]
             command.extend(["-w", wordlist])
 
         if args.get("extensions"):
@@ -756,8 +758,19 @@ class FfufTool(KodiakTool):
             command.extend(["-mr", args["match_regex"]])
         if args.get("data"):
             command.extend(["-d", args["data"]])
-        if args.get("mode"):
-            command.extend(["-mode", args["mode"]])
+        mode = str(args.get("mode") or "").strip().lower()
+        effective_mode = mode
+        if effective_mode:
+            if effective_mode not in {"sniper", "clusterbomb", "pitchfork"}:
+                warnings.append(f"Ignoring unsupported ffuf mode '{mode}'.")
+                effective_mode = ""
+            elif effective_mode in {"clusterbomb", "pitchfork"} and len(effective_wordlists) < 2:
+                warnings.append(
+                    f"Requested ffuf mode '{effective_mode}' needs multiple wordlists; downgraded to 'sniper'."
+                )
+                effective_mode = "sniper"
+        if effective_mode:
+            command.extend(["-mode", effective_mode])
         if args.get("headers"):
             command.extend(["-H", args["headers"]])
         if args.get("cookies"):
@@ -779,6 +792,10 @@ class FfufTool(KodiakTool):
             # ffuf exits non-zero when no results are found; that's not a failure
             results = self._parse_ffuf_output(result.stdout)
             summary = self._generate_ffuf_summary(url, wordlist, results)
+            if warnings:
+                summary += "\nNotes:\n"
+                for note in warnings:
+                    summary += f"  - {note}\n"
 
             return ToolResult(
                 success=True,
@@ -787,6 +804,9 @@ class FfufTool(KodiakTool):
                     "command": cmd_str,
                     "target_url": url,
                     "wordlist": wordlist,
+                    "wordlists": effective_wordlists,
+                    "mode": effective_mode or "sniper",
+                    "warnings": warnings,
                     "results": results,
                     "total_found": len(results),
                     "interesting": [r for r in results if r.get("status") in [200, 201, 301, 302, 403]],

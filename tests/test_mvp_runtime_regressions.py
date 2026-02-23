@@ -8,6 +8,7 @@ from kodiak.core.agent import KodiakAgent
 from kodiak.core.memory_central import CentralMemoryService
 from kodiak.core.tools.definitions.discovery import FfufTool
 from kodiak.core.tools.definitions.exploitation import SQLMapTool
+from kodiak.core.tools.definitions.web import NucleiTool
 from kodiak.core.tools.definitions.terminal import (
     TerminalExecuteTool,
     TerminalStartTool,
@@ -314,6 +315,97 @@ async def test_ffuf_supports_multi_wordlists_post_and_match_filters(monkeypatch)
     assert "clusterbomb" in command
     assert "-mc" in command and "302" in command
     assert "-fr" in command
+
+
+@pytest.mark.asyncio
+async def test_ffuf_downgrades_clusterbomb_when_only_single_wordlist(monkeypatch):
+    captured = {}
+
+    class FakeDockerExecutor:
+        async def run_command(self, command, cwd=None, env=None, stdin=None):
+            captured["command"] = command
+            return CommandResult(exit_code=0, stdout='{"results":[]}', stderr="")
+
+    async def fake_get_docker_executor(preferred_image=None, fallback_image=None, fallback_entrypoint=None):
+        return FakeDockerExecutor()
+
+    monkeypatch.setattr(executor_module, "get_docker_executor", fake_get_docker_executor)
+
+    tool = FfufTool()
+    result = await tool.execute(
+        url="https://example.com/FUZZ",
+        mode="clusterbomb",
+    )
+
+    assert result.success is True
+    assert result.data.get("mode") == "sniper"
+    assert any("downgraded to 'sniper'" in w for w in (result.data.get("warnings") or []))
+    command = captured["command"]
+    assert "-mode" in command
+    mode_index = command.index("-mode")
+    assert command[mode_index + 1] == "sniper"
+
+
+@pytest.mark.asyncio
+async def test_nuclei_does_not_fallback_on_generic_exit_code_two(monkeypatch):
+    calls = {"count": 0}
+
+    class FakeToolboxExecutor:
+        async def run_command(self, command, cwd=None, env=None, stdin=None):
+            calls["count"] += 1
+            return CommandResult(exit_code=2, stdout="", stderr="template parse error")
+
+    class FakeFallbackExecutor:
+        async def run_command(self, command, cwd=None, env=None, stdin=None):
+            calls["count"] += 1
+            return CommandResult(exit_code=0, stdout='{"template-id":"ok"}', stderr="")
+
+    async def fake_get_docker_executor(preferred_image=None, fallback_image=None, fallback_entrypoint=None):
+        # Should only be called once for this test
+        if calls["count"] == 0:
+            return FakeToolboxExecutor()
+        return FakeFallbackExecutor()
+
+    monkeypatch.setattr(executor_module, "get_docker_executor", fake_get_docker_executor)
+
+    tool = NucleiTool()
+    result = await tool.execute(target="https://example.com")
+
+    assert result.success is False
+    assert calls["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_nuclei_fallback_when_binary_missing(monkeypatch):
+    calls = {"count": 0}
+
+    class FakeToolboxExecutor:
+        async def run_command(self, command, cwd=None, env=None, stdin=None):
+            calls["count"] += 1
+            return CommandResult(
+                exit_code=127,
+                stdout="",
+                stderr="/bin/sh: 1: nuclei: not found",
+            )
+
+    class FakeFallbackExecutor:
+        async def run_command(self, command, cwd=None, env=None, stdin=None):
+            calls["count"] += 1
+            return CommandResult(exit_code=0, stdout='{"template-id":"detected"}', stderr="")
+
+    async def fake_get_docker_executor(preferred_image=None, fallback_image=None, fallback_entrypoint=None):
+        if "projectdiscovery/nuclei:latest" in str(preferred_image):
+            return FakeFallbackExecutor()
+        return FakeToolboxExecutor()
+
+    monkeypatch.setattr(executor_module, "get_docker_executor", fake_get_docker_executor)
+
+    tool = NucleiTool()
+    result = await tool.execute(target="https://example.com")
+
+    assert result.success is True
+    assert result.data.get("execution_mode") == "docker-fallback"
+    assert calls["count"] == 2
 
 
 def test_agent_history_content_includes_compact_tool_data():

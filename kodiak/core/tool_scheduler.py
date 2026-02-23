@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from loguru import logger
 
@@ -28,6 +28,8 @@ class ToolScheduler:
         self._queues: Dict[str, asyncio.Queue] = {}
         self._workers: Dict[str, list[asyncio.Task]] = {}
         self._running = False
+        self._inflight: Dict[Tuple[str, str], asyncio.Future] = {}
+        self._inflight_lock = asyncio.Lock()
 
     def register_tool(self, tool_name: str, concurrency: int) -> None:
         if tool_name in self._queues:
@@ -74,23 +76,60 @@ class ToolScheduler:
         self,
         tool_name: str,
         coro_factory: Callable[[], Awaitable[Any]],
+        dedupe_key: Optional[str] = None,
     ) -> Any:
         queue = self._queues.get(tool_name)
-        if queue is None:
-            return await coro_factory()
-
         loop = asyncio.get_running_loop()
-        future = loop.create_future()
+        inflight_key = (tool_name, dedupe_key) if dedupe_key else None
+        future: asyncio.Future
+
+        existing_future: Optional[asyncio.Future] = None
+        if inflight_key:
+            async with self._inflight_lock:
+                maybe = self._inflight.get(inflight_key)
+                if maybe is not None and not maybe.done():
+                    existing_future = maybe
+                else:
+                    future = loop.create_future()
+                    self._inflight[inflight_key] = future
+                    future.add_done_callback(
+                        lambda _: self._clear_inflight_if_matches(inflight_key, future)
+                    )
+                    existing_future = None
+        if existing_future is not None:
+            logger.debug(f"ToolScheduler coalesced duplicate {tool_name} call for key={dedupe_key}")
+            return await existing_future
+
+        if not inflight_key:
+            future = loop.create_future()
+
+        if queue is None:
+            try:
+                result = await coro_factory()
+                if not future.done():
+                    future.set_result(result)
+            except Exception as e:
+                if not future.done():
+                    future.set_exception(e)
+            return await future
+
         work = _ScheduledWork(future=future, coro_factory=coro_factory)
 
         try:
             queue.put_nowait(work)
         except asyncio.QueueFull as e:
+            if inflight_key is not None:
+                self._clear_inflight_if_matches(inflight_key, future)
             raise RuntimeError(
                 f"Tool queue full for {tool_name} (limit={self._queue_limit})."
             ) from e
 
         return await future
+
+    def _clear_inflight_if_matches(self, key: Tuple[str, str], future: asyncio.Future) -> None:
+        current = self._inflight.get(key)
+        if current is future:
+            self._inflight.pop(key, None)
 
     async def _worker_loop(self, tool_name: str) -> None:
         queue = self._queues[tool_name]

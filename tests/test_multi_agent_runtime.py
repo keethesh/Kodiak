@@ -148,3 +148,29 @@ class TestScanRunnerHelpers:
 
         assert set(allowed) == {"nuclei", "katana", "web_search"}
         assert missing == []
+
+    @pytest.mark.asyncio
+    async def test_preflight_probe_script_uses_safe_loop_separators(self, monkeypatch):
+        runner = self._runner()
+        captured = {}
+
+        class FakeInventory:
+            def list_tools(self):
+                return {"nuclei": "nuclei", "whatweb": "whatweb"}
+
+        class FakeExecutor:
+            async def run_command(self, command, cwd=None, env=None, stdin=None):
+                captured["command"] = command
+                return SimpleNamespace(exit_code=0, stdout="nuclei=1\nwhatweb=1\n", stderr="")
+
+        async def fake_get_docker_executor(*args, **kwargs):
+            return FakeExecutor()
+
+        monkeypatch.setattr("kodiak.core.scan_runner.get_docker_executor", fake_get_docker_executor)
+
+        allowed, missing = await runner._preflight_available_tools(FakeInventory())
+
+        assert set(allowed) == {"nuclei", "whatweb"}
+        assert missing == []
+        script = captured["command"][2]
+        assert "fi; done" in script

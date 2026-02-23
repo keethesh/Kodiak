@@ -969,7 +969,12 @@ class KodiakAgent:
 
             # Execute tool with concurrency limits for heavy scanners.
             execution_args = {**adjusted_args, "agent_id": self.agent_id, "scan_id": str(scan_id)}
-            result = await self._execute_tool_with_limits(tool_name, tool, execution_args)
+            result = await self._execute_tool_with_limits(
+                tool_name,
+                tool,
+                execution_args,
+                dedupe_key=fingerprint,
+            )
 
             if backoff_note and hasattr(result, "output") and result.output:
                 result.output = f"{backoff_note}\n\n{result.output}"
@@ -1137,11 +1142,18 @@ class KodiakAgent:
                 break
         return evidence
 
-    async def _execute_tool_with_limits(self, tool_name: str, tool: Any, execution_args: Dict[str, Any]) -> Any:
+    async def _execute_tool_with_limits(
+        self,
+        tool_name: str,
+        tool: Any,
+        execution_args: Dict[str, Any],
+        dedupe_key: Optional[str] = None,
+    ) -> Any:
         if self._tool_scheduler is not None:
             return await self._tool_scheduler.execute(
                 tool_name=tool_name,
                 coro_factory=lambda: tool.execute(**execution_args),
+                dedupe_key=dedupe_key,
             )
 
         per_tool_semaphore = self._tool_semaphores.get(tool_name)
