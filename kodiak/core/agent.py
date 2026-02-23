@@ -13,6 +13,7 @@ import litellm
 from litellm import acompletion
 
 from kodiak.core.config import settings
+from kodiak.core.blackboard import BlackboardService
 from kodiak.core.memory import InsightMemoryService
 from kodiak.core.memory_central import CentralMemoryService
 from kodiak.core.failure_policy import apply_timeout_backoff
@@ -80,7 +81,10 @@ class KodiakAgent:
         self._persisted_do_not_repeat: Dict[str, str] = {}
         self._insight_memory_service = InsightMemoryService(self.model_name)
         self._central_memory_service = CentralMemoryService()
+        self._blackboard_service = BlackboardService()
         self._central_memory_context = ""
+        self._blackboard_context = ""
+        self._scan_target: str = ""
         self._strict_dedupe_tools = {
             "nmap",
             "nuclei",
@@ -185,6 +189,7 @@ class KodiakAgent:
         """
         logger.info(f"🚀 Agent {self.agent_id} starting run for goal: {goal}")
         self.scan_id = scan_id
+        self._scan_target = target
         await self._load_persisted_insight_memory(session, scan_id)
         
         history = [
@@ -342,6 +347,20 @@ class KodiakAgent:
         try:
             # Load context from DB
             context_str = await self._load_context(self.session, self.project_id)
+            if settings.blackboard_enabled and self.session and self.scan_id:
+                self._blackboard_context = await self._blackboard_service.build_prompt_context(
+                    session=self.session,
+                    scan_id=self.scan_id,
+                    role=self.role,
+                    target=self._scan_target,
+                    limit=settings.blackboard_context_limit,
+                )
+                if self._blackboard_context:
+                    context_str = (
+                        f"{context_str}\n{self._blackboard_context}"
+                        if context_str
+                        else self._blackboard_context
+                    )
             if settings.memory_central_enabled and self.session and self.scan_id:
                 self._central_memory_context = await self._central_memory_service.build_prompt_context(
                     session=self.session,
@@ -455,6 +474,7 @@ class KodiakAgent:
             "- For page analysis, fetch once and extract headers/forms/hidden fields/tokens/cookies together.",
             "- If a tool times out, retry once with lower intensity; do not repeat unchanged calls.",
             "- If blocked/rate-limited, record as environment signal and pivot strategy.",
+            "- Read BLACKBOARD peer outcomes before retrying; if you retry, state what changed.",
             "- Keep responses concise by default.",
             "- Call complete_scan only after the objective is fully covered.",
             "</hard_constraints>",
@@ -959,6 +979,45 @@ class KodiakAgent:
         except Exception as e:
             logger.warning(f"Failed to persist central memory state for {tool_name}: {e}")
 
+    async def _persist_blackboard_tool_result(
+        self,
+        session: Any,
+        project_id: Any,
+        scan_id: Any,
+        tool_name: str,
+        target: str,
+        fingerprint: str,
+        args: Dict[str, Any],
+        result_dict: Dict[str, Any],
+        status: str,
+        outcome: str,
+        next_step: str,
+        strategy: str,
+    ) -> None:
+        if not settings.blackboard_enabled or not session or not project_id or not scan_id:
+            return
+        try:
+            await self._blackboard_service.publish_tool_result(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                agent_id=self.agent_id,
+                tool_name=tool_name,
+                target=target or "unknown",
+                args=args,
+                result=result_dict,
+                fingerprint=fingerprint,
+                execution_context={
+                    "iteration": self._current_iteration,
+                    "status": status,
+                    "outcome": outcome,
+                    "next_step": next_step,
+                    "strategy": strategy,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist blackboard memory for {tool_name}: {e}")
+
     def _trim_text(self, text: Optional[str], limit: int = 220) -> str:
         cleaned = " ".join((text or "").split()).strip()
         if len(cleaned) > limit:
@@ -1117,6 +1176,20 @@ class KodiakAgent:
                         "next_step": next_step,
                     },
                 )
+                await self._persist_blackboard_tool_result(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target_key or target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=skipped_dict,
+                    status=status,
+                    outcome=outcome,
+                    next_step=next_step,
+                    strategy=strategy,
+                )
                 if self.event_manager:
                     await self.event_manager.emit_tool_complete(tool_name, skipped, str(scan_id))
                 return skipped_dict
@@ -1157,6 +1230,20 @@ class KodiakAgent:
                         "outcome": outcome,
                         "next_step": next_step,
                     },
+                )
+                await self._persist_blackboard_tool_result(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target_key or target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=skipped_dict,
+                    status=status,
+                    outcome=outcome,
+                    next_step=next_step,
+                    strategy=strategy,
                 )
                 if self.event_manager:
                     await self.event_manager.emit_tool_complete(tool_name, skipped, str(scan_id))
@@ -1218,6 +1305,20 @@ class KodiakAgent:
                         "coalesced": True,
                         "coalesced_peer_agent_id": peer_id,
                     },
+                )
+                await self._persist_blackboard_tool_result(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target_key or target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=coalesced_dict,
+                    status=status,
+                    outcome=outcome,
+                    next_step=next_step,
+                    strategy=strategy,
                 )
                 if self.event_manager:
                     await self.event_manager.emit_tool_complete(tool_name, coalesced_result, str(scan_id))
@@ -1303,6 +1404,20 @@ class KodiakAgent:
                     "coalesced": was_coalesced,
                 },
             )
+            await self._persist_blackboard_tool_result(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target_key or target,
+                fingerprint=fingerprint,
+                args=adjusted_args,
+                result_dict=result_dict,
+                status=status,
+                outcome=outcome,
+                next_step=next_step,
+                strategy=strategy,
+            )
             
             # Emit completion
             if self.event_manager:
@@ -1355,6 +1470,20 @@ class KodiakAgent:
                     "outcome": outcome,
                     "next_step": next_step,
                 },
+            )
+            await self._persist_blackboard_tool_result(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target_key or target,
+                fingerprint=fingerprint,
+                args=args,
+                result_dict=failure_dict,
+                status=status,
+                outcome=outcome,
+                next_step=next_step,
+                strategy=strategy,
             )
             if self.event_manager:
                 await self.event_manager.emit_tool_complete(tool_name, failure, str(scan_id))

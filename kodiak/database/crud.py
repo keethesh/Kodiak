@@ -1,11 +1,25 @@
 from uuid import UUID
 from typing import Optional, List, Sequence, Dict, Any
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
 
-from kodiak.database.models import Project, ScanJob, Node, Finding, ScanStatus, Attempt, InsightMemory
+from kodiak.database.models import (
+    Project,
+    ScanJob,
+    Node,
+    Finding,
+    ScanStatus,
+    Attempt,
+    InsightMemory,
+    BlackboardEvent,
+    BlackboardFact,
+    BlackboardEdge,
+    VerificationQueue,
+    VerificationQueueStatus,
+)
 from kodiak.core.error_handling import (
     ErrorHandler, DatabaseError, handle_errors, ErrorCategory
 )
@@ -407,8 +421,332 @@ class CRUDInsightMemory:
             })
 
 
+class CRUDBlackboardEvent:
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def create(self, session: AsyncSession, event: BlackboardEvent) -> BlackboardEvent:
+        try:
+            session.add(event)
+            await session.commit()
+            await session.refresh(event)
+            return event
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("create_blackboard_event", e, {
+                "project_id": str(getattr(event, "project_id", "unknown")),
+                "scan_id": str(getattr(event, "scan_id", "unknown")),
+                "entity_type": getattr(event, "entity_type", "unknown"),
+                "entity_key": getattr(event, "entity_key", "unknown"),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_by_scan(self, session: AsyncSession, scan_id: UUID, limit: int = 100) -> List[BlackboardEvent]:
+        try:
+            statement = (
+                select(BlackboardEvent)
+                .where(BlackboardEvent.scan_id == scan_id)
+                .order_by(BlackboardEvent.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_blackboard_events_by_scan", e, {
+                "scan_id": str(scan_id),
+                "limit": limit,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_by_entity(
+        self,
+        session: AsyncSession,
+        scan_id: UUID,
+        entity_type: str,
+        entity_key: str,
+        limit: int = 50,
+    ) -> List[BlackboardEvent]:
+        try:
+            statement = (
+                select(BlackboardEvent)
+                .where(
+                    BlackboardEvent.scan_id == scan_id,
+                    BlackboardEvent.entity_type == entity_type,
+                    BlackboardEvent.entity_key == entity_key,
+                )
+                .order_by(BlackboardEvent.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_blackboard_events_by_entity", e, {
+                "scan_id": str(scan_id),
+                "entity_type": entity_type,
+                "entity_key": entity_key,
+                "limit": limit,
+            })
+
+
+class CRUDBlackboardFact:
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def create(self, session: AsyncSession, fact: BlackboardFact) -> BlackboardFact:
+        try:
+            session.add(fact)
+            await session.commit()
+            await session.refresh(fact)
+            return fact
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("create_blackboard_fact", e, {
+                "project_id": str(getattr(fact, "project_id", "unknown")),
+                "scan_id": str(getattr(fact, "scan_id", "unknown")),
+                "entity_type": getattr(fact, "entity_type", "unknown"),
+                "entity_key": getattr(fact, "entity_key", "unknown"),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_by_entity(
+        self,
+        session: AsyncSession,
+        scan_id: UUID,
+        entity_type: str,
+        entity_key: str,
+    ) -> Optional[BlackboardFact]:
+        try:
+            statement = (
+                select(BlackboardFact)
+                .where(
+                    BlackboardFact.scan_id == scan_id,
+                    BlackboardFact.entity_type == entity_type,
+                    BlackboardFact.entity_key == entity_key,
+                )
+                .order_by(BlackboardFact.updated_at.desc())
+            )
+            result = await session.execute(statement)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_blackboard_fact_by_entity", e, {
+                "scan_id": str(scan_id),
+                "entity_type": entity_type,
+                "entity_key": entity_key,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def save(self, session: AsyncSession, fact: BlackboardFact) -> BlackboardFact:
+        try:
+            session.add(fact)
+            await session.commit()
+            await session.refresh(fact)
+            return fact
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("save_blackboard_fact", e, {
+                "fact_id": str(getattr(fact, "id", "unknown")),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_by_scan(
+        self,
+        session: AsyncSession,
+        scan_id: UUID,
+        limit: int = 200,
+        entity_types: Optional[List[str]] = None,
+        verification_statuses: Optional[List[str]] = None,
+    ) -> List[BlackboardFact]:
+        try:
+            statement = select(BlackboardFact).where(BlackboardFact.scan_id == scan_id)
+            if entity_types:
+                statement = statement.where(BlackboardFact.entity_type.in_(entity_types))
+            if verification_statuses:
+                statement = statement.where(BlackboardFact.verification_status.in_(verification_statuses))
+            statement = statement.order_by(BlackboardFact.updated_at.desc()).limit(limit)
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_blackboard_facts_by_scan", e, {
+                "scan_id": str(scan_id),
+                "limit": limit,
+            })
+
+
+class CRUDBlackboardEdge:
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_by_relation(
+        self,
+        session: AsyncSession,
+        scan_id: UUID,
+        src_type: str,
+        src_key: str,
+        relation: str,
+        dst_type: str,
+        dst_key: str,
+    ) -> Optional[BlackboardEdge]:
+        try:
+            statement = (
+                select(BlackboardEdge)
+                .where(
+                    BlackboardEdge.scan_id == scan_id,
+                    BlackboardEdge.src_type == src_type,
+                    BlackboardEdge.src_key == src_key,
+                    BlackboardEdge.relation == relation,
+                    BlackboardEdge.dst_type == dst_type,
+                    BlackboardEdge.dst_key == dst_key,
+                )
+            )
+            result = await session.execute(statement)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_blackboard_edge", e, {
+                "scan_id": str(scan_id),
+                "relation": relation,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def create(self, session: AsyncSession, edge: BlackboardEdge) -> BlackboardEdge:
+        try:
+            session.add(edge)
+            await session.commit()
+            await session.refresh(edge)
+            return edge
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("create_blackboard_edge", e, {
+                "scan_id": str(getattr(edge, "scan_id", "unknown")),
+                "relation": getattr(edge, "relation", "unknown"),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def save(self, session: AsyncSession, edge: BlackboardEdge) -> BlackboardEdge:
+        try:
+            session.add(edge)
+            await session.commit()
+            await session.refresh(edge)
+            return edge
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("save_blackboard_edge", e, {
+                "edge_id": str(getattr(edge, "id", "unknown")),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_by_scan(self, session: AsyncSession, scan_id: UUID, limit: int = 200) -> List[BlackboardEdge]:
+        try:
+            statement = (
+                select(BlackboardEdge)
+                .where(BlackboardEdge.scan_id == scan_id)
+                .order_by(BlackboardEdge.updated_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_blackboard_edges_by_scan", e, {
+                "scan_id": str(scan_id),
+                "limit": limit,
+            })
+
+
+class CRUDVerificationQueue:
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def create(self, session: AsyncSession, item: VerificationQueue) -> VerificationQueue:
+        try:
+            session.add(item)
+            await session.commit()
+            await session.refresh(item)
+            return item
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("create_verification_queue_item", e, {
+                "scan_id": str(getattr(item, "scan_id", "unknown")),
+                "entity_type": getattr(item, "entity_type", "unknown"),
+                "entity_key": getattr(item, "entity_key", "unknown"),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def find_pending(
+        self,
+        session: AsyncSession,
+        scan_id: UUID,
+        entity_type: str,
+        entity_key: str,
+    ) -> Optional[VerificationQueue]:
+        try:
+            statement = (
+                select(VerificationQueue)
+                .where(
+                    VerificationQueue.scan_id == scan_id,
+                    VerificationQueue.entity_type == entity_type,
+                    VerificationQueue.entity_key == entity_key,
+                    VerificationQueue.status == VerificationQueueStatus.PENDING,
+                )
+                .order_by(VerificationQueue.created_at.desc())
+            )
+            result = await session.execute(statement)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("find_pending_verification_item", e, {
+                "scan_id": str(scan_id),
+                "entity_type": entity_type,
+                "entity_key": entity_key,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_pending_by_scan(
+        self,
+        session: AsyncSession,
+        scan_id: UUID,
+        limit: int = 50,
+    ) -> List[VerificationQueue]:
+        try:
+            statement = (
+                select(VerificationQueue)
+                .where(
+                    VerificationQueue.scan_id == scan_id,
+                    VerificationQueue.status == VerificationQueueStatus.PENDING,
+                )
+                .order_by(VerificationQueue.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_pending_verification_items", e, {
+                "scan_id": str(scan_id),
+                "limit": limit,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def resolve(
+        self,
+        session: AsyncSession,
+        item_id: UUID,
+        status: VerificationQueueStatus = VerificationQueueStatus.RESOLVED,
+    ) -> Optional[VerificationQueue]:
+        try:
+            statement = select(VerificationQueue).where(VerificationQueue.id == item_id)
+            result = await session.execute(statement)
+            item = result.scalar_one_or_none()
+            if not item:
+                return None
+            item.status = status
+            item.resolved_at = datetime.now(timezone.utc)
+            session.add(item)
+            await session.commit()
+            await session.refresh(item)
+            return item
+        except SQLAlchemyError as e:
+            await session.rollback()
+            raise ErrorHandler.handle_database_error("resolve_verification_item", e, {
+                "item_id": str(item_id),
+                "status": str(status),
+            })
+
+
 project = CRUDProject()
 scan_job = CRUDScanJob()
 node = CRUDNode()
 attempt = CRUDAttempt()
 insight_memory = CRUDInsightMemory()
+blackboard_event = CRUDBlackboardEvent()
+blackboard_fact = CRUDBlackboardFact()
+blackboard_edge = CRUDBlackboardEdge()
+verification_queue = CRUDVerificationQueue()
