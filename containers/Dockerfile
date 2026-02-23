@@ -61,6 +61,7 @@ RUN apt-get install -y --no-install-recommends \
 RUN apt-get install -y --no-install-recommends \
     libcap2-bin nmap ncat ndiff masscan \
     sqlmap nuclei subfinder naabu ffuf nikto wapiti whatweb wafw00f \
+    katana commix \
     exploitdb seclists && \
     setcap -r /usr/bin/nmap || true && \
     setcap -r /usr/lib/nmap/nmap || true
@@ -125,6 +126,12 @@ RUN echo 'export PATH="/root/go/bin:/root/.local/bin:/root/.npm-global/bin:$PATH
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Fail fast if required toolbox binaries are missing.
+RUN set -eux; \
+    for tool in nuclei searchsploit katana commix; do \
+        command -v "$tool" >/dev/null 2>&1; \
+    done
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["/bin/bash"]

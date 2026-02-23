@@ -537,7 +537,7 @@ def doctor():
         console.print(f"[yellow]Try: docker pull {settings.toolbox_image}[/yellow]")
         return
 
-    for tool_name in ["nuclei", "searchsploit", "katana"]:
+    for tool_name in ["nuclei", "searchsploit", "katana", "commix"]:
         tool_ok, tool_detail = run_check(
             ["docker", "run", "--rm", "--entrypoint", "/bin/sh", settings.toolbox_image, "-lc", f"command -v {tool_name}"],
             timeout=30,

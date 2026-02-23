@@ -418,15 +418,16 @@ class ScanRunner:
             )
 
             probe_pairs = [f"{tool}:{self._docker_tool_map[tool]}" for tool in probe_tools]
+            probe_wordlist = " ".join(shlex.quote(pair) for pair in probe_pairs)
             script = (
-                f"for pair in {' '.join(shlex.quote(pair) for pair in probe_pairs)}; do "
-                "tool=${pair%%:*}; "
-                "bin=${pair##*:}; "
-                "if command -v \"$bin\" >/dev/null 2>&1; then "
-                "echo \"$tool=1\"; "
-                "else "
-                "echo \"$tool=0\"; "
-                "fi; "
+                f"for pair in {probe_wordlist}; do\n"
+                "  tool=${pair%%:*}\n"
+                "  bin=${pair##*:}\n"
+                "  if command -v \"$bin\" >/dev/null 2>&1; then\n"
+                "    echo \"$tool=1\"\n"
+                "  else\n"
+                "    echo \"$tool=0\"\n"
+                "  fi\n"
                 "done"
             )
             command = ["/bin/bash", "-lc", script]
