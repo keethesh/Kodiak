@@ -63,8 +63,7 @@ RUN apt-get install -y --no-install-recommends \
 # Install Scanner tools & libcap
 RUN apt-get install -y --no-install-recommends \
     libcap2-bin nmap ncat ndiff masscan \
-    sqlmap nuclei subfinder naabu ffuf nikto wapiti whatweb wafw00f \
-    katana commix \
+    sqlmap nikto wapiti whatweb \
     exploitdb seclists && \
     (setcap -r /usr/bin/nmap || true) && \
     (setcap -r /usr/lib/nmap/nmap || true)
