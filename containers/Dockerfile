@@ -66,8 +66,8 @@ RUN apt-get install -y --no-install-recommends \
     sqlmap nuclei subfinder naabu ffuf nikto wapiti whatweb wafw00f \
     katana commix \
     exploitdb seclists && \
-    setcap -r /usr/bin/nmap || true && \
-    setcap -r /usr/lib/nmap/nmap || true
+    (setcap -r /usr/bin/nmap || true) && \
+    (setcap -r /usr/lib/nmap/nmap || true)
 
 # Install Playwright browser dependencies
 RUN apt-get install -y --no-install-recommends \
@@ -146,14 +146,29 @@ RUN set -eux; \
     if ! command -v ffuf >/dev/null 2>&1 && [ -x /root/go/bin/ffuf ]; then \
         ln -sf /root/go/bin/ffuf /usr/local/bin/ffuf; \
     fi; \
-    if ! command -v sqlmap >/dev/null 2>&1 && [ -x /usr/share/sqlmap/sqlmap.py ]; then \
-        ln -sf /usr/share/sqlmap/sqlmap.py /usr/local/bin/sqlmap; \
+    if ! command -v sqlmap >/dev/null 2>&1; then \
+        for candidate in /usr/bin/sqlmap /usr/share/sqlmap/sqlmap.py; do \
+            if [ -x "$candidate" ]; then \
+                ln -sf "$candidate" /usr/local/bin/sqlmap; \
+                break; \
+            fi; \
+        done; \
     fi; \
-    if ! command -v whatweb >/dev/null 2>&1 && [ -x /usr/bin/whatweb ]; then \
-        ln -sf /usr/bin/whatweb /usr/local/bin/whatweb; \
+    if ! command -v whatweb >/dev/null 2>&1; then \
+        for candidate in /usr/bin/whatweb /usr/share/whatweb/whatweb; do \
+            if [ -x "$candidate" ]; then \
+                ln -sf "$candidate" /usr/local/bin/whatweb; \
+                break; \
+            fi; \
+        done; \
     fi; \
-    if ! command -v nmap >/dev/null 2>&1 && [ -x /usr/bin/nmap ]; then \
-        ln -sf /usr/bin/nmap /usr/local/bin/nmap; \
+    if ! command -v nmap >/dev/null 2>&1; then \
+        for candidate in /usr/bin/nmap /usr/lib/nmap/nmap; do \
+            if [ -x "$candidate" ]; then \
+                ln -sf "$candidate" /usr/local/bin/nmap; \
+                break; \
+            fi; \
+        done; \
     fi; \
     # Install SearchSploit using the official git method from upstream docs when Kali package pathing is unavailable.
     if ! command -v searchsploit >/dev/null 2>&1; then \
