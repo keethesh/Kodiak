@@ -224,7 +224,21 @@ def scan(
             try:
                 async for event in interface.subscribe_events(run_id):
                     payload = event.payload or {}
-                    if event.type == "tool_start":
+                    if event.type == "agent_thinking":
+                        console.print(
+                            f"[blue][agent:thinking][/blue] {payload.get('agent_id', 'unknown')} -> "
+                            f"{payload.get('message', 'Thinking...')}"
+                        )
+                    elif event.type == "agent_thought":
+                        thought = str(payload.get("thought", "") or "").strip()
+                        if thought:
+                            if len(thought) > 1200:
+                                thought = thought[:1197] + "..."
+                            console.print(
+                                f"[blue][agent:thought][/blue] {payload.get('agent_id', 'unknown')}\n"
+                                f"{thought}"
+                            )
+                    elif event.type == "tool_start":
                         console.print(
                             f"[cyan][tool:start][/cyan] {payload.get('tool_name', 'unknown')} -> {payload.get('target', '')}"
                         )

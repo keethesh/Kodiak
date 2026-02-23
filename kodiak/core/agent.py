@@ -260,6 +260,17 @@ class KodiakAgent:
                 # Add assistant message with tool calls to history.
                 sanitized_tool_calls = [self._tool_call_to_dict(tc) for tc in response.tool_calls]
 
+                # Gemini can return tool calls without textual reasoning.
+                # Emit a compact fallback thought so verbose CLI users can still see intent.
+                if not str(response.content or "").strip() and sanitized_tool_calls and self.event_manager:
+                    fallback_thought = self._build_tool_plan_preview(sanitized_tool_calls[0])
+                    if fallback_thought:
+                        await self.event_manager.emit_agent_thought(
+                            agent_id=self.agent_id,
+                            thought=fallback_thought,
+                            scan_id=str(self.project_id) if self.project_id else None
+                        )
+
                 history.append({
                     "role": "assistant",
                     "content": response.content,
@@ -759,6 +770,25 @@ class KodiakAgent:
                 "arguments": str(getattr(function, "arguments", "{}")),
             },
         }
+
+    def _build_tool_plan_preview(self, tool_call: Dict[str, Any]) -> str:
+        function = tool_call.get("function") or {}
+        tool_name = str(function.get("name") or "").strip()
+        if not tool_name:
+            return ""
+        raw_args = function.get("arguments")
+        args: Dict[str, Any] = {}
+        if isinstance(raw_args, str):
+            try:
+                parsed = json.loads(raw_args)
+                if isinstance(parsed, dict):
+                    args = parsed
+            except json.JSONDecodeError:
+                args = {}
+        elif isinstance(raw_args, dict):
+            args = raw_args
+        summary = self._build_tool_summary(tool_name, args)
+        return f"Planned action: {tool_name} ({summary})."
 
     def _build_runtime_memory_context(self) -> str:
         """Build compact run-state memory to reduce repeated tool calls."""
