@@ -17,6 +17,12 @@ class _ScheduledWork:
     coro_factory: Callable[[], Awaitable[Any]]
 
 
+@dataclass
+class ScheduledExecutionResult:
+    result: Any
+    coalesced: bool = False
+
+
 class ToolScheduler:
     """
     Queue-based scheduler with per-tool worker pools.
@@ -77,7 +83,7 @@ class ToolScheduler:
         tool_name: str,
         coro_factory: Callable[[], Awaitable[Any]],
         dedupe_key: Optional[str] = None,
-    ) -> Any:
+    ) -> ScheduledExecutionResult:
         queue = self._queues.get(tool_name)
         loop = asyncio.get_running_loop()
         inflight_key = (tool_name, dedupe_key) if dedupe_key else None
@@ -98,7 +104,7 @@ class ToolScheduler:
                     existing_future = None
         if existing_future is not None:
             logger.debug(f"ToolScheduler coalesced duplicate {tool_name} call for key={dedupe_key}")
-            return await existing_future
+            return ScheduledExecutionResult(result=await existing_future, coalesced=True)
 
         if not inflight_key:
             future = loop.create_future()
@@ -111,7 +117,7 @@ class ToolScheduler:
             except Exception as e:
                 if not future.done():
                     future.set_exception(e)
-            return await future
+            return ScheduledExecutionResult(result=await future, coalesced=False)
 
         work = _ScheduledWork(future=future, coro_factory=coro_factory)
 
@@ -124,7 +130,7 @@ class ToolScheduler:
                 f"Tool queue full for {tool_name} (limit={self._queue_limit})."
             ) from e
 
-        return await future
+        return ScheduledExecutionResult(result=await future, coalesced=False)
 
     def _clear_inflight_if_matches(self, key: Tuple[str, str], future: asyncio.Future) -> None:
         current = self._inflight.get(key)

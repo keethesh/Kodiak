@@ -463,10 +463,18 @@ class ScanRunner:
         }.get(role, "prioritize useful work without duplicating peers")
 
         return (
-            f"{base_goal}\n\n"
+            "<agent_assignment>\n"
             f"You are agent {index + 1} of {total}.\n"
             f"Role: {role}. Focus: {role_focus}.\n"
-            "Avoid repeating commands already attempted by peers unless you change strategy."
+            "</agent_assignment>\n"
+            "<mission>\n"
+            f"{base_goal}\n"
+            "</mission>\n"
+            "<coordination_rules>\n"
+            "- Reuse peer evidence before launching new scans.\n"
+            "- Avoid repeating commands already attempted by peers unless you changed strategy.\n"
+            "- If re-trying, state what changed and why.\n"
+            "</coordination_rules>"
         )
 
     def _aggregate_agent_results(

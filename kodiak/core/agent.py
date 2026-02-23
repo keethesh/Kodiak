@@ -190,7 +190,17 @@ class KodiakAgent:
         history = [
             {
                 "role": "user", 
-                "content": f"Goal: {goal}\nTarget: {target}\n\nBegin your security scan. Use tools systematically. When you have achieved your objective, call the complete_scan tool with a summary of your findings."
+                "content": (
+                    "<scan_request>\n"
+                    f"<goal>{goal}</goal>\n"
+                    f"<target>{target}</target>\n"
+                    "<requirements>\n"
+                    "- Use tools systematically.\n"
+                    "- Reuse prior evidence before retrying tools.\n"
+                    "- When objective is met, call complete_scan with concise findings.\n"
+                    "</requirements>\n"
+                    "</scan_request>"
+                )
             }
         ]
         
@@ -208,12 +218,23 @@ class KodiakAgent:
                     remaining = max_iterations - iterations
                     history.append({
                         "role": "user",
-                        "content": f"URGENT: You are approaching the maximum iteration limit. Current: {iterations}/{max_iterations} ({remaining} iterations remaining). Please prioritize completing your required task(s) and calling the `complete_scan` tool as soon as possible."
+                        "content": (
+                            "<iteration_warning>\n"
+                            f"Current: {iterations}/{max_iterations}.\n"
+                            f"Remaining: {remaining} iterations.\n"
+                            "Prioritize completion and call complete_scan as soon as the objective is satisfied.\n"
+                            "</iteration_warning>"
+                        )
                     })
                 elif iterations == max_iterations - 3:
                     history.append({
                         "role": "user",
-                        "content": "CRITICAL: You have only 3 iterations left! Your next message MUST be the tool call to the `complete_scan` tool to finalize the report. No other actions should be taken except finishing your work to prevent an abnormal termination."
+                        "content": (
+                            "<final_iteration_warning>\n"
+                            "Only 3 iterations remain.\n"
+                            "Finish immediately: produce final evidence and call complete_scan.\n"
+                            "</final_iteration_warning>"
+                        )
                     })
             # ------------------------------------
             
@@ -269,6 +290,7 @@ class KodiakAgent:
                     result = await self.act(
                         tool_name=tool_name,
                         args=args,
+                        thought=thought,
                         session=session,
                         project_id=project_id,
                         scan_id=scan_id
@@ -298,7 +320,12 @@ class KodiakAgent:
                 # Nudge the agent to continue if it hasn't finished
                 history.append({
                     "role": "user",
-                    "content": "Continue your scan. If you are finished, call the complete_scan tool."
+                    "content": (
+                        "<next_step>\n"
+                        "Continue scan.\n"
+                        "If objective is met, call complete_scan now.\n"
+                        "</next_step>"
+                    )
                 })
                 
         return AgentResult(
@@ -320,6 +347,7 @@ class KodiakAgent:
                     session=self.session,
                     scan_id=self.scan_id,
                     limit=settings.memory_recent_in_prompt,
+                    agent_id=self.agent_id,
                 )
             runtime_memory = self._build_runtime_memory_context()
             if runtime_memory:
@@ -352,13 +380,19 @@ class KodiakAgent:
             if len(messages) > 0 and messages[-1].get("role") != "user":
                 messages.append({
                     "role": "user",
-                    "content": "Please explain your reasoning and plan step-by-step before calling any tools."
+                    "content": (
+                        "Based on the context above, provide a concise CONTEXT/THEORY/PLAN explanation before any tool call. "
+                        "Then execute the best next action."
+                    )
                 })
             elif len(messages) > 0 and messages[-1].get("role") == "user":
                 # Inject it into the existing user message if it's not empty
                 orig_content = messages[-1].get("content", "")
-                if orig_content and "explain your reasoning" not in orig_content.lower():
-                    messages[-1]["content"] = orig_content + "\n\n(Remember to explain your reasoning step-by-step before calling any tools.)"
+                if orig_content and "context/theory/plan" not in orig_content.lower():
+                    messages[-1]["content"] = (
+                        orig_content
+                        + "\n\n(Based on the context above, include a concise CONTEXT/THEORY/PLAN before any tool call.)"
+                    )
                     
             # Get LLM configuration
             provider = llm.infer_provider_from_model(self.model_name)
@@ -398,46 +432,62 @@ class KodiakAgent:
         if custom_prompt:
             base_prompt = custom_prompt
         elif self.role == "scout":
-            base_prompt = "You are a SCOUT AGENT specialized in reconnaissance. Methodical and thorough."
+            base_prompt = "You are a SCOUT agent specialized in reconnaissance."
         elif self.role == "attacker":
-            base_prompt = "You are an ATTACKER AGENT specialized in exploitation. Aggressive but precise."
+            base_prompt = "You are an ATTACKER agent specialized in exploitation."
         else:
-            base_prompt = "You are KODIAK, an advanced autonomous penetration testing agent."
+            base_prompt = "You are KODIAK, an autonomous penetration testing agent."
 
-        full_prompt = base_prompt + "\n\n"
-        
+        sections: List[str] = [
+            "<system_instruction>",
+            "<role>",
+            base_prompt,
+            "</role>",
+            "<objective>",
+            "Find high-impact security issues with reproducible evidence.",
+            "</objective>",
+            "<execution_environment>",
+            "All tools execute inside a Kali Docker container.",
+            "Use only registered tools and their schemas.",
+            "</execution_environment>",
+            "<hard_constraints>",
+            "- Do not repeat identical tool calls unless parameters or strategy changed.",
+            "- For page analysis, fetch once and extract headers/forms/hidden fields/tokens/cookies together.",
+            "- If a tool times out, retry once with lower intensity; do not repeat unchanged calls.",
+            "- If blocked/rate-limited, record as environment signal and pivot strategy.",
+            "- Keep responses concise by default.",
+            "- Call complete_scan only after the objective is fully covered.",
+            "</hard_constraints>",
+            "<planning_format>",
+            "Before every tool call, set tool argument `thought` using this exact structure:",
+            "CONTEXT: relevant evidence from prior output.",
+            "THEORY: concrete hypothesis to validate.",
+            "PLAN: why this tool+args is the best next action.",
+            "Keep `thought` concise (max 6 lines).",
+            "</planning_format>",
+        ]
+
         if self.skills_knowledge:
-            full_prompt += "SKILLS KNOWLEDGE:\n" + self.skills_knowledge + "\n\n"
-        
-        full_prompt += (
-            "EXECUTION ENVIRONMENT:\n"
-            "All security tools run inside a Kali Docker container. You call the tool and it runs automatically.\n\n"
-            "AGGRESSIVE SCANNING MANDATE:\n"
-            "- GO SUPER HARD on all targets - no shortcuts, USE YOUR FULL POTENTIAL\n"
-            "- PUSH TO THE ABSOLUTE LIMIT - go deeper than a standard scanner. Real vulnerabilities are buried deep.\n"
-            "- Work NON-STOP until finding something significant - BE RELENTLESS. Exhaust every possible attack vector.\n"
-            "- Treat every target as if it's hiding critical vulnerabilities.\n\n"
-            "OPERATIONAL GUIDELINES:\n"
-            "- Use tools systematically and interpret results carefully.\n"
-            "- Chain vulnerabilities for maximum impact.\n"
-            "- Focus on high-impact vulnerabilities (RCE, SQLi, SSRF, XSS, IDOR).\n"
-            "- NEVER repeat the exact same tool call with identical arguments in the same scan unless parameters changed.\n"
-            "- For page analysis, fetch once and extract headers, forms, hidden fields, CSRF tokens, and cookies from the same response.\n"
-            "- If a tool times out, retry once with less aggressive settings (lower concurrency/intensity). Do not repeat unchanged.\n"
-            "- CALL complete_scan tool only when you have absolutely exhausted all avenues.\n\n"
-            "CRITICAL REASONING RULE:\n"
-            "YOU MUST ALWAYS EXPLAIN YOUR REASONING IN DETAIL BEFORE CALLING A TOOL.\n"
-            "When populating the `thought` parameter, your text MUST be highly contextual. Do NOT just say 'I will run nmap'.\n"
-            "Your thought MUST include:\n"
-            "1. CONTEXT: What did the last tool output tell you?\n"
-            "2. THEORY: What potential vulnerabilities or misconfigurations are you suspecting based on that output?\n"
-            "3. PLAN: Why are you choosing this specific tool and these specific arguments right now to prove your theory?\n\n"
-        )
-        
+            sections.extend([
+                "<skills_knowledge>",
+                self.skills_knowledge,
+                "</skills_knowledge>",
+            ])
+
         if context_str:
-            full_prompt += context_str + "\n"
-        
-        return full_prompt
+            sections.extend([
+                "<shared_context>",
+                context_str,
+                "</shared_context>",
+            ])
+
+        sections.extend([
+            "<final_instruction>",
+            "Based on the context above, choose the best next action and avoid duplicate execution.",
+            "</final_instruction>",
+            "</system_instruction>",
+        ])
+        return "\n".join(sections)
 
     def _prepare_tools(self, allowed_tools: List[str] = None) -> List[Dict[str, Any]]:
         """Prepare tool definitions for LLM"""
@@ -853,6 +903,9 @@ class KodiakAgent:
         fingerprint: str,
         args: Dict[str, Any],
         result_dict: Dict[str, Any],
+        status_override: Optional[str] = None,
+        reason_override: Optional[str] = None,
+        extra_properties: Optional[Dict[str, Any]] = None,
     ) -> None:
         if not settings.memory_central_enabled:
             return
@@ -867,9 +920,111 @@ class KodiakAgent:
                 fingerprint=fingerprint,
                 args=args,
                 result=result_dict,
+                status_override=status_override,
+                reason_override=reason_override,
+                extra_properties=extra_properties,
             )
         except Exception as e:
             logger.warning(f"Failed to persist central memory for {tool_name}: {e}")
+
+    async def _persist_central_state(
+        self,
+        session: Any,
+        project_id: Any,
+        scan_id: Any,
+        tool_name: str,
+        target: str,
+        fingerprint: str,
+        args: Dict[str, Any],
+        status: str,
+        reason: Optional[str] = None,
+        extra_properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not settings.memory_central_enabled:
+            return
+        try:
+            await self._central_memory_service.record_state(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                agent_id=self.agent_id,
+                tool_name=tool_name,
+                target=target or "unknown",
+                fingerprint=fingerprint,
+                args=args,
+                status=status,
+                reason=reason,
+                properties=extra_properties,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist central memory state for {tool_name}: {e}")
+
+    def _trim_text(self, text: Optional[str], limit: int = 220) -> str:
+        cleaned = " ".join((text or "").split()).strip()
+        if len(cleaned) > limit:
+            return cleaned[: limit - 3] + "..."
+        return cleaned
+
+    def _classify_execution_outcome(
+        self,
+        _tool_name: str,
+        result_dict: Dict[str, Any],
+        coalesced: bool = False,
+    ) -> tuple[str, str, str]:
+        status = "success" if result_dict.get("success") else "failure"
+        error_text = str(result_dict.get("error") or "")
+        output_text = str(result_dict.get("output") or "")
+        combined = f"{error_text} {output_text}".lower()
+
+        if coalesced:
+            return (
+                "coalesced",
+                "coalesced_peer_execution",
+                "Reuse the shared peer output. Do not infer vulnerability or safety from coalescing alone.",
+            )
+        if "timeout" in combined or "timed out" in combined:
+            return (
+                "timeout",
+                "timeout",
+                "Retry once with lower intensity (fewer threads/rate/level) before pivoting.",
+            )
+        if error_text.startswith("Skipping "):
+            return (
+                "skipped",
+                "skipped_duplicate_or_policy",
+                "Do not retry unchanged parameters. Change scope, target, or tool strategy.",
+            )
+        if not result_dict.get("success"):
+            if "not found" in combined or "exit code 127" in combined:
+                return (
+                    "failure",
+                    "tool_missing",
+                    "Treat as environment/tooling issue. Switch tool or install missing binary.",
+                )
+            if any(token in combined for token in ("403", "429", "forbidden", "cloudflare", "blocked", "waf")):
+                return (
+                    "failure",
+                    "target_blocked_or_rate_limited",
+                    "Reduce request intensity and pivot validation method; do not assume non-vulnerable.",
+                )
+            return (
+                "failure",
+                "execution_error",
+                "Inspect stderr/response and adjust parameters before retrying.",
+            )
+
+        if any(token in combined for token in ("no results", "no matches", "0 results", "not vulnerable")):
+            return (
+                status,
+                "executed_no_signal",
+                "Use this as negative evidence only for this exact probe configuration.",
+            )
+
+        return (
+            status,
+            "executed_success",
+            "Use this output as baseline context before planning follow-up probes.",
+        )
 
 
 
@@ -877,6 +1032,7 @@ class KodiakAgent:
         self, 
         tool_name: str, 
         args: Dict[str, Any], 
+        thought: Optional[str] = None,
         session: Any = None, 
         project_id: Any = None, 
         scan_id: Any = None
@@ -889,14 +1045,11 @@ class KodiakAgent:
             return {"error": f"Tool {tool_name} not found", "success": False}
         
         target = args.get('target', args.get('url', 'unknown'))
-        
-        # Emit tool start
-        if self.event_manager:
-            await self.event_manager.emit_tool_start(tool_name, target, self.agent_id, str(scan_id))
+        target_key = self._extract_tool_target(tool_name, args)
+        strategy = self._trim_text(thought, limit=280)
         
         try:
             # Prevent duplicate loops and apply failure policy after prior timeouts.
-            target_key = self._extract_tool_target(tool_name, args)
             in_run_timeouts = self._count_prior_timeouts_in_run(tool_name, target_key)
             central_timeouts = await self._central_memory_service.timeout_count_for_target(
                 session=session,
@@ -910,9 +1063,32 @@ class KodiakAgent:
                 args,
                 timeout_count=timeout_count,
             )
+            fingerprint = self._fingerprint_tool_call(tool_name, adjusted_args)
+            lifecycle_properties = {"iteration": self._current_iteration}
+            if strategy:
+                lifecycle_properties["strategy"] = strategy
+
+            await self._persist_central_state(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target_key or target,
+                fingerprint=fingerprint,
+                args=adjusted_args,
+                status="planned",
+                reason=strategy or "planned by agent",
+                extra_properties=lifecycle_properties,
+            )
+
             if stop_reason:
                 skipped = ToolResult(success=False, output=stop_reason, error=stop_reason)
-                fingerprint = self._fingerprint_tool_call(tool_name, adjusted_args)
+                skipped_dict = self._result_to_dict(skipped)
+                status, outcome, next_step = self._classify_execution_outcome(
+                    tool_name,
+                    skipped_dict,
+                    coalesced=False,
+                )
                 self._record_tool_attempt(tool_name, adjusted_args, fingerprint, skipped)
                 await self._persist_insight_memory(
                     session=session,
@@ -922,7 +1098,7 @@ class KodiakAgent:
                     target=target,
                     fingerprint=fingerprint,
                     args=adjusted_args,
-                    result_dict=self._result_to_dict(skipped),
+                    result_dict=skipped_dict,
                 )
                 await self._persist_central_memory(
                     session=session,
@@ -932,16 +1108,28 @@ class KodiakAgent:
                     target=target_key or target,
                     fingerprint=fingerprint,
                     args=adjusted_args,
-                    result_dict=self._result_to_dict(skipped),
+                    result_dict=skipped_dict,
+                    status_override=status,
+                    reason_override=self._trim_text(stop_reason, limit=280),
+                    extra_properties={
+                        **lifecycle_properties,
+                        "outcome": outcome,
+                        "next_step": next_step,
+                    },
                 )
                 if self.event_manager:
                     await self.event_manager.emit_tool_complete(tool_name, skipped, str(scan_id))
-                return self._result_to_dict(skipped)
+                return skipped_dict
 
-            fingerprint = self._fingerprint_tool_call(tool_name, adjusted_args)
             skip_reason = self._should_skip_tool_call(tool_name, adjusted_args, fingerprint)
             if skip_reason:
                 skipped = ToolResult(success=False, output=skip_reason, error=skip_reason)
+                skipped_dict = self._result_to_dict(skipped)
+                status, outcome, next_step = self._classify_execution_outcome(
+                    tool_name,
+                    skipped_dict,
+                    coalesced=False,
+                )
                 self._record_tool_attempt(tool_name, adjusted_args, fingerprint, skipped)
                 await self._persist_insight_memory(
                     session=session,
@@ -951,7 +1139,7 @@ class KodiakAgent:
                     target=target,
                     fingerprint=fingerprint,
                     args=adjusted_args,
-                    result_dict=self._result_to_dict(skipped),
+                    result_dict=skipped_dict,
                 )
                 await self._persist_central_memory(
                     session=session,
@@ -961,20 +1149,106 @@ class KodiakAgent:
                     target=target_key or target,
                     fingerprint=fingerprint,
                     args=adjusted_args,
-                    result_dict=self._result_to_dict(skipped),
+                    result_dict=skipped_dict,
+                    status_override=status,
+                    reason_override=self._trim_text(skip_reason, limit=280),
+                    extra_properties={
+                        **lifecycle_properties,
+                        "outcome": outcome,
+                        "next_step": next_step,
+                    },
                 )
                 if self.event_manager:
                     await self.event_manager.emit_tool_complete(tool_name, skipped, str(scan_id))
-                return self._result_to_dict(skipped)
+                return skipped_dict
+
+            active_peer = await self._central_memory_service.find_active_peer_execution(
+                session=session,
+                scan_id=scan_id,
+                fingerprint=fingerprint,
+                requesting_agent_id=self.agent_id,
+            )
+            if active_peer:
+                peer_id = str(active_peer.get("agent_id") or "peer")
+                note = (
+                    f"Coalesced planning: peer agent {peer_id} is already executing this exact {tool_name} command. "
+                    "Wait for peer result or pivot scope; do not infer vulnerability or non-vulnerability from this coalescing event."
+                )
+                coalesced_result = ToolResult(
+                    success=True,
+                    output=note,
+                    data={
+                        "coalesced": True,
+                        "peer_agent_id": peer_id,
+                        "peer_status": str(active_peer.get("status") or "running"),
+                    },
+                )
+                coalesced_dict = self._result_to_dict(coalesced_result)
+                status, outcome, next_step = self._classify_execution_outcome(
+                    tool_name,
+                    coalesced_dict,
+                    coalesced=True,
+                )
+                self._record_tool_attempt(tool_name, adjusted_args, fingerprint, coalesced_result)
+                await self._persist_insight_memory(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=coalesced_dict,
+                )
+                await self._persist_central_memory(
+                    session=session,
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool_name=tool_name,
+                    target=target_key or target,
+                    fingerprint=fingerprint,
+                    args=adjusted_args,
+                    result_dict=coalesced_dict,
+                    status_override=status,
+                    reason_override=self._trim_text(note, limit=280),
+                    extra_properties={
+                        **lifecycle_properties,
+                        "outcome": outcome,
+                        "next_step": next_step,
+                        "coalesced": True,
+                        "coalesced_peer_agent_id": peer_id,
+                    },
+                )
+                if self.event_manager:
+                    await self.event_manager.emit_tool_complete(tool_name, coalesced_result, str(scan_id))
+                return coalesced_dict
+
+            await self._persist_central_state(
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                tool_name=tool_name,
+                target=target_key or target,
+                fingerprint=fingerprint,
+                args=adjusted_args,
+                status="running",
+                reason=backoff_note or strategy or "executing tool",
+                extra_properties=lifecycle_properties,
+            )
+
+            # Emit tool start only for actual executions.
+            if self.event_manager:
+                await self.event_manager.emit_tool_start(tool_name, target, self.agent_id, str(scan_id))
 
             # Execute tool with concurrency limits for heavy scanners.
             execution_args = {**adjusted_args, "agent_id": self.agent_id, "scan_id": str(scan_id)}
-            result = await self._execute_tool_with_limits(
+            result, execution_meta = await self._execute_tool_with_limits(
                 tool_name,
                 tool,
                 execution_args,
                 dedupe_key=fingerprint,
             )
+            was_coalesced = bool((execution_meta or {}).get("coalesced", False))
 
             if backoff_note and hasattr(result, "output") and result.output:
                 result.output = f"{backoff_note}\n\n{result.output}"
@@ -987,6 +1261,19 @@ class KodiakAgent:
             else:
                 result_dict = {"success": True, "output": str(result), "data": {}}
 
+            if was_coalesced:
+                data = result_dict.get("data")
+                if not isinstance(data, dict):
+                    data = {}
+                data["coalesced"] = True
+                data["coalesced_reason"] = "inflight duplicate executed by peer in scheduler"
+                result_dict["data"] = data
+
+            status, outcome, next_step = self._classify_execution_outcome(
+                tool_name,
+                result_dict,
+                coalesced=was_coalesced,
+            )
             self._record_tool_attempt(tool_name, adjusted_args, fingerprint, result_dict)
             await self._persist_insight_memory(
                 session=session,
@@ -1007,17 +1294,39 @@ class KodiakAgent:
                 fingerprint=fingerprint,
                 args=adjusted_args,
                 result_dict=result_dict,
+                status_override=status,
+                reason_override=self._trim_text(str(result_dict.get("error") or result_dict.get("output") or ""), limit=280),
+                extra_properties={
+                    **lifecycle_properties,
+                    "outcome": outcome,
+                    "next_step": next_step,
+                    "coalesced": was_coalesced,
+                },
             )
             
             # Emit completion
             if self.event_manager:
-                await self.event_manager.emit_tool_complete(tool_name, result, str(scan_id))
+                event_result = result
+                if not isinstance(event_result, ToolResult):
+                    event_result = ToolResult(
+                        success=bool(result_dict.get("success")),
+                        output=str(result_dict.get("output") or ""),
+                        data=result_dict.get("data") if isinstance(result_dict.get("data"), dict) else {},
+                        error=result_dict.get("error"),
+                    )
+                await self.event_manager.emit_tool_complete(tool_name, event_result, str(scan_id))
                 
             return result_dict
         except Exception as e:
             logger.error(f"Tool {tool_name} failed: {e}")
             failure = ToolResult(success=False, output=f"Error: {e}", error=str(e))
             fingerprint = self._fingerprint_tool_call(tool_name, args)
+            failure_dict = self._result_to_dict(failure)
+            status, outcome, next_step = self._classify_execution_outcome(
+                tool_name,
+                failure_dict,
+                coalesced=False,
+            )
             self._record_tool_attempt(tool_name, args, fingerprint, failure)
             await self._persist_insight_memory(
                 session=session,
@@ -1027,21 +1336,29 @@ class KodiakAgent:
                 target=target,
                 fingerprint=fingerprint,
                 args=args,
-                result_dict=self._result_to_dict(failure),
+                result_dict=failure_dict,
             )
             await self._persist_central_memory(
                 session=session,
                 project_id=project_id,
                 scan_id=scan_id,
                 tool_name=tool_name,
-                target=target_key if 'target_key' in locals() else target,
+                target=target_key or target,
                 fingerprint=fingerprint,
                 args=args,
-                result_dict=self._result_to_dict(failure),
+                result_dict=failure_dict,
+                status_override=status,
+                reason_override=self._trim_text(str(e), limit=280),
+                extra_properties={
+                    "iteration": self._current_iteration,
+                    "strategy": strategy,
+                    "outcome": outcome,
+                    "next_step": next_step,
+                },
             )
             if self.event_manager:
                 await self.event_manager.emit_tool_complete(tool_name, failure, str(scan_id))
-            return self._result_to_dict(failure)
+            return failure_dict
 
     def _build_tool_history_content(self, result: Dict[str, Any]) -> str:
         """
@@ -1148,23 +1465,24 @@ class KodiakAgent:
         tool: Any,
         execution_args: Dict[str, Any],
         dedupe_key: Optional[str] = None,
-    ) -> Any:
+    ) -> tuple[Any, Dict[str, Any]]:
         if self._tool_scheduler is not None:
-            return await self._tool_scheduler.execute(
+            scheduled = await self._tool_scheduler.execute(
                 tool_name=tool_name,
                 coro_factory=lambda: tool.execute(**execution_args),
                 dedupe_key=dedupe_key,
             )
+            return scheduled.result, {"coalesced": bool(scheduled.coalesced), "scheduler": "queue"}
 
         per_tool_semaphore = self._tool_semaphores.get(tool_name)
         should_limit_global = tool_name in self._limited_heavy_tools and self._global_tool_semaphore is not None
 
         if not per_tool_semaphore and not should_limit_global:
-            return await tool.execute(**execution_args)
+            return await tool.execute(**execution_args), {"coalesced": False, "scheduler": "direct"}
 
         async with AsyncExitStack() as stack:
             if should_limit_global:
                 await stack.enter_async_context(self._global_tool_semaphore)
             if per_tool_semaphore:
                 await stack.enter_async_context(per_tool_semaphore)
-            return await tool.execute(**execution_args)
+            return await tool.execute(**execution_args), {"coalesced": False, "scheduler": "semaphore"}

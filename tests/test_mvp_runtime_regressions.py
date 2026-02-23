@@ -1,5 +1,7 @@
 import pytest
 from uuid import uuid4
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import kodiak.core.memory_central as memory_central_module
@@ -222,6 +224,114 @@ async def test_central_memory_handles_none_error_without_crashing(monkeypatch):
     )
 
     assert statuses == ["failure", "skipped"]
+
+
+@pytest.mark.asyncio
+async def test_central_memory_prompt_context_surfaces_peer_strategy_and_outcome(monkeypatch):
+    now = datetime.now(timezone.utc)
+    attempts = [
+        SimpleNamespace(
+            tool="whatweb",
+            target="https://example.com",
+            status="planned",
+            reason="fingerprint stack first",
+            properties={
+                "fingerprint": "fp-whatweb",
+                "agent_id": "agent-2",
+                "strategy": "fingerprint stack first",
+            },
+            created_at=now,
+        ),
+        SimpleNamespace(
+            tool="sqlmap",
+            target="https://example.com/news.php?id=1",
+            status="failure",
+            reason="403 forbidden",
+            properties={
+                "fingerprint": "fp-sqlmap",
+                "agent_id": "agent-3",
+                "outcome": "target_blocked_or_rate_limited",
+                "next_step": "reduce rate and pivot",
+                "output_preview": "HTTP 403 forbidden by waf",
+            },
+            created_at=now,
+        ),
+    ]
+
+    async def fake_get_attempts_by_scan(session, scan_id, limit=200):
+        return attempts
+
+    monkeypatch.setattr(memory_central_module.attempt_crud, "get_attempts_by_scan", fake_get_attempts_by_scan)
+
+    service = CentralMemoryService()
+    context = await service.build_prompt_context(
+        session=object(),
+        scan_id=uuid4(),
+        limit=10,
+        agent_id="agent-1",
+    )
+
+    assert "PEER ACTIVE WORK" in context
+    assert "why=fingerprint stack first" in context
+    assert "outcome=target_blocked_or_rate_limited" in context
+    assert "next=reduce rate and pivot" in context
+
+
+@pytest.mark.asyncio
+async def test_central_memory_finds_recent_active_peer_execution(monkeypatch):
+    now = datetime.now(timezone.utc)
+    attempts = [
+        SimpleNamespace(
+            tool="nuclei",
+            target="https://example.com",
+            status="running",
+            reason="running templates",
+            properties={
+                "fingerprint": "fp-nuclei",
+                "agent_id": "agent-2",
+                "strategy": "run cve tags first",
+            },
+            created_at=now,
+        )
+    ]
+
+    async def fake_get_attempts_by_scan(session, scan_id, limit=120):
+        return attempts
+
+    monkeypatch.setattr(memory_central_module.attempt_crud, "get_attempts_by_scan", fake_get_attempts_by_scan)
+
+    service = CentralMemoryService()
+    active = await service.find_active_peer_execution(
+        session=object(),
+        scan_id=uuid4(),
+        fingerprint="fp-nuclei",
+        requesting_agent_id="agent-1",
+    )
+
+    assert active is not None
+    assert active["agent_id"] == "agent-2"
+    assert active["status"] == "running"
+
+
+def test_agent_outcome_classification_handles_blocked_and_coalesced():
+    agent = _make_agent()
+
+    status, outcome, next_step = agent._classify_execution_outcome(
+        "ffuf",
+        {"success": False, "error": "WAF blocked request", "output": "HTTP 403 Forbidden"},
+        coalesced=False,
+    )
+    assert status == "failure"
+    assert outcome == "target_blocked_or_rate_limited"
+    assert "do not assume non-vulnerable" in next_step.lower()
+
+    status, outcome, _ = agent._classify_execution_outcome(
+        "whatweb",
+        {"success": True, "output": "shared result", "data": {}},
+        coalesced=True,
+    )
+    assert status == "coalesced"
+    assert outcome == "coalesced_peer_execution"
 
 
 def test_agent_skip_logic_ignores_persisted_advice_as_hard_block():

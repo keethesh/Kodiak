@@ -12,8 +12,9 @@ async def test_tool_scheduler_executes_registered_tool():
     await scheduler.start()
 
     try:
-        result = await scheduler.execute("nuclei", lambda: _async_value("ok"))
-        assert result == "ok"
+        scheduled = await scheduler.execute("nuclei", lambda: _async_value("ok"))
+        assert scheduled.result == "ok"
+        assert scheduled.coalesced is False
     finally:
         await scheduler.stop()
 
@@ -23,8 +24,9 @@ async def test_tool_scheduler_bypasses_unregistered_tool():
     scheduler = ToolScheduler(queue_limit=10)
     await scheduler.start()
     try:
-        result = await scheduler.execute("httpx", lambda: _async_value("bypass"))
-        assert result == "bypass"
+        scheduled = await scheduler.execute("httpx", lambda: _async_value("bypass"))
+        assert scheduled.result == "bypass"
+        assert scheduled.coalesced is False
     finally:
         await scheduler.stop()
 
@@ -49,8 +51,10 @@ async def test_tool_scheduler_coalesces_inflight_duplicate_keys():
             scheduler.execute("whatweb", _work, dedupe_key="whatweb:abc")
         )
         r1, r2 = await asyncio.gather(first, second)
-        assert r1 == "shared-result"
-        assert r2 == "shared-result"
+        assert r1.result == "shared-result"
+        assert r2.result == "shared-result"
+        assert r1.coalesced is False
+        assert r2.coalesced is True
         assert calls["count"] == 1
     finally:
         await scheduler.stop()

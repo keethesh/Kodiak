@@ -117,8 +117,11 @@ class InsightMemoryService:
         output: str,
     ) -> Dict[str, Any]:
         prompt = (
-            "Generate concise scan memory JSON from this tool result.\n"
-            "Return strict JSON only, no markdown.\n"
+            "<task>\n"
+            "Summarize one tool execution into compact scan memory.\n"
+            "</task>\n"
+            "<output_contract>\n"
+            "Return ONLY valid JSON. No markdown. No surrounding prose.\n"
             "Schema:\n"
             "{"
             '"what_was_tested":"string",'
@@ -127,11 +130,17 @@ class InsightMemoryService:
             '"next_best_actions":["string"],'
             '"do_not_repeat":"string"'
             "}\n"
+            "Rules:\n"
+            "- Keep key_observations and next_best_actions to max 3 items each.\n"
+            "- If unknown, use empty string/array instead of inventing data.\n"
+            "</output_contract>\n"
+            "<input>\n"
             f"tool={tool_name}\n"
             f"target={target}\n"
             f"status={status}\n"
             f"args={json.dumps(args, sort_keys=True, default=str)}\n"
             f"output={output}\n"
+            "</input>\n"
         )
 
         try:
@@ -141,7 +150,13 @@ class InsightMemoryService:
             params = {
                 "model": self.model_name,
                 "messages": [
-                    {"role": "system", "content": "You are a precise security scan memory summarizer."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a precise security scan memory summarizer. "
+                            "Follow the output contract exactly and return only valid JSON."
+                        ),
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.0,
