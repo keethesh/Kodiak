@@ -549,9 +549,21 @@ verify_installation() {
 verify_toolbox_tools() {
     local image="${1:-ghcr.io/keethesh/kodiak-toolbox:latest}"
     local missing=0
+    local tools=(
+        nmap
+        nuclei
+        subfinder
+        httpx
+        katana
+        ffuf
+        whatweb
+        sqlmap
+        commix
+        searchsploit
+    )
 
     print_status "Verifying required tools inside $image..."
-    for tool in nuclei searchsploit katana commix; do
+    for tool in "${tools[@]}"; do
         if docker run --rm --entrypoint /bin/sh "$image" -lc "command -v $tool" >/dev/null 2>&1; then
             print_success "Tool '$tool' found in toolbox image"
         else
@@ -630,7 +642,7 @@ setup_docker() {
 
             # Validate critical tools expected by the agent loop.
             if ! verify_toolbox_tools "ghcr.io/keethesh/kodiak-toolbox:latest"; then
-                print_error "Toolbox image is missing required tools (nuclei/searchsploit/katana/commix)."
+                print_error "Toolbox image is missing required tools (nmap/nuclei/subfinder/httpx/katana/ffuf/whatweb/sqlmap/commix/searchsploit)."
                 print_status "Rebuild with: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
                 return 1
             fi

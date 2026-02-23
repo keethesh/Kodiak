@@ -12,8 +12,10 @@ ENV CGO_ENABLED=0
 
 RUN mkdir -p /go/bin
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest || echo "Warning: Failed to install httpx"
+RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest || echo "Warning: Failed to install subfinder"
 # Katana can require CGO in newer releases; install it as a required binary.
 RUN CGO_ENABLED=1 go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+RUN go install -v github.com/ffuf/ffuf/v2@latest || echo "Warning: Failed to install ffuf"
 RUN go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest || echo "Warning: Failed to install dnsx"
 RUN go install -v github.com/jaeles-project/gospider@latest || echo "Warning: Failed to install gospider"
 RUN go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest || echo "Warning: Failed to install interactsh"
@@ -138,6 +140,21 @@ RUN set -eux; \
             fi; \
         done; \
     fi; \
+    if ! command -v subfinder >/dev/null 2>&1 && [ -x /root/go/bin/subfinder ]; then \
+        ln -sf /root/go/bin/subfinder /usr/local/bin/subfinder; \
+    fi; \
+    if ! command -v ffuf >/dev/null 2>&1 && [ -x /root/go/bin/ffuf ]; then \
+        ln -sf /root/go/bin/ffuf /usr/local/bin/ffuf; \
+    fi; \
+    if ! command -v sqlmap >/dev/null 2>&1 && [ -x /usr/share/sqlmap/sqlmap.py ]; then \
+        ln -sf /usr/share/sqlmap/sqlmap.py /usr/local/bin/sqlmap; \
+    fi; \
+    if ! command -v whatweb >/dev/null 2>&1 && [ -x /usr/bin/whatweb ]; then \
+        ln -sf /usr/bin/whatweb /usr/local/bin/whatweb; \
+    fi; \
+    if ! command -v nmap >/dev/null 2>&1 && [ -x /usr/bin/nmap ]; then \
+        ln -sf /usr/bin/nmap /usr/local/bin/nmap; \
+    fi; \
     # Install SearchSploit using the official git method from upstream docs when Kali package pathing is unavailable.
     if ! command -v searchsploit >/dev/null 2>&1; then \
         rm -rf /opt/exploitdb || true; \
@@ -171,7 +188,7 @@ RUN set -eux; \
 # Fail fast if required toolbox binaries are missing.
 RUN set -eux; \
     missing=0; \
-    for tool in nuclei searchsploit katana commix; do \
+    for tool in nmap nuclei subfinder httpx katana ffuf whatweb sqlmap commix searchsploit; do \
         if ! command -v "$tool" >/dev/null 2>&1; then \
             echo "Missing required toolbox binary: $tool" >&2; \
             missing=1; \
