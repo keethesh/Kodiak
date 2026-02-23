@@ -21,7 +21,7 @@ We welcome contributions to Kodiak! Since this is a security tool, please follow
 2. **Configure Environment**:
    ```bash
    cp .env.example .env
-   # Edit .env with your LLM API keys
+   # Edit .env with your Gemini API key
    kodiak config  # Interactive configuration
    ```
 
@@ -243,7 +243,6 @@ poetry run pytest tests/integration/ -v
 Key environment variables for development:
 ```bash
 # LLM Configuration
-KODIAK_LLM_PROVIDER=gemini
 KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 GOOGLE_API_KEY=your_api_key
 

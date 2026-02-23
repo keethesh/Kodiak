@@ -47,7 +47,7 @@ python = "^3.11"
 # Core CLI dependencies (always installed)
 pydantic = {extras = ["email"], version = "^2.6.0"}
 pydantic-settings = "^2.1.0"
-litellm = "^1.20.0"
+google-genai = "^1.20.0"
 textual = "^0.48.2"
 rich = "^13.0.0"
 httpx = "^0.26.0"

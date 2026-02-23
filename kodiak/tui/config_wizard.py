@@ -23,35 +23,14 @@ from rich.panel import Panel
 from rich.text import Text
 
 
-# LLM Provider configurations
+# Gemini model configurations (Gemini-only runtime)
 LLM_PROVIDERS = {
     "gemini": {
         "name": "Google Gemini",
-        "description": "Recommended - Best balance of speed and capability",
+        "description": "Gemini-only mode",
         "env_var": "GOOGLE_API_KEY",
         "default_model": "gemini/gemini-3.1-pro-preview",
-        "models": ["gemini/gemini-3.1-pro-preview", "gemini/gemini-3-flash-preview"]
-    },
-    "openai": {
-        "name": "OpenAI GPT",
-        "description": "Industry standard - GPT-4 and beyond",
-        "env_var": "OPENAI_API_KEY",
-        "default_model": "openai/gpt-4",
-        "models": ["openai/gpt-4", "openai/gpt-4-turbo", "openai/gpt-5"]
-    },
-    "anthropic": {
-        "name": "Anthropic Claude",
-        "description": "Excellent reasoning - Claude 3.5/4 Sonnet",
-        "env_var": "ANTHROPIC_API_KEY",
-        "default_model": "anthropic/claude-3-5-sonnet-20241022",
-        "models": ["anthropic/claude-3-5-sonnet-20241022", "anthropic/claude-4.5-sonnet"]
-    },
-    "ollama": {
-        "name": "Local Ollama",
-        "description": "Privacy-focused - Runs on your machine",
-        "env_var": None,
-        "default_model": "ollama/llama3.1:70b",
-        "models": ["ollama/llama3.1:70b", "ollama/codellama:34b", "ollama/mistral:7b"]
+        "models": ["gemini/gemini-3.1-pro-preview", "gemini/gemini-3-flash-preview"],
     }
 }
 
@@ -96,7 +75,7 @@ class WelcomeScreen(Screen):
             Static(
                 "This wizard will help you configure Kodiak for first use.\n\n"
                 "You'll need:\n"
-                "• An LLM API key (Gemini, OpenAI, or Claude)\n"
+                "• A Google Gemini API key\n"
                 "• Docker installed (for security tools)\n\n"
                 "Configuration will be saved to ~/.kodiak/config.env",
                 id="welcome-description"
@@ -158,9 +137,6 @@ class ProviderScreen(Screen):
             Static("Step 1: Select LLM Provider", id="provider-title"),
             RadioSet(
                 RadioButton("🌟 Google Gemini (Recommended)", id="gemini"),
-                RadioButton("🤖 OpenAI GPT", id="openai"),
-                RadioButton("🧠 Anthropic Claude", id="anthropic"),
-                RadioButton("🏠 Local Ollama (No API key needed)", id="ollama"),
                 id="provider-radio"
             ),
             Horizontal(
@@ -179,13 +155,7 @@ class ProviderScreen(Screen):
             if radio_set.pressed_button:
                 provider_id = radio_set.pressed_button.id
                 self.app.config_data["provider"] = provider_id
-                
-                if provider_id == "ollama":
-                    # Skip API key screen for Ollama
-                    self.app.config_data["api_key"] = None
-                    self.app.push_screen(DatabaseScreen())
-                else:
-                    self.app.push_screen(ApiKeyScreen())
+                self.app.push_screen(ApiKeyScreen())
 
 
 class ApiKeyScreen(Screen):
@@ -227,6 +197,12 @@ class ApiKeyScreen(Screen):
             Static(f"Step 2: Enter {provider_info['name']} API Key", id="apikey-title"),
             Static(f"Environment variable: {provider_info['env_var']}"),
             Input(placeholder="Paste your API key here...", password=True, id="api-key-input"),
+            Static("Choose default Gemini model:"),
+            RadioSet(
+                RadioButton("Gemini 3.1 Pro (Recommended)", id="gemini-pro", value=True),
+                RadioButton("Gemini 3 Flash", id="gemini-flash"),
+                id="model-radio",
+            ),
             Static("[dim]Your key is stored locally and never shared.[/dim]"),
             Horizontal(
                 Button("← Back", variant="default", id="back-btn"),
@@ -242,9 +218,14 @@ class ApiKeyScreen(Screen):
         elif event.button.id == "next-btn":
             api_key_input = self.query_one("#api-key-input", Input)
             api_key = api_key_input.value.strip()
+            model_radio = self.query_one("#model-radio", RadioSet)
+            selected_model = "gemini/gemini-3.1-pro-preview"
+            if model_radio.pressed_button and model_radio.pressed_button.id == "gemini-flash":
+                selected_model = "gemini/gemini-3-flash-preview"
             
             if api_key:
                 self.app.config_data["api_key"] = api_key
+                self.app.config_data["llm_model"] = selected_model
                 self.app.push_screen(DatabaseScreen())
             else:
                 self.notify("Please enter an API key", severity="error")
@@ -441,7 +422,8 @@ class ConfigWizardApp(App):
         provider_info = LLM_PROVIDERS.get(provider, LLM_PROVIDERS["gemini"])
         
         # LLM Configuration
-        lines.append(f"KODIAK_LLM_MODEL={provider_info['default_model']}")
+        selected_model = self.config_data.get("llm_model", provider_info["default_model"])
+        lines.append(f"KODIAK_LLM_MODEL={selected_model}")
         
         if self.config_data.get("api_key"):
             lines.append(f"{provider_info['env_var']}={self.config_data['api_key']}")

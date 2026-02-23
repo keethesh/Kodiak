@@ -22,7 +22,7 @@ kodiak tui --debug
 ### First Time Setup
 
 1. **Initialize Database**: Run `kodiak init` to set up the database schema
-2. **Configure LLM**: Run `kodiak config` to set up your AI provider
+2. **Configure Gemini**: Run `kodiak config` to set up model and API key
 3. **Launch TUI**: Run `kodiak` to start the interface
 
 ## Navigation Overview

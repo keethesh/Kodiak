@@ -16,7 +16,7 @@ Kodiak TUI is designed for:
 - **Python 3.11+**
 - **PostgreSQL 12+** (or Docker for easy setup)
 - **Terminal Emulator** with Unicode support
-- **LLM API Key** (Gemini, OpenAI, Claude, etc.)
+- **Google Gemini API Key**
 
 ### Supported Platforms
 - ✅ **Linux** (Ubuntu 20.04+, Debian 11+, CentOS 8+)
@@ -70,7 +70,7 @@ docker-compose up --build kodiak
 
 ## Configuration
 
-### 1. LLM Provider Setup
+### 1. Gemini Setup
 
 #### Interactive Configuration (Recommended)
 ```bash
@@ -82,7 +82,6 @@ Create a `.env` file in the project root:
 
 ```bash
 # Gemini (Recommended)
-KODIAK_LLM_PROVIDER=gemini
 KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 GOOGLE_API_KEY=your_google_api_key_here
 
@@ -264,7 +263,6 @@ services:
       - POSTGRES_SERVER=db
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - KODIAK_LLM_PROVIDER=gemini
       - KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
     depends_on:
       - db

@@ -174,6 +174,7 @@ def scan(
         from kodiak.core.interface import CoreInterface
         from kodiak.core.config import settings
         from kodiak.core.agent_scaling import resolve_agent_count
+        from kodiak.services import llm
         
         # If not verbose, silence loguru so messages don't break the Rich Live display
         if not verbose:
@@ -184,7 +185,7 @@ def scan(
         logger.add(log_file, level="DEBUG", rotation="10 MB")
         
         if model:
-            settings.llm_model = model
+            settings.llm_model = llm.normalize_model_name(model)
 
         requested_agents = agents or settings.default_agent_count
         resolved_agents = resolve_agent_count(

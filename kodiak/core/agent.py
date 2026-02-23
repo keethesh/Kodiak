@@ -10,9 +10,6 @@ from uuid import uuid4, UUID
 from dataclasses import dataclass
 from loguru import logger
 
-import litellm
-from litellm import acompletion
-
 from kodiak.core.config import settings
 from kodiak.core.blackboard import BlackboardService
 from kodiak.core.memory import InsightMemoryService
@@ -20,6 +17,7 @@ from kodiak.core.memory_central import CentralMemoryService
 from kodiak.core.failure_policy import apply_timeout_backoff
 from kodiak.core.tools.base import ToolResult
 from kodiak.services import llm
+from kodiak.services.gemini_client import GeminiClient
 
 
 @dataclass
@@ -83,6 +81,7 @@ class KodiakAgent:
         self._insight_memory_service = InsightMemoryService(self.model_name)
         self._central_memory_service = CentralMemoryService()
         self._blackboard_service = BlackboardService()
+        self._gemini_client = GeminiClient()
         self._central_memory_context = ""
         self._blackboard_context = ""
         self._scan_target: str = ""
@@ -258,14 +257,8 @@ class KodiakAgent:
             
             # 2. Act
             if response.tool_calls:
-                # Add assistant message with tool calls to history
-                # Sanitize tool call IDs for Gemini 3
-                sanitized_tool_calls = []
-                for tc in response.tool_calls:
-                    tc_dict = tc.dict() if hasattr(tc, 'dict') else tc
-                    if 'id' in tc_dict and '__thought__' in tc_dict['id']:
-                        tc_dict['id'] = tc_dict['id'].split('__thought__')[0]
-                    sanitized_tool_calls.append(tc_dict)
+                # Add assistant message with tool calls to history.
+                sanitized_tool_calls = [self._tool_call_to_dict(tc) for tc in response.tool_calls]
 
                 history.append({
                     "role": "assistant",
@@ -273,14 +266,23 @@ class KodiakAgent:
                     "tool_calls": sanitized_tool_calls
                 })
                 
-                for tool_call in response.tool_calls:
-                    tool_name = tool_call.function.name
-                    # sanitize ID here too for the response
-                    original_id = tool_call.id
-                    clean_id = original_id.split('__thought__')[0] if '__thought__' in original_id else original_id
-                    try:
-                        args = json.loads(tool_call.function.arguments)
-                    except json.JSONDecodeError:
+                for tool_call in sanitized_tool_calls:
+                    function = tool_call.get("function") or {}
+                    tool_name = str(function.get("name") or "").strip()
+                    if not tool_name:
+                        continue
+                    clean_id = str(tool_call.get("id") or f"call_{uuid4().hex[:12]}")
+                    raw_args = function.get("arguments")
+                    if isinstance(raw_args, str):
+                        try:
+                            args = json.loads(raw_args)
+                            if not isinstance(args, dict):
+                                args = {}
+                        except json.JSONDecodeError:
+                            args = {}
+                    elif isinstance(raw_args, dict):
+                        args = raw_args
+                    else:
                         args = {}
                         
                     # Backward-compatible support if the model includes optional 'thought' arg.
@@ -343,7 +345,7 @@ class KodiakAgent:
 
     async def think(self, history: List[Dict[str, Any]], custom_prompt: str = None) -> Any:
         """
-        Generates a reasoning step and potential actions using LiteLLM.
+        Generates a reasoning step and potential actions using native Gemini.
         """
         try:
             # Load context from DB
@@ -395,28 +397,12 @@ class KodiakAgent:
                 
             messages.extend(condensed_history)
                     
-            # Get LLM configuration
-            provider = llm.infer_provider_from_model(self.model_name)
-            api_key = llm.get_api_key_for_provider(provider)
-            
-            # Prepare completion parameters
-            completion_params = {
-                "model": self.model_name,
-                "messages": messages,
-                "temperature": settings.llm_temperature,
-                "max_tokens": settings.llm_max_tokens,
-                "tools": tools if tools else None,
-                "tool_choice": "auto" if tools else None,
-            }
-            if llm.is_gemini_provider(provider):
-                resolved_thinking_level = llm.resolve_gemini_thinking_level(
-                    self.model_name,
-                    settings.gemini_thinking_level,
-                )
-                completion_params["extra_body"] = llm.build_gemini_extra_body(resolved_thinking_level)
-            
-            if api_key:
-                completion_params["api_key"] = api_key
+            normalized_model = llm.normalize_model_name(self.model_name)
+            resolved_thinking_level = llm.resolve_gemini_thinking_level(
+                normalized_model,
+                settings.gemini_thinking_level,
+            )
+            api_key = llm.get_google_api_key()
             
             # Emit thinking event
             if self.event_manager:
@@ -426,18 +412,25 @@ class KodiakAgent:
                     scan_id=str(self.project_id) if self.project_id else None
                 )
             
-            # Call LLM
-            response = await acompletion(**completion_params)
-            if not response or not getattr(response, "choices", None):
+            response = await self._gemini_client.generate(
+                model=normalized_model,
+                api_key=api_key,
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools if tools else None,
+                temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,
+                thinking_level=resolved_thinking_level,
+            )
+            if not response:
                 return FallbackResponse("Empty LLM response")
-            choice = response.choices[0]
-            finish_reason = str(getattr(choice, "finish_reason", "") or "").strip().lower()
+            finish_reason = str(getattr(response, "finish_reason", "") or "").strip().lower()
             if finish_reason in {"length", "max_tokens"}:
                 logger.warning(
                     f"LLM response truncated for agent {self.agent_id} "
                     f"(finish_reason={finish_reason}, max_tokens={settings.llm_max_tokens})"
                 )
-            return choice.message
+            return response
             
         except Exception as e:
             logger.error(f"Agent thinking failed: {e}")
@@ -748,6 +741,23 @@ class KodiakAgent:
             i += 1
 
         return result
+
+    def _tool_call_to_dict(self, tool_call: Any) -> Dict[str, Any]:
+        if isinstance(tool_call, dict):
+            return tool_call
+        if hasattr(tool_call, "model_dump"):
+            return tool_call.model_dump()
+        if hasattr(tool_call, "dict"):
+            return tool_call.dict()
+        function = getattr(tool_call, "function", None)
+        return {
+            "id": str(getattr(tool_call, "id", f"call_{uuid4().hex[:12]}")),
+            "type": "function",
+            "function": {
+                "name": str(getattr(function, "name", "")),
+                "arguments": str(getattr(function, "arguments", "{}")),
+            },
+        }
 
     def _build_runtime_memory_context(self) -> str:
         """Build compact run-state memory to reduce repeated tool calls."""

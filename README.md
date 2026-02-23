@@ -13,7 +13,7 @@ Kodiak is an advanced LLM-powered penetration testing suite that uses AI agents 
 **Prerequisites:**
 - Python 3.11+
 - Docker (for security toolbox container)
-- An LLM provider API key (OpenAI, Google,Anthropic, or local Ollama)
+- A Google Gemini API key
 
 ### One-Command Installation
 
@@ -32,7 +32,7 @@ This installs:
 ```bash
 # Launch interactive configuration wizard
 kodiak config
-# Choose LLM provider → Enter API key → Select SQLite (default)
+# Choose Gemini model → Enter API key → Select SQLite (default)
 
 # Initialize database
 kodiak init
@@ -172,30 +172,16 @@ kodiak api --port 8000
 - **Configurable Safety**: Adjustable safety levels for different environments
 - **Audit Logging**: Complete trail of all actions for compliance
 
-## 🌐 LLM Provider Support
+## 🌐 Gemini Model Support
 
-Kodiak uses [LiteLLM](https://docs.litellm.ai/) for unified access to multiple providers:
-
-### Supported Providers
+Kodiak is Gemini-only and supports:
 - **Google Gemini**: `gemini/gemini-3.1-pro-preview`, `gemini/gemini-3-flash-preview`
-- **OpenAI**: `openai/gpt-4`, `openai/gpt-5`
-- **Anthropic**: `anthropic/claude-3-5-sonnet-20241022`, `anthropic/claude-4.5-sonnet`
-- **Local Models**: `ollama/llama3.1:70b`, `ollama/codellama:34b`
-- **Azure OpenAI**: Enterprise deployments
-- **Many others**: See [LiteLLM providers](https://docs.litellm.ai/docs/providers)
 
 ### Configuration Examples
 ```bash
 # Gemini (Recommended)
 export KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 export GOOGLE_API_KEY=your_api_key
-
-# OpenAI
-export KODIAK_LLM_MODEL=openai/gpt-4
-export OPENAI_API_KEY=your_api_key
-
-# Local Ollama (Privacy-focused)
-export KODIAK_LLM_MODEL=ollama/llama3.1:70b
 ```
 
 ## 🐳 Docker Usage
@@ -249,7 +235,7 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 ## 🙏 Acknowledgments
 
 - Built with [Textual](https://textual.textualize.io/) for the modern TUI
-- Powered by [LiteLLM](https://docs.litellm.ai/) for multi-provider LLM access
+- Powered by native Google Gemini API integration
 - Integrates industry-standard security tools (nmap, nuclei, sqlmap, etc.)
 
 ---

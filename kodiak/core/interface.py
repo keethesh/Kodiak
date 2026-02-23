@@ -9,6 +9,7 @@ from kodiak.api.events import TUIEvent, TUIEventManager, event_manager as defaul
 from kodiak.core.interface_events import CoreEvent, map_tui_event_payload
 from kodiak.core.scan_runner import ScanRunner, ScanResult
 from kodiak.core.config import settings
+from kodiak.services import llm
 
 
 TERMINAL_EVENTS = {"scan_completed", "scan_failed"}
@@ -146,7 +147,7 @@ class CoreInterface:
 
             original_model = settings.llm_model
             if state.model:
-                settings.llm_model = state.model
+                settings.llm_model = llm.normalize_model_name(state.model)
             try:
                 result = await self._runner.run(
                     target=state.target,

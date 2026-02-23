@@ -3,12 +3,12 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 from loguru import logger
-from litellm import acompletion
 
 from kodiak.core.config import settings
 from kodiak.database.crud import insight_memory
 from kodiak.database.models import InsightMemory
 from kodiak.services import llm
+from kodiak.services.gemini_client import GeminiClient
 
 
 class InsightMemoryService:
@@ -16,6 +16,7 @@ class InsightMemoryService:
 
     def __init__(self, model_name: str):
         self.model_name = model_name
+        self._gemini_client = GeminiClient()
         self._insight_tools = {
             "nmap",
             "nuclei",
@@ -144,32 +145,26 @@ class InsightMemoryService:
         )
 
         try:
-            provider = llm.infer_provider_from_model(self.model_name)
-            api_key = llm.get_api_key_for_provider(provider)
-
-            params = {
-                "model": self.model_name,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a precise security scan memory summarizer. "
-                            "Follow the output contract exactly and return only valid JSON."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.0,
-                "max_tokens": 500,
-            }
-            if provider in {"gemini", "vertex_ai", "openai"}:
-                # Prefer model-side JSON enforcement over prompt-only contracts.
-                params["response_format"] = {"type": "json_object"}
-            if api_key:
-                params["api_key"] = api_key
-
-            response = await acompletion(**params)
-            content = response.choices[0].message.content if response and response.choices else ""
+            normalized_model = llm.normalize_model_name(self.model_name)
+            api_key = llm.get_google_api_key()
+            response = await self._gemini_client.generate(
+                model=normalized_model,
+                api_key=api_key,
+                system_prompt=(
+                    "You are a precise security scan memory summarizer. "
+                    "Follow the output contract exactly and return only valid JSON."
+                ),
+                messages=[{"role": "user", "content": prompt}],
+                tools=[],
+                temperature=0.0,
+                max_tokens=500,
+                thinking_level=llm.resolve_gemini_thinking_level(
+                    normalized_model,
+                    settings.gemini_thinking_level,
+                ),
+                response_mime_type="application/json",
+            )
+            content = response.content if response else ""
             parsed = self._parse_insight_content(content)
             if parsed:
                 return parsed

@@ -24,7 +24,7 @@ Transitions are guarded by "Gates" (e.g., "Has open ports?" -> Yes -> Enum).
 
 ## Tech Stack
 - **Application**: Python 3.11+, Textual TUI Framework
-- **Core Logic**: SQLModel (SQLAlchemy), LiteLLM, asyncio
+- **Core Logic**: SQLModel (SQLAlchemy), native Gemini client, asyncio
 - **Database**: PostgreSQL (pgvector support planned for embeddings)
 - **Security Tools**: nmap, nuclei, sqlmap, commix, subfinder, httpx, Playwright
 - **Engine**: Docker (for sandboxed tool execution)
@@ -114,12 +114,9 @@ The attack surface is modeled as a directed graph:
 
 ## Integration Points
 
-### LLM Providers
-Support for multiple AI providers via LiteLLM:
-- **Google Gemini**: Primary recommendation for performance
-- **OpenAI GPT**: Full GPT-3.5 and GPT-4 support
-- **Anthropic Claude**: Claude 3.5 Sonnet support
-- **Local Models**: Ollama and other local deployments
+### LLM Models
+Gemini-only runtime:
+- **Google Gemini**: `gemini/gemini-3.1-pro-preview`, `gemini/gemini-3-flash-preview`
 
 ### Security Tools
 Comprehensive security toolkit integration:

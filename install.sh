@@ -493,7 +493,7 @@ setup_configuration() {
 # Database: SQLite by default (zero external dependencies)
 KODIAK_DB_TYPE=sqlite
 
-# LLM Provider: Configure with 'kodiak config'
+# LLM: Configure Gemini with 'kodiak config'
 # KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 # GOOGLE_API_KEY=your_api_key_here
 
@@ -513,7 +513,7 @@ EOF
     fi
     
     print_success "Configuration created at $config_file"
-    print_status "Run 'kodiak config' to set up your LLM provider"
+    print_status "Run 'kodiak config' to set up your Gemini model and API key"
 }
 
 # Verify installation
@@ -649,7 +649,7 @@ show_next_steps() {
     print_success "🎉 Kodiak installation complete!"
     echo
     echo "📋 Quick Start:"
-    echo "  1. Set up your LLM provider (interactive wizard):"
+    echo "  1. Set up Gemini model and API key (interactive wizard):"
     echo "     ${CYAN}kodiak config${NC}"
     echo
     echo "  2. Initialize the database:"
