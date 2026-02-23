@@ -139,31 +139,46 @@ RUN set -eux; \
         done; \
     fi; \
     if ! command -v searchsploit >/dev/null 2>&1; then \
-        for candidate in /usr/share/exploitdb/searchsploit /opt/exploitdb/searchsploit; do \
-            if [ -x "$candidate" ]; then \
-                ln -sf "$candidate" /usr/local/bin/searchsploit; \
-                break; \
+        for base in /usr/share/exploitdb /opt/exploitdb /usr/local/share/exploitdb; do \
+            if [ -d "$base" ]; then \
+                candidate="$(find "$base" -maxdepth 4 -type f \( -name 'searchsploit' -o -name 'searchsploit.py' \) | head -n 1 || true)"; \
+                if [ -n "$candidate" ]; then \
+                    chmod +x "$candidate" || true; \
+                    ln -sf "$candidate" /usr/local/bin/searchsploit; \
+                    break; \
+                fi; \
             fi; \
         done; \
     fi; \
     if ! command -v searchsploit >/dev/null 2>&1; then \
+        rm -rf /opt/exploitdb || true; \
         git clone --depth 1 https://github.com/offensive-security/exploitdb.git /opt/exploitdb; \
-        chmod +x /opt/exploitdb/searchsploit; \
-        ln -sf /opt/exploitdb/searchsploit /usr/local/bin/searchsploit; \
+        candidate="$(find /opt/exploitdb -maxdepth 4 -type f \( -name 'searchsploit' -o -name 'searchsploit.py' \) | head -n 1 || true)"; \
+        if [ -n "$candidate" ]; then \
+            chmod +x "$candidate" || true; \
+            ln -sf "$candidate" /usr/local/bin/searchsploit; \
+        fi; \
     fi; \
     if ! command -v commix >/dev/null 2>&1; then \
-        for candidate in /usr/bin/commix.py /usr/share/commix/commix.py /opt/commix/commix.py; do \
-            if [ -f "$candidate" ]; then \
-                chmod +x "$candidate" || true; \
-                ln -sf "$candidate" /usr/local/bin/commix; \
-                break; \
+        for base in /usr/share/commix /opt/commix /usr/bin; do \
+            if [ -d "$base" ]; then \
+                candidate="$(find "$base" -maxdepth 4 -type f \( -name 'commix.py' -o -name 'commix' \) | head -n 1 || true)"; \
+                if [ -n "$candidate" ]; then \
+                    chmod +x "$candidate" || true; \
+                    ln -sf "$candidate" /usr/local/bin/commix; \
+                    break; \
+                fi; \
             fi; \
         done; \
     fi; \
     if ! command -v commix >/dev/null 2>&1; then \
+        rm -rf /opt/commix || true; \
         git clone --depth 1 https://github.com/commixproject/commix.git /opt/commix; \
-        chmod +x /opt/commix/commix.py; \
-        ln -sf /opt/commix/commix.py /usr/local/bin/commix; \
+        candidate="$(find /opt/commix -maxdepth 4 -type f \( -name 'commix.py' -o -name 'commix' \) | head -n 1 || true)"; \
+        if [ -n "$candidate" ]; then \
+            chmod +x "$candidate" || true; \
+            ln -sf "$candidate" /usr/local/bin/commix; \
+        fi; \
     fi
 
 # Fail fast if required toolbox binaries are missing.
