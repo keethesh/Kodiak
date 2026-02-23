@@ -145,8 +145,16 @@ class GeminiClient:
         return declarations
 
     def _convert_messages_to_contents(self, messages: List[Dict[str, Any]]) -> List[types.Content]:
+        """
+        Convert OpenAI-style history to Gemini contents.
+
+        Important:
+        - We intentionally DO NOT reconstruct prior function_call/function_response parts from
+          history because Gemini requires thought_signature propagation for functionCall parts.
+          Reconstructing those parts without the original signature triggers INVALID_ARGUMENT.
+        - Instead, prior tool calls/results are flattened into plain text context.
+        """
         contents: List[types.Content] = []
-        call_id_to_name: Dict[str, str] = {}
 
         for message in messages:
             role = str(message.get("role") or "").strip().lower()
@@ -160,10 +168,8 @@ class GeminiClient:
                 continue
 
             if role == "assistant":
-                parts: List[types.Part] = []
                 content = str(message.get("content") or "").strip()
-                if content:
-                    parts.append(types.Part.from_text(text=content))
+                call_lines: List[str] = []
                 for call in message.get("tool_calls") or []:
                     call_dict = call if isinstance(call, dict) else {}
                     function = call_dict.get("function") or {}
@@ -171,54 +177,38 @@ class GeminiClient:
                     if not tool_name:
                         continue
                     raw_args = function.get("arguments")
-                    args_obj: Dict[str, Any] = {}
-                    if isinstance(raw_args, str):
-                        try:
-                            parsed = json.loads(raw_args)
-                            if isinstance(parsed, dict):
-                                args_obj = parsed
-                        except json.JSONDecodeError:
-                            args_obj = {}
-                    elif isinstance(raw_args, dict):
-                        args_obj = raw_args
-                    parts.append(
-                        types.Part(
-                            function_call=types.FunctionCall(name=tool_name, args=args_obj)
-                        )
-                    )
-                    call_id = str(call_dict.get("id") or "").strip()
-                    if call_id:
-                        call_id_to_name[call_id] = tool_name
+                    if isinstance(raw_args, dict):
+                        args_text = json.dumps(raw_args, sort_keys=True, default=str)
+                    else:
+                        args_text = str(raw_args or "{}").strip()
+                    if len(args_text) > 800:
+                        args_text = args_text[:797] + "..."
+                    call_lines.append(f"[tool_call] {tool_name} args={args_text}")
 
-                if parts:
-                    contents.append(types.Content(role="model", parts=parts))
+                combined = content
+                if call_lines:
+                    call_block = "\n".join(call_lines)
+                    combined = f"{combined}\n{call_block}".strip()
+                if combined:
+                    contents.append(
+                        types.Content(role="model", parts=[types.Part.from_text(text=combined)])
+                    )
                 continue
 
             if role == "tool":
-                call_id = str(message.get("tool_call_id") or "").strip()
-                tool_name = call_id_to_name.get(call_id, "tool_response")
                 tool_content = message.get("content")
-                response_obj: Dict[str, Any] = {"output": str(tool_content or "")}
-                if isinstance(tool_content, str):
-                    candidate = tool_content.strip()
-                    if candidate.startswith("{") and candidate.endswith("}"):
-                        try:
-                            parsed = json.loads(candidate)
-                            if isinstance(parsed, dict):
-                                response_obj = parsed
-                        except json.JSONDecodeError:
-                            pass
+                tool_name = str(message.get("name") or "tool_response").strip()
+                text = str(tool_content or "").strip()
+                if len(text) > 3500:
+                    text = text[:3497] + "..."
+                flattened = (
+                    f"[tool_result] {tool_name}\n"
+                    f"{text}"
+                ).strip()
                 contents.append(
                     types.Content(
                         role="user",
-                        parts=[
-                            types.Part(
-                                function_response=types.FunctionResponse(
-                                    name=tool_name,
-                                    response=response_obj,
-                                )
-                            )
-                        ],
+                        parts=[types.Part.from_text(text=flattened)],
                     )
                 )
 

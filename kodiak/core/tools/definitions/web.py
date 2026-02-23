@@ -81,7 +81,7 @@ class NucleiTool(KodiakTool):
         # Build nuclei command
         command = [
             "nuclei",
-            "-json",  # JSON output for parsing
+            "-jsonl",  # line-delimited JSON output (nuclei v3+)
             "-nc",    # No color
             # Removed -silent to capture actual error strings in stderr on Exit 2
             "-rate-limit", str(args.get("rate_limit", 150)),
@@ -101,8 +101,6 @@ class NucleiTool(KodiakTool):
         if args.get("templates"):
             command.extend(["-templates", args["templates"]])
         
-        cmd_str = " ".join(command)
-
         try:
             from kodiak.core.config import settings
             from kodiak.services.executor import get_docker_executor
@@ -113,7 +111,15 @@ class NucleiTool(KodiakTool):
             )
             result = await executor.run_command(command)
             execution_mode = "docker"
-            
+
+            if result.exit_code != 0:
+                # Compatibility fallback for older nuclei versions that use -json instead of -jsonl.
+                if self._is_json_flag_unsupported(result.stderr, flag="-jsonl"):
+                    legacy_command = list(command)
+                    legacy_command[legacy_command.index("-jsonl")] = "-json"
+                    result = await executor.run_command(legacy_command)
+                    command = legacy_command
+
             if result.exit_code != 0:
                 if self._should_fallback_to_public_nuclei(result):
                     fallback_executor = await get_docker_executor(
@@ -133,12 +139,14 @@ class NucleiTool(KodiakTool):
                             error=f"Command failed with exit code {fallback_result.exit_code}: {error_detail}"
                         )
                 else:
-                    error_detail = self._format_docker_failure(result, settings.toolbox_image)
-                    return ToolResult(
-                        success=False,
-                        output=f"Nuclei scan failed: {error_detail}",
-                        error=f"Command failed with exit code {result.exit_code}: {error_detail}"
-                    )
+                        error_detail = self._format_docker_failure(result, settings.toolbox_image)
+                        return ToolResult(
+                            success=False,
+                            output=f"Nuclei scan failed: {error_detail}",
+                            error=f"Command failed with exit code {result.exit_code}: {error_detail}"
+                        )
+
+            cmd_str = " ".join(command)
             
             # Parse JSON output
             findings = self._parse_nuclei_output(result.stdout)
@@ -190,6 +198,10 @@ class NucleiTool(KodiakTool):
     def _is_tool_missing(self, stderr: str, tool_name: str) -> bool:
         s = (stderr or "").lower()
         return "executable file not found" in s or (tool_name.lower() in s and "not found" in s)
+
+    def _is_json_flag_unsupported(self, stderr: str, flag: str) -> bool:
+        s = (stderr or "").lower()
+        return "flag provided but not defined" in s and flag.lower() in s
 
     def _should_fallback_to_public_nuclei(self, result: Any) -> bool:
         """

@@ -307,6 +307,7 @@ class KodiakAgent:
                     # Add tool result to history
                     history.append({
                         "role": "tool",
+                        "name": tool_name,
                         "tool_call_id": clean_id,
                         "content": self._build_tool_history_content(result)
                     })
