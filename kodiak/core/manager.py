@@ -481,7 +481,14 @@ class ManagerAgent:
             ScanPhase.ENUMERATION: (
                 "Map services on live hosts. Probe all HTTP/HTTPS services (httpx), "
                 "crawl for endpoints (katana), and fuzz for directories/files (ffuf). "
-                "Prioritise hosts with the most exposed ports and services."
+                "Prioritise hosts with the most exposed ports and services. "
+                "Do NOT advance to VULN_SCAN until at least 3 of the most interesting subdomains "
+                "(prelive, staging, dev, gitlab, db, shop — in that priority order) have been "
+                "enumerated with ffuf or katana. "
+                "For GitLab instances: prefer system_execute to probe structured API paths over katana crawl — "
+                "check /api/v4/version (returns version unauthenticated), "
+                "/users/sign_in (open registration?), and /-/health. "
+                "These yield more signal per second than a crawler on a structured platform."
             ),
             ScanPhase.VULN_SCAN: (
                 "Identify exploitable vulnerabilities. Run nuclei against live hosts, "
@@ -513,6 +520,9 @@ class ManagerAgent:
             "2. SELECT: Choose the highest-value tools to run. Prefer parallel dispatch over sequential.",
             "3. VALIDATE: After results arrive, extract findings. Confirm whether the phase objective is satisfied.",
             "4. ADVANCE: If the phase is complete, say \"ADVANCE_PHASE\" in your reasoning to transition.",
+            "5. PRIOR KNOWLEDGE: If <prior_knowledge> is present, treat attack_hint targets as the HIGHEST",
+            "   priority. Investigate them in the current phase before moving to fresh discovery targets.",
+            "   Known hosts with attack_hints often have sibling vulnerabilities — do not skip them.",
             "</instructions>",
             "",
             "<constraints>",
@@ -540,6 +550,10 @@ class ManagerAgent:
             "  nuclei, nikto, wpscan → require VULN_SCAN phase",
             "  sqlmap, commix, searchsploit → require EXPLOITATION phase",
             "Calling these tools in an earlier phase returns a rejection message. Complete phase objectives first.",
+            "If you want to run nuclei/wpscan/nikto but are NOT yet in VULN_SCAN:",
+            "  Do NOT write them as text or attempt function calls. Instead:",
+            "  - Complete remaining enumeration (ffuf unprobed subdomains, system_execute API checks on GitLab)",
+            "  - Then say ADVANCE_PHASE when enumeration objectives are met.",
             "",
             "EXPLOITATION phase requirement: Do NOT say ADVANCE_PHASE until at least one of sqlmap, commix,",
             "or wpscan has returned a result against a confirmed injection point. If the target is not",
@@ -556,12 +570,17 @@ class ManagerAgent:
         if self.scan_state.waf_detected:
             sections.extend([
                 "<waf_context>",
-                "WAF/CDN DETECTED on this target. Adjust tool parameters to avoid blocks and false timeouts:",
-                "- ffuf: use threads=5 (NOT the default 40). Add a short per-request delay if supported.",
-                "- katana: use rate_limit=10 (NOT the default 150).",
+                "WAF/CDN DETECTED. The adjustments below apply to HTTP-based tools ONLY (ffuf, katana, nuclei).",
+                "nmap is TCP-level and is NOT affected by WAFs — scan with your normal full port range.",
+                "",
+                "HTTP tool adjustments:",
+                "- ffuf: Do NOT run broad directory fuzzing against the primary CDN-fronted domain.",
+                "  Cloudflare returns 503 for all requests and the result is instant/empty (wasted tool slot).",
+                "  Only fuzz subdomains that bypass the CDN (staging, prelive, dev, test, db).",
+                "  Use threads=5 and -mc 200,201,204,301,302 to match only success/redirect codes.",
+                "- katana: use rate_limit=10. Use depth=1 on large platforms (GitLab, PrestaShop)",
+                "  to avoid timeouts — these have deep link trees that exhaust the crawl budget.",
                 "- nuclei: use rate_limit=20.",
-                "- Skip broad directory fuzzing on WAF-fronted assets — low yield, high block risk.",
-                "  Target specific known paths (e.g., /admin, /phpmyadmin) instead.",
                 "</waf_context>",
                 "",
             ])

@@ -514,6 +514,11 @@ class KatanaTool(KodiakTool):
         if args.get("scope"):
             command.extend(["-fs", args["scope"]])
 
+        # Graceful crawl-time limit: katana stops itself 30s before the hard asyncio kill,
+        # so partial results are returned instead of nothing on timeout.
+        crawl_time = max(60, (self.execution_timeout or 600) - 30)
+        command.extend(["-ct", str(crawl_time)])
+
         cmd_str = " ".join(command)
 
         try:
