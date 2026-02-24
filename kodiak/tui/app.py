@@ -1,19 +1,13 @@
 """
-Main Kodiak TUI Application
-
-This module contains the main Textual application class for Kodiak.
+Main Kodiak TUI Application — Tabbed Single-Screen Architecture
 """
 
-from typing import Optional, Dict, Any
-import asyncio
 from pathlib import Path
+from typing import Optional
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static
-from textual.containers import Container
-from textual.screen import Screen
 from textual.binding import Binding
-from textual.message import Message
+from textual.widgets import Header, Footer, TabbedContent, TabPane
 from loguru import logger
 
 from kodiak.core.config import settings
@@ -21,161 +15,100 @@ from kodiak.tui.core_bridge import CoreBridge, set_core_bridge
 
 
 class KodiakApp(App):
-    """Main Kodiak TUI Application"""
-    
+    """Kodiak TUI — AI-Powered Penetration Testing Suite"""
+
     CSS_PATH = Path(__file__).parent / "styles.tcss"
-    TITLE = "Kodiak - LLM Penetration Testing Suite"
-    SUB_TITLE = f"v{settings.VERSION}"
-    
-    # Global shortcuts (Requirements 12.1, 12.7)
+    TITLE = "Kodiak"
+    SUB_TITLE = f"AI Penetration Testing Suite  v{settings.VERSION}"
+
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        Binding("q", "quit", "Quit", priority=True),
         Binding("ctrl+c", "quit", "Quit", priority=True),
-        Binding("h", "go_home", "Home"),
         Binding("question_mark", "show_help", "Help"),
+        Binding("n", "new_scan", "New Scan"),
+        Binding("1", "switch_tab('dashboard')", "Dashboard", show=False),
+        Binding("2", "switch_tab('recon')", "Recon", show=False),
+        Binding("3", "switch_tab('findings')", "Findings", show=False),
+        Binding("4", "switch_tab('logs')", "Logs", show=False),
+        Binding("5", "switch_tab('config')", "Config", show=False),
     ]
-    
-    def __init__(self, debug: bool = False):
+
+    def __init__(self, debug: bool = False, target: Optional[str] = None):
         self._debug_mode = debug
-        self.core_bridge = None
+        self._initial_target = target
+        self.core_bridge: Optional[CoreBridge] = None
         super().__init__()
-        
-        if debug:
-            logger.info("KodiakApp initialized in debug mode")
-    
+
     @property
     def debug(self) -> bool:
-        """Get debug mode status"""
-        return getattr(self, '_debug_mode', False)
-    
-    def on_mount(self) -> None:
-        """Called when the app is mounted"""
-        logger.info("Kodiak TUI starting...")
-        # Start with the home screen
-        from kodiak.tui.views.home import HomeScreen
-        self.push_screen(HomeScreen())
-    
-    def action_quit(self) -> None:
-        """Quit the application (Requirement 12.1)"""
-        logger.info("Kodiak TUI shutting down...")
-        self.exit()
-    
-    def action_go_home(self) -> None:
-        """Go to home screen (Requirement 12.1)"""
-        # Pop all screens and go to home
-        while len(self.screen_stack) > 1:
-            self.pop_screen()
-        
-        # If we're not on home, push home screen
-        from kodiak.tui.views.home import HomeScreen
-        if not isinstance(self.screen, HomeScreen):
-            self.push_screen(HomeScreen())
-    
-    def action_show_help(self) -> None:
-        """Show help overlay (Requirement 12.1, 12.7)"""
-        from kodiak.tui.views.help import HelpScreen
-        self.push_screen(HelpScreen())
-    
+        return getattr(self, "_debug_mode", False)
+
+    def compose(self) -> ComposeResult:
+        from kodiak.tui.views.dashboard import DashboardView
+        from kodiak.tui.views.recon import ReconView
+        from kodiak.tui.views.findings_tab import FindingsView
+        from kodiak.tui.views.logs_tab import LogsView
+        from kodiak.tui.views.config_tab import ConfigView
+
+        yield Header()
+        with TabbedContent(initial="dashboard"):
+            with TabPane("🏠 Dashboard", id="dashboard"):
+                yield DashboardView(id="dashboard-view")
+            with TabPane("🌐 Recon & Surface", id="recon"):
+                yield ReconView(id="recon-view")
+            with TabPane("🔒 Findings", id="findings"):
+                yield FindingsView(id="findings-view")
+            with TabPane("📋 Logs", id="logs"):
+                yield LogsView(id="logs-view")
+            with TabPane("⚙️ Config", id="config"):
+                yield ConfigView(id="config-view")
+        yield Footer()
+
     async def on_startup(self) -> None:
-        """Called when the app starts up with comprehensive error handling"""
-        logger.info("Kodiak TUI startup starting...")
-        
+        """Initialize core bridge on startup."""
+        logger.info("Kodiak TUI starting…")
         try:
-            # Initialize core bridge
             self.core_bridge = CoreBridge(self)
             set_core_bridge(self.core_bridge)
             await self.core_bridge.initialize()
-            
-            logger.info("Kodiak TUI startup complete")
-            
+            logger.info("Kodiak TUI ready.")
         except Exception as e:
-            logger.error(f"Failed to start Kodiak TUI: {e}")
-            
-            # Show error screen to user
-            from kodiak.tui.views.error import ErrorScreen
-            error_screen = ErrorScreen(
-                title="Startup Failed",
-                message=f"Failed to initialize Kodiak: {str(e)}",
-                details={
-                    "error_type": type(e).__name__,
-                    "database_url": settings.database_url,
-                    "debug_mode": self.debug
-                },
-                recoverable=False
+            logger.error(f"Startup failed: {e}")
+            self.notify(
+                f"Startup error: {str(e)[:120]}\nRun 'kodiak init' to initialize the database.",
+                severity="error",
+                timeout=20,
             )
-            self.push_screen(error_screen)
-    
+
     async def on_shutdown(self) -> None:
-        """Called when the app shuts down with error handling"""
-        logger.info("Kodiak TUI shutdown starting...")
-        
+        """Shutdown core bridge cleanly."""
         try:
-            # Shutdown core bridge
             if self.core_bridge:
                 await self.core_bridge.shutdown()
-            
-            logger.info("Kodiak TUI shutdown complete")
-            
         except Exception as e:
-            logger.error(f"Error during Kodiak TUI shutdown: {e}")
-            # Don't raise during shutdown - just log
-    
-    def handle_error_message(self, message) -> None:
-        """Handle error messages from core bridge"""
-        from kodiak.tui.events import ErrorOccurred
-        
-        if isinstance(message, ErrorOccurred):
-            logger.error(f"Error from {message.source}: {message.error_message}")
-            
-            # Show error notification to user
-            if message.error_type == "database_unavailable":
-                self.notify(
-                    "Database connection lost. Some features may not work.",
-                    severity="error",
-                    timeout=10
-                )
-            elif message.error_type == "database_init_failed":
-                self.notify(
-                    "Database initialization failed. Please check your configuration.",
-                    severity="error",
-                    timeout=15
-                )
-            elif not message.recoverable:
-                # Show critical error screen
-                from kodiak.tui.views.error import ErrorScreen
-                error_screen = ErrorScreen(
-                    title="Critical Error",
-                    message=message.error_message,
-                    details=message.details,
-                    recoverable=message.recoverable
-                )
-                self.push_screen(error_screen)
-            else:
-                # Show recoverable error as notification
-                self.notify(
-                    f"Error: {message.error_message}",
-                    severity="error",
-                    timeout=8
-                )
-    
-    def on_message(self, message: Message) -> None:
-        """Handle messages from the application"""
-        from kodiak.tui.events import ErrorOccurred, LogMessage
-        
-        if isinstance(message, ErrorOccurred):
-            self.handle_error_message(message)
-        elif isinstance(message, LogMessage):
-            if message.level == "error":
-                self.notify(message.message, severity="error")
-            elif message.level == "warning":
-                self.notify(message.message, severity="warning")
-            elif message.level == "info":
-                self.notify(message.message, severity="information")
-        
-        # Let parent handle other messages
-        super().on_message(message)
+            logger.error(f"Shutdown error: {e}")
+
+    # ── Actions ──────────────────────────────────────────────────────────────
+
+    def action_quit(self) -> None:
+        logger.info("Kodiak TUI exiting.")
+        self.exit()
+
+    def action_show_help(self) -> None:
+        from kodiak.tui.views.help import HelpScreen
+        self.push_screen(HelpScreen())
+
+    def action_new_scan(self) -> None:
+        from kodiak.tui.views.new_scan import NewScanModal
+        self.push_screen(NewScanModal())
+
+    def action_switch_tab(self, tab_id: str) -> None:
+        try:
+            tc = self.query_one(TabbedContent)
+            tc.active = tab_id
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
-    app = KodiakApp(debug=True)
-    app.run()
+    KodiakApp(debug=True).run()

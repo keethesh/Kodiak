@@ -1,43 +1,197 @@
-/* Kodiak TUI Styles - Catppuccin Mocha Theme */
+/* ============================================================
+   Kodiak TUI Styles — Catppuccin Mocha — Premium Dark Theme
+   ============================================================ */
 
-/* Color scheme - Dark theme */
-$background: #1e1e2e;
-$surface: #313244;
-$surface-light: #45475a;
-$overlay: #6c7086;
-$text: #cdd6f4;
-$text-muted: #9399b2;
-$text-selected: #1e1e2e;
-$primary: #89b4fa;
-$secondary: #f38ba8;
-$accent: #a6e3a1;
-$warning: #f9e2af;
-$error: #f38ba8;
-$success: #a6e3a1;
+/* ── Palette ── */
+$base:          #1e1e2e;
+$mantle:        #181825;
+$crust:         #11111b;
+$surface0:      #313244;
+$surface1:      #45475a;
+$surface2:      #585b70;
+$overlay0:      #6c7086;
+$overlay1:      #7f849c;
+$overlay2:      #9399b2;
+$text:          #cdd6f4;
+$subtext0:      #a6adc8;
+$subtext1:      #bac2de;
+$lavender:      #b4befe;
+$blue:          #89b4fa;
+$sapphire:      #74c7ec;
+$sky:           #89dceb;
+$teal:          #94e2d5;
+$green:         #a6e3a1;
+$yellow:        #f9e2af;
+$peach:         #fab387;
+$maroon:        #eba0ac;
+$red:           #f38ba8;
+$mauve:         #cba6f7;
+$pink:          #f5c2e7;
+$flamingo:      #f2cdcd;
+$rosewater:     #f5e0dc;
 
-/* Global styles */
+/* Semantic aliases */
+$background:    $base;
+$surface:       $surface0;
+$surface-mid:   $surface1;
+$muted:         $overlay0;
+$accent:        $blue;
+$primary:       $lavender;
+$success:       $green;
+$warning:       $yellow;
+$danger:        $red;
+$info:          $sapphire;
+
+/* ── Global ── */
 Screen {
     background: $background;
-}
-
-/* Header and Footer */
-Header {
-    dock: top;
-    height: 3;
-    background: $surface;
-    color: $primary;
-}
-
-Footer {
-    dock: bottom;
-    height: 3;
-    background: $surface;
     color: $text;
 }
 
-/* Button styling */
+/* ── Header ── */
+Header {
+    dock: top;
+    height: 1;
+    background: $mantle;
+    color: $primary;
+    text-style: bold;
+}
+
+HeaderIcon {
+    display: none;
+}
+
+/* ── Footer ── */
+Footer {
+    dock: bottom;
+    height: 1;
+    background: $mantle;
+    color: $subtext0;
+}
+
+FooterKey .footer-key--key {
+    background: $surface0;
+    color: $accent;
+}
+
+/* ── TabbedContent ── */
+TabbedContent {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 0 1;
+}
+
+Tabs {
+    background: $mantle;
+    border-bottom: solid $surface1;
+    height: 3;
+}
+
+Tabs:focus Tab {
+    background: $surface0;
+}
+
+Tab {
+    background: $mantle;
+    color: $subtext0;
+    padding: 1 2;
+}
+
+Tab.-active {
+    background: $surface0;
+    color: $primary;
+    text-style: bold;
+    border-bottom: solid $accent;
+}
+
+Tab:hover {
+    background: $surface0;
+    color: $text;
+}
+
+/* ── Panels / Cards ── */
+.panel {
+    border: round $surface1;
+    background: $mantle;
+    padding: 0;
+}
+
+.panel:focus-within {
+    border: round $accent;
+}
+
+.panel-title {
+    dock: top;
+    height: 1;
+    background: $surface0;
+    color: $primary;
+    text-align: center;
+    text-style: bold;
+    padding: 0 1;
+}
+
+.card {
+    background: $surface0;
+    border: round $surface1;
+    padding: 1 2;
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+.card:hover {
+    border: round $overlay0;
+}
+
+/* ── Stat Cards ── */
+.stat-card {
+    background: $surface0;
+    border: round $surface1;
+    height: 5;
+    align: center middle;
+    padding: 0 2;
+    content-align: center middle;
+    text-align: center;
+}
+
+.stat-value {
+    color: $accent;
+    text-style: bold;
+}
+
+.stat-label {
+    color: $subtext0;
+}
+
+/* ── DataTable ── */
+DataTable {
+    background: $mantle;
+    height: 1fr;
+}
+
+DataTable > .datatable--header {
+    background: $surface0;
+    color: $primary;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $surface1;
+    color: $text;
+}
+
+DataTable > .datatable--odd-row {
+    background: $mantle;
+}
+
+DataTable > .datatable--even-row {
+    background: $base;
+}
+
+/* ── Buttons ── */
 Button {
-    background: $surface-light;
+    background: $surface1;
     color: $text;
     border: none;
     height: 3;
@@ -45,259 +199,386 @@ Button {
 }
 
 Button:hover {
-    background: $overlay;
+    background: $overlay0;
+    color: $text;
+    border: none;
 }
 
 Button:focus {
-    background: $primary;
-    color: $background;
+    background: $accent;
+    color: $base;
+    border: none;
+    text-style: bold;
 }
 
 Button.-primary {
-    background: $primary;
-    color: $background;
+    background: $accent;
+    color: $base;
+    text-style: bold;
 }
 
 Button.-success {
-    background: $accent;
-    color: $background;
+    background: $green;
+    color: $base;
+    text-style: bold;
 }
 
 Button.-warning {
-    background: $warning;
-    color: $background;
+    background: $yellow;
+    color: $base;
 }
 
 Button.-error {
-    background: $error;
-    color: $background;
+    background: $red;
+    color: $base;
 }
 
-/* Input styling */
+/* ── Inputs ── */
 Input {
-    background: $surface;
-    border: solid $overlay;
+    background: $surface0;
+    border: tall $surface1;
+    color: $text;
     padding: 0 1;
 }
 
 Input:focus {
-    border: solid $primary;
+    border: tall $accent;
 }
 
 Input.-invalid {
-    border: solid $error;
+    border: tall $red;
 }
 
-/* DataTable styling */
-DataTable {
-    background: $background;
+TextArea {
+    background: $surface0;
+    border: tall $surface1;
+    color: $text;
 }
 
-DataTable > .datatable--header {
-    background: $surface-light;
-    color: $primary;
+TextArea:focus {
+    border: tall $accent;
+}
+
+/* ── Severity Badges ── */
+.sev-critical {
+    color: $red;
     text-style: bold;
 }
 
-DataTable > .datatable--cursor {
-    background: $primary;
-    color: $background;
+.sev-high {
+    color: $peach;
+    text-style: bold;
 }
 
-/* Panel styling */
-.panel {
-    border: solid $surface-light;
-    background: $background;
+.sev-medium {
+    color: $yellow;
 }
 
-.panel-title {
-    dock: top;
+.sev-low {
+    color: $blue;
+}
+
+.sev-info {
+    color: $overlay1;
+}
+
+/* ── Status Indicators ── */
+.status-running {
+    color: $green;
+    text-style: bold;
+}
+
+.status-paused {
+    color: $yellow;
+}
+
+.status-completed {
+    color: $teal;
+}
+
+.status-failed {
+    color: $red;
+    text-style: bold;
+}
+
+.status-pending {
+    color: $overlay1;
+}
+
+/* ── Log Level Colors ── */
+.log-error {
+    color: $red;
+}
+
+.log-warn {
+    color: $yellow;
+}
+
+.log-info {
+    color: $blue;
+}
+
+.log-success {
+    color: $green;
+}
+
+.log-debug {
+    color: $overlay1;
+}
+
+/* ── Scan Phase Indicator ── */
+.phase-badge {
+    color: $mauve;
+    text-style: bold;
+}
+
+/* ── Section Dividers ── */
+.section-header {
     height: 1;
-    background: $surface-light;
-    color: $primary;
-    text-align: center;
+    background: $surface0;
+    color: $lavender;
     text-style: bold;
     padding: 0 1;
 }
 
-/* Home Screen */
-#home-container {
+/* ── Scrollbars ── */
+ScrollBar {
+    background: $surface0;
+}
+
+ScrollBar > .scrollbar--bar {
+    background: $surface1;
+}
+
+ScrollBar > .scrollbar--bar:hover {
+    background: $overlay0;
+}
+
+/* ── Rules / Separators ── */
+Rule {
+    color: $surface1;
+}
+
+/* ── Loading / Overlay ── */
+.loading-overlay {
     align: center middle;
-    height: 100%;
+    background: $base 80%;
 }
 
-#welcome {
-    text-align: center;
-    text-style: bold;
+LoadingIndicator {
     color: $accent;
-    margin: 1;
 }
 
-#instructions {
-    text-align: center;
-    margin: 1;
+/* ── Modal Screens ── */
+ModalScreen {
+    background: $base 70%;
 }
 
-#help-hint {
-    text-align: center;
-    color: $text-muted;
-    margin: 1;
+.modal-container {
+    background: $surface0;
+    border: round $primary;
+    padding: 2 3;
+    width: 70;
+    height: auto;
+    max-height: 90%;
 }
 
-/* Help Screen */
-#help-container {
-    align: center middle;
-    height: 100%;
-    max-width: 60;
-}
-
-#help-title {
-    text-align: center;
+.modal-title {
+    color: $primary;
     text-style: bold;
-    color: $accent;
+    text-align: center;
     margin-bottom: 1;
 }
 
-#help-global-title, #help-home-title {
-    text-style: bold;
-    color: $secondary;
-    margin-top: 1;
-}
-
-#help-quit, #help-home, #help-help, #help-new, #help-refresh {
-    margin-left: 2;
-    color: $text;
-}
-
-#help-close {
+.modal-subtitle {
+    color: $subtext0;
     text-align: center;
-    color: $text-muted;
+    margin-bottom: 2;
+}
+
+/* ── Dashboard specific ── */
+#scan-header {
+    height: 3;
+    background: $surface0;
+    border: round $surface1;
+    padding: 0 2;
+    margin-bottom: 1;
+    align: left middle;
+}
+
+#scan-header.running {
+    border: round $green;
+}
+
+#scan-header.failed {
+    border: round $red;
+}
+
+#scan-header.paused {
+    border: round $yellow;
+}
+
+#stats-row {
+    height: 7;
+    margin-bottom: 1;
+}
+
+#severity-bar-container {
+    height: 5;
+    border: round $surface1;
+    padding: 1 2;
+    margin-bottom: 1;
+}
+
+#activity-feed {
+    height: 1fr;
+    border: round $surface1;
+}
+
+#projects-panel {
+    height: 1fr;
+    border: round $surface1;
+}
+
+/* ── Recon tab ── */
+#recon-layout {
+    height: 1fr;
+}
+
+#surface-tree {
+    width: 2fr;
+    height: 1fr;
+    border: round $surface1;
+    margin-right: 1;
+}
+
+#node-detail {
+    width: 1fr;
+    height: 1fr;
+    border: round $surface1;
+}
+
+#attempts-table {
+    height: 1fr;
+    border: round $surface1;
     margin-top: 1;
 }
 
-#help-spacer, #help-spacer2, #help-spacer3 {
-    height: 1;
+/* ── Findings tab ── */
+#findings-layout {
+    height: 1fr;
 }
 
-/* Error Screen */
+#findings-list-panel {
+    width: 2fr;
+    height: 1fr;
+    border: round $surface1;
+    margin-right: 1;
+}
+
+#finding-detail-panel {
+    width: 3fr;
+    height: 1fr;
+    border: round $surface1;
+}
+
+#sev-summary {
+    height: 3;
+    background: $surface0;
+    border-bottom: solid $surface1;
+    padding: 0 2;
+    align: left middle;
+}
+
+/* ── Logs tab ── */
+#agent-status-bar {
+    height: 3;
+    background: $surface0;
+    border: round $surface1;
+    padding: 0 2;
+    margin-bottom: 1;
+    align: left middle;
+}
+
+#logs-layout {
+    height: 1fr;
+}
+
+#execution-log {
+    width: 2fr;
+    height: 1fr;
+    border: round $surface1;
+    margin-right: 1;
+}
+
+#tool-table {
+    width: 1fr;
+    height: 1fr;
+    border: round $surface1;
+}
+
+#notes-panel {
+    height: 12;
+    border: round $surface1;
+    margin-top: 1;
+}
+
+/* ── Error Screen ── */
 #error-container {
     align: center middle;
     height: 100%;
-    max-width: 80;
     padding: 2;
 }
 
-#error-header {
-    text-align: center;
-    text-style: bold;
-    color: $error;
-    margin-bottom: 1;
-    background: $surface;
-    padding: 1;
-    border: solid $error;
+#error-box {
+    background: $surface0;
+    border: round $red;
+    padding: 2 3;
+    width: 80;
+    height: auto;
+    max-height: 80%;
 }
 
-#error-content {
-    background: $surface;
-    padding: 1;
-    border: solid $primary;
+#error-title {
+    color: $red;
+    text-style: bold;
+    text-align: center;
     margin-bottom: 1;
-    height: auto;
-    max-height: 70%;
-    overflow-y: auto;
+}
+
+#error-message {
+    color: $text;
+    margin-bottom: 2;
 }
 
 #error-buttons {
     align: center middle;
     height: auto;
-    margin-top: 1;
 }
 
-#error-buttons Button {
-    margin: 0 1;
-    min-width: 15;
-}
-
-#retry-button {
-    background: $accent;
-    color: $background;
-}
-
-#continue-button {
-    background: $warning;
-    color: $background;
-}
-
-#quit-button {
-    background: $error;
-    color: $text;
-}
-
-/* Loading Indicators */
-.loading-indicator {
-    align: center middle;
+/* ── Help Screen ── */
+#help-box {
+    background: $surface0;
+    border: round $primary;
+    padding: 2 3;
+    width: 70;
     height: auto;
-    width: auto;
+    max-height: 85%;
 }
 
-#loading-container {
-    align: center middle;
-    height: auto;
-    width: auto;
-    background: $surface;
-    border: solid $overlay;
-    padding: 1;
-}
-
-#loading-content {
-    align: center middle;
-    height: auto;
-    width: auto;
-}
-
-#spinner {
-    color: $accent;
-    margin-right: 1;
+.help-section-title {
+    color: $lavender;
     text-style: bold;
+    margin-top: 1;
+    margin-bottom: 0;
 }
 
-#loading-message {
-    color: $text;
+.help-binding {
+    color: $subtext0;
+    margin-left: 2;
 }
 
-.progress-indicator {
-    align: center middle;
-    height: auto;
-    width: auto;
-}
-
-#progress-container {
-    align: center middle;
-    height: auto;
-    width: auto;
-    background: $surface;
-    border: solid $overlay;
-    padding: 1;
-}
-
-#progress-message {
-    color: $text;
-    text-align: center;
-    margin-bottom: 1;
-}
-
-#progress-bar {
+.help-key {
     color: $accent;
-    text-align: center;
-    margin-bottom: 1;
-}
-
-#progress-percentage {
-    color: $text-muted;
-    text-align: center;
-}
-
-.async-operation {
-    height: 100%;
-    width: 100%;
+    text-style: bold;
 }

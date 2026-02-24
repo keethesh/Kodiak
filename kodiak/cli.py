@@ -620,9 +620,7 @@ def tui(target: Optional[str]):
     
     try:
         from kodiak.tui.app import KodiakApp
-        app = KodiakApp()
-        if target:
-            app.initial_target = target
+        app = KodiakApp(target=target)
         app.run()
     except Exception as e:
         console.print(f"[red]Failed to launch TUI: {e}[/red]")

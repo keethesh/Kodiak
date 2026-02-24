@@ -241,6 +241,11 @@ class AppState:
         )
         self.scans[scan_state.id] = scan_state
         self.emit("scan_added", scan_state)
+
+    def add_scan_state(self, scan_state: "ScanState"):
+        """Add a ScanState directly (e.g., from modal fallback before DB commit)."""
+        self.scans[scan_state.id] = scan_state
+        self.emit("scan_added", scan_state)
     
     def update_scan_status(self, scan_id: str, status: ScanStatus):
         """Update scan status"""

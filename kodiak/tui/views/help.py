@@ -1,150 +1,120 @@
 """
-HelpScreen View
-
-Help overlay showing keyboard shortcuts and navigation guide.
+Help Screen — Modal overlay with keyboard shortcuts reference.
 """
 
-from textual.screen import Screen
 from textual.app import ComposeResult
-from textual.widgets import Header, Footer, Static
-from textual.containers import Vertical, Container, ScrollableContainer
 from textual.binding import Binding
+from textual.containers import Container, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, Label, Static
+from textual.widgets import Rule
 
 
-class HelpScreen(Screen):
-    """
-    Help screen showing keyboard shortcuts
-    
-    Requirements: 12.7
-    """
-    
+class HelpScreen(ModalScreen):
+    """Help overlay — keyboard shortcuts reference."""
+
     BINDINGS = [
-        Binding("escape", "close", "Close"),
-        Binding("q", "close", "Close"),
+        Binding("escape", "close", "Close", priority=True),
         Binding("question_mark", "close", "Close"),
+        Binding("ctrl+c", "close", "Close"),
     ]
-    
+
     CSS = """
     HelpScreen {
-        layout: vertical;
-        background: $surface 80%;
+        align: center middle;
     }
-    
-    #help-container {
-        width: 80%;
-        height: 90%;
-        margin: 2 auto;
+
+    #help-box {
         background: $surface;
-        border: solid $primary;
-        padding: 1 2;
+        border: round $primary;
+        padding: 2 3;
+        width: 68;
+        height: auto;
+        max-height: 90%;
     }
-    
+
     #help-title {
-        text-align: center;
+        color: $primary;
         text-style: bold;
-        height: 2;
-        background: $primary;
+        text-align: center;
         margin-bottom: 1;
     }
-    
-    .section-title {
+
+    .help-section {
+        color: $lavender;
         text-style: bold;
-        color: $accent;
+        margin-top: 1;
+        margin-bottom: 0;
+    }
+
+    .help-row {
+        color: $subtext0;
+        padding: 0 2;
+    }
+
+    #close-hint {
+        text-align: center;
+        color: $muted;
         margin-top: 1;
     }
-    
-    .shortcut {
-        margin-left: 2;
-    }
-    
-    .key {
-        text-style: bold;
-        color: $warning;
-    }
-    
-    #close-hint {
-        dock: bottom;
-        height: 1;
-        text-align: center;
-        color: $text-muted;
-    }
     """
-    
+
     def compose(self) -> ComposeResult:
-        yield Header()
-        
-        with Container(id="help-container"):
-            yield Static("🐻 Kodiak TUI - Keyboard Shortcuts", id="help-title")
-            
-            with ScrollableContainer():
-                # Global shortcuts
-                yield Static("Global Shortcuts", classes="section-title")
-                yield Static("  q         - Quit application", classes="shortcut")
-                yield Static("  h         - Go to home screen", classes="shortcut")
-                yield Static("  ?         - Show this help", classes="shortcut")
-                yield Static("  Escape    - Go back / Cancel", classes="shortcut")
-                
-                # Home screen
-                yield Static("\nHome Screen", classes="section-title")
-                yield Static("  n         - Create new scan", classes="shortcut")
-                yield Static("  d         - Delete selected project", classes="shortcut")
-                yield Static("  r         - Resume paused scan", classes="shortcut")
-                yield Static("  Enter     - Open selected project", classes="shortcut")
-                yield Static("  ↑/↓       - Navigate projects", classes="shortcut")
-                
-                # New scan screen
-                yield Static("\nNew Scan Screen", classes="section-title")
-                yield Static("  Tab       - Move between fields", classes="shortcut")
-                yield Static("  Enter     - Start scan", classes="shortcut")
-                yield Static("  Escape    - Cancel and go back", classes="shortcut")
-                
-                # Mission control
-                yield Static("\nMission Control", classes="section-title")
-                yield Static("  Tab       - Cycle between panels", classes="shortcut")
-                yield Static("  g         - Open graph view", classes="shortcut")
-                yield Static("  f         - Open findings view", classes="shortcut")
-                yield Static("  p         - Pause/Resume scan", classes="shortcut")
-                yield Static("  Enter     - Select agent for chat", classes="shortcut")
-                
-                # Agent chat
-                yield Static("\nAgent Chat", classes="section-title")
-                yield Static("  ←/→       - Switch between agents", classes="shortcut")
-                yield Static("  Enter     - Send message", classes="shortcut")
-                yield Static("  Escape    - Return to mission control", classes="shortcut")
-                
-                # Graph view
-                yield Static("\nGraph View", classes="section-title")
-                yield Static("  ↑/↓       - Navigate nodes", classes="shortcut")
-                yield Static("  ←/→       - Collapse/Expand", classes="shortcut")
-                yield Static("  /         - Search nodes", classes="shortcut")
-                yield Static("  Enter     - View finding details", classes="shortcut")
-                yield Static("  Escape    - Go back", classes="shortcut")
-                
-                # Findings view
-                yield Static("\nFindings View", classes="section-title")
-                yield Static("  1-5       - Filter by severity", classes="shortcut")
-                yield Static("  0         - Show all findings", classes="shortcut")
-                yield Static("  a         - Cycle agent filter", classes="shortcut")
-                yield Static("  t         - Cycle type filter", classes="shortcut")
-                yield Static("  e         - Export findings", classes="shortcut")
-                yield Static("  Enter     - View finding details", classes="shortcut")
-                yield Static("  Escape    - Go back", classes="shortcut")
-                
-                # Finding detail
-                yield Static("\nFinding Detail", classes="section-title")
-                yield Static("  c         - Copy proof-of-concept", classes="shortcut")
-                yield Static("  r         - Re-test vulnerability", classes="shortcut")
-                yield Static("  Escape    - Go back", classes="shortcut")
-            
-            yield Static("Press Escape, Q, or ? to close", id="close-hint")
-        
-        yield Footer()
-    
+        with Container(id="help-box"):
+            yield Static("⌨  Keyboard Shortcuts", id="help-title")
+            yield Rule()
+
+            yield Static("Global", classes="help-section")
+            for key, desc in [
+                ("q / Escape", "Quit"),
+                ("?",          "Toggle this help"),
+                ("n",          "New Scan modal"),
+                ("1 – 5",      "Switch tabs"),
+            ]:
+                yield Static(f"  [bold cyan]{key:<18}[/bold cyan] {desc}", classes="help-row")
+
+            yield Static("Dashboard (Tab 1)", classes="help-section")
+            for key, desc in [
+                ("r",     "Refresh data"),
+                ("Enter", "Select / open project"),
+            ]:
+                yield Static(f"  [bold cyan]{key:<18}[/bold cyan] {desc}", classes="help-row")
+
+            yield Static("Recon & Surface (Tab 2)", classes="help-section")
+            for key, desc in [
+                ("↑ / ↓",       "Navigate tree"),
+                ("← / →",       "Collapse / expand node"),
+                ("Enter",       "Select node for details"),
+                ("r",           "Refresh surface"),
+            ]:
+                yield Static(f"  [bold cyan]{key:<18}[/bold cyan] {desc}", classes="help-row")
+
+            yield Static("Findings (Tab 3)", classes="help-section")
+            for key, desc in [
+                ("↑ / ↓",    "Navigate findings"),
+                ("Enter",    "Select finding for detail"),
+                ("c",        "Filter by critical"),
+                ("1",        "Clear filters"),
+                ("e",        "Export to JSON"),
+                ("r",        "Refresh"),
+            ]:
+                yield Static(f"  [bold cyan]{key:<18}[/bold cyan] {desc}", classes="help-row")
+
+            yield Static("Logs (Tab 4)", classes="help-section")
+            for key, desc in [
+                ("c", "Clear log view"),
+                ("r", "Refresh all"),
+            ]:
+                yield Static(f"  [bold cyan]{key:<18}[/bold cyan] {desc}", classes="help-row")
+
+            yield Static("Config (Tab 5)", classes="help-section")
+            for key, desc in [
+                ("r",     "Refresh health status"),
+            ]:
+                yield Static(f"  [bold cyan]{key:<18}[/bold cyan] {desc}", classes="help-row")
+
+            yield Rule()
+            yield Static("[dim]Press [bold cyan]?[/bold cyan] or [bold cyan]Escape[/bold cyan] to close[/dim]", id="close-hint")
+
     def action_close(self) -> None:
-        """Close the help screen"""
-        self.app.pop_screen()
-    
-    def on_key(self, event) -> None:
-        """Close help on any key press (except navigation)"""
-        if event.key not in ["up", "down", "pageup", "pagedown"]:
-            self.app.pop_screen()
+        self.dismiss()

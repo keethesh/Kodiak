@@ -1,0 +1,343 @@
+"""
+Dashboard View — Live stats, severity breakdown, activity feed, project selector.
+"""
+
+from datetime import datetime
+from typing import List
+
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical
+from textual.widgets import DataTable, Label, ListItem, ListView, Static
+from loguru import logger
+
+from kodiak.tui.state import app_state, ScanStatus, ProjectState, ScanState
+
+
+# ── Severity bar helpers ──────────────────────────────────────────────────────
+
+_SEV_COLORS = {
+    "critical": "[bold red]",
+    "high":     "[orange1]",
+    "medium":   "[yellow]",
+    "low":      "[blue]",
+    "info":     "[dim white]",
+}
+
+_SEV_ORDER = ["critical", "high", "medium", "low", "info"]
+
+
+def _sev_markup(sev: str, count: int) -> str:
+    color = _SEV_COLORS.get(sev, "[white]")
+    end = color.replace("[", "[/").rstrip("]") + "]"
+    # rich markup: colour block with label
+    return f"{color}● {sev.upper()} {count}{end}"
+
+
+def _phase_markup(phase: str) -> str:
+    colors = {
+        "recon":       "[cyan]",
+        "enumeration": "[green]",
+        "vuln_scan":   "[yellow]",
+        "exploitation":"[red]",
+        "reporting":   "[magenta]",
+    }
+    c = colors.get(phase, "[white]")
+    end = c.replace("[", "[/").rstrip("]") + "]"
+    return f"{c}◆ {phase.upper()}{end}"
+
+
+class DashboardView(Static):
+    """Main dashboard tab — always-visible overview."""
+
+    BINDINGS = [
+        Binding("r", "refresh", "Refresh", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    DashboardView {
+        layout: vertical;
+        height: 1fr;
+    }
+
+    #dash-top {
+        height: auto;
+    }
+
+    #scan-header {
+        height: 3;
+        background: $surface;
+        border: round $surface1;
+        padding: 0 2;
+        margin-bottom: 1;
+    }
+
+    #stats-row {
+        height: 7;
+        margin-bottom: 1;
+    }
+
+    .stat-card {
+        background: $surface;
+        border: round $surface1;
+        padding: 1 2;
+        width: 1fr;
+        height: 7;
+        content-align: center middle;
+        text-align: center;
+    }
+
+    #sev-row {
+        height: 5;
+        background: $surface;
+        border: round $surface1;
+        padding: 1 2;
+        margin-bottom: 1;
+        align: left middle;
+    }
+
+    #sev-label {
+        width: 14;
+        color: $subtext0;
+    }
+
+    #dash-bottom {
+        height: 1fr;
+        margin-bottom: 0;
+    }
+
+    #activity-panel {
+        width: 1fr;
+        height: 1fr;
+        border: round $surface1;
+        margin-right: 1;
+    }
+
+    #projects-panel {
+        width: 1fr;
+        height: 1fr;
+        border: round $surface1;
+    }
+
+    .panel-title {
+        dock: top;
+        height: 1;
+        background: $surface0;
+        color: $primary;
+        text-align: center;
+        text-style: bold;
+        padding: 0 1;
+    }
+
+    #activity-log-list {
+        height: 1fr;
+        padding: 0 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        # Scan header bar
+        yield Static("", id="scan-header")
+
+        # Stats row: 4 cards
+        with Horizontal(id="stats-row"):
+            yield Static("", id="stat-findings", classes="stat-card")
+            yield Static("", id="stat-nodes", classes="stat-card")
+            yield Static("", id="stat-tools", classes="stat-card")
+            yield Static("", id="stat-phase", classes="stat-card")
+
+        # Severity breakdown bar
+        with Horizontal(id="sev-row"):
+            yield Static("Severity: ", id="sev-label")
+            yield Static("", id="sev-breakdown")
+
+        # Bottom: activity feed + project list
+        with Horizontal(id="dash-bottom"):
+            with Container(id="activity-panel"):
+                yield Static("📋 Activity Feed", classes="panel-title")
+                yield Static("", id="activity-content")
+
+            with Container(id="projects-panel"):
+                yield Static("📁 Projects", classes="panel-title")
+                yield DataTable(id="projects-table", cursor_type="row", zebra_stripes=True)
+
+    def on_mount(self) -> None:
+        self._setup_projects_table()
+        self._refresh_all()
+
+        # Subscribe to state changes
+        app_state.subscribe("project_added",      lambda _: self._refresh_all())
+        app_state.subscribe("project_updated",    lambda _: self._refresh_all())
+        app_state.subscribe("project_removed",    lambda _: self._refresh_all())
+        app_state.subscribe("scan_status_changed",lambda _: self._refresh_all())
+        app_state.subscribe("finding_added",      lambda _: self._refresh_findings())
+
+    # ── Setup ─────────────────────────────────────────────────────────────────
+
+    def _setup_projects_table(self) -> None:
+        t = self.query_one("#projects-table", DataTable)
+        t.add_column("Project", key="name",   width=22)
+        t.add_column("Target",  key="target", width=24)
+        t.add_column("Status",  key="status", width=14)
+        t.add_column("Findings",key="finds",  width=9)
+        t.add_column("Updated", key="upd",    width=12)
+
+    # ── Refresh helpers ───────────────────────────────────────────────────────
+
+    def _refresh_all(self) -> None:
+        self._refresh_scan_header()
+        self._refresh_stats()
+        self._refresh_findings()
+        self._refresh_activity()
+        self._refresh_projects_table()
+
+    def _refresh_scan_header(self) -> None:
+        w = self.query_one("#scan-header", Static)
+        scan   = app_state.get_current_scan()
+        project= app_state.get_current_project()
+
+        if not scan or not project:
+            w.update("[dim]No active scan — press [bold cyan]n[/bold cyan] to start one[/dim]")
+            w.remove_class("running", "paused", "failed", "completed")
+            return
+
+        icons = {
+            ScanStatus.RUNNING:   ("🟢", "running"),
+            ScanStatus.PAUSED:    ("🟡", "paused"),
+            ScanStatus.FAILED:    ("🔴", "failed"),
+            ScanStatus.COMPLETED: ("✅", "completed"),
+            ScanStatus.PENDING:   ("⏳", "pending"),
+        }
+        icon, css_cls = icons.get(scan.status, ("❓", ""))
+        elapsed = ""
+        if scan.started_at:
+            delta = (datetime.now() - scan.started_at.replace(tzinfo=None)).seconds
+            elapsed = f"  ⏱ {delta // 60}m {delta % 60}s"
+
+        agent_info = ""
+        if scan.agents:
+            a = next(iter(scan.agents.values()))
+            agent_info = f"  🤖 {a.name}  {a.current_task or 'idle'}"
+
+        w.update(
+            f"{icon} [bold]{project.name}[/bold]  →  {scan.name}  "
+            f"[dim]|[/dim]  {scan.status.value.title()}{elapsed}{agent_info}"
+        )
+        w.remove_class("running", "paused", "failed", "completed", "pending")
+        if css_cls:
+            w.add_class(css_cls)
+
+    def _refresh_stats(self) -> None:
+        scan = app_state.get_current_scan()
+
+        findings = len(scan.findings) if scan else 0
+        nodes    = len(scan.nodes)    if scan else 0
+        tools    = len(getattr(scan, "tools_run", [])) if scan else 0
+        phase    = getattr(scan, "phase", "—") if scan else "—"
+        if hasattr(phase, "value"):
+            phase = phase.value
+
+        self.query_one("#stat-findings", Static).update(
+            f"[bold cyan]{findings}[/bold cyan]\n[dim]Findings[/dim]"
+        )
+        self.query_one("#stat-nodes", Static).update(
+            f"[bold cyan]{nodes}[/bold cyan]\n[dim]Nodes[/dim]"
+        )
+        self.query_one("#stat-tools", Static).update(
+            f"[bold cyan]{tools}[/bold cyan]\n[dim]Tools Run[/dim]"
+        )
+        self.query_one("#stat-phase", Static).update(
+            f"[bold magenta]{phase}[/bold magenta]\n[dim]Phase[/dim]"
+        )
+
+    def _refresh_findings(self) -> None:
+        scan = app_state.get_current_scan()
+        if not scan:
+            self.query_one("#sev-breakdown", Static).update("[dim]—[/dim]")
+            return
+
+        counts: dict = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for f in scan.findings:
+            sev = getattr(f, "severity", "info")
+            if hasattr(sev, "value"):
+                sev = sev.value
+            counts[sev] = counts.get(sev, 0) + 1
+
+        parts = []
+        for sev in _SEV_ORDER:
+            n = counts.get(sev, 0)
+            parts.append(_sev_markup(sev, n))
+
+        self.query_one("#sev-breakdown", Static).update("    ".join(parts))
+
+    def _refresh_activity(self) -> None:
+        w = self.query_one("#activity-content", Static)
+        all_scans: List[ScanState] = []
+        for p in app_state.get_all_projects():
+            all_scans.extend(app_state.get_scans_for_project(p.id))
+
+        if not all_scans:
+            w.update("[dim]No recent activity. Press [bold cyan]n[/bold cyan] to start a scan.[/dim]")
+            return
+
+        lines = []
+        all_scans.sort(key=lambda s: s.created_at, reverse=True)
+        for scan in all_scans[:15]:
+            p = app_state.get_project(scan.project_id)
+            pname = p.name if p else "?"
+            icon = {
+                ScanStatus.RUNNING:   "🟢",
+                ScanStatus.COMPLETED: "✅",
+                ScanStatus.FAILED:    "🔴",
+                ScanStatus.PAUSED:    "🟡",
+                ScanStatus.PENDING:   "⏳",
+            }.get(scan.status, "  ")
+            ts = scan.created_at.strftime("%m-%d %H:%M")
+            lines.append(f"{icon} [dim]{ts}[/dim]  [bold]{pname}[/bold] — {scan.name}")
+
+        w.update("\n".join(lines))
+
+    def _refresh_projects_table(self) -> None:
+        t = self.query_one("#projects-table", DataTable)
+        t.clear()
+
+        projects = app_state.get_all_projects()
+        if not projects:
+            return
+
+        for p in projects:
+            scans  = app_state.get_scans_for_project(p.id)
+            latest = scans[-1] if scans else None
+            status = "No scans"
+            finds  = 0
+            if latest:
+                status = latest.status.value.title()
+                finds  = len(latest.findings)
+                status_icons = {
+                    "running": "🟢", "completed": "✅",
+                    "failed": "🔴", "paused": "🟡", "pending": "⏳",
+                }
+                status = f"{status_icons.get(latest.status.value, '')} {status}"
+
+            upd = p.updated_at.strftime("%m-%d %H:%M") if hasattr(p, "updated_at") else "—"
+            t.add_row(
+                p.name,
+                getattr(p, "target", "N/A") or "N/A",
+                status,
+                str(finds),
+                upd,
+                key=p.id,
+            )
+
+    def action_refresh(self) -> None:
+        self._refresh_all()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.row_key:
+            pid = str(event.row_key.value)
+            app_state.set_current_project(pid)
+            scans = app_state.get_scans_for_project(pid)
+            if scans:
+                app_state.set_current_scan(scans[-1].id)
+            self._refresh_all()
+            self.notify(f"Project selected — use 🏠 Dashboard to manage, 🔒 Findings to review", timeout=3)

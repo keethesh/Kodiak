@@ -1,19 +1,17 @@
 """
-NewScanScreen View
-
-Screen for creating new security scans with custom parameters.
-Implements input validation and form submission.
+New Scan — Modal screen overlay for creating a new scan.
 """
 
 import re
 from typing import Optional
 from datetime import datetime
 from uuid import uuid4
-from textual.screen import Screen
+
 from textual.app import ComposeResult
-from textual.widgets import Header, Footer, Static, Input, Button, Label, RadioSet, RadioButton, Select
-from textual.containers import Vertical, Horizontal, Container
 from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Static
 from textual.validation import Validator, ValidationResult
 from loguru import logger
 
@@ -21,487 +19,285 @@ from kodiak.tui.state import app_state, ProjectState, ScanState, ScanStatus
 
 
 class TargetValidator(Validator):
-    """Validator for target URL/IP input"""
-    
-    # Regex patterns for validation
+    """Validates target URL/IP/domain input."""
+
     URL_PATTERN = re.compile(
-        r'^https?://'  # http:// or https://
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain
-        r'localhost|'  # localhost
-        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # IP
-        r'(?::\d+)?'  # optional port
-        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
-    
-    IP_PATTERN = re.compile(
-        r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
-        r'(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'
-        r'(?:/(?:3[0-2]|[12]?[0-9]))?$'  # Optional CIDR notation
+        r"^https?://"
+        r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|"
+        r"localhost|"
+        r"\d{1,3}(?:\.\d{1,3}){3})"
+        r"(?::\d+)?(?:/?|[/?]\S+)$",
+        re.IGNORECASE,
     )
-    
     DOMAIN_PATTERN = re.compile(
-        r'^(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}$',
-        re.IGNORECASE
+        r"^(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}$",
+        re.IGNORECASE,
     )
-    
+    IP_PATTERN = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
     def validate(self, value: str) -> ValidationResult:
-        """Validate the target input"""
-        if not value or not value.strip():
-            return self.failure("Target cannot be empty")
-        
-        value = value.strip()
-        
-        # Check if it's a valid URL
-        if self.URL_PATTERN.match(value):
+        v = value.strip()
+        if not v:
+            return self.failure("Target is required")
+        if (self.URL_PATTERN.match(v)
+                or self.DOMAIN_PATTERN.match(v)
+                or self.IP_PATTERN.match(v)):
             return self.success()
-        
-        # Check if it's a valid IP or CIDR
-        if self.IP_PATTERN.match(value):
-            return self.success()
-        
-        # Check if it's a valid domain
-        if self.DOMAIN_PATTERN.match(value):
-            return self.success()
-        
-        return self.failure("Invalid target. Enter a valid URL, IP address, or domain.")
+        return self.failure("Enter a valid URL, domain, or IP address")
 
 
-class NewScanScreen(Screen):
-    """
-    New scan screen - create new security scans
-    
-    Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
-    """
-    
+class NewScanModal(ModalScreen):
+    """Modal overlay for creating a new scan."""
+
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("h", "go_home", "Home"),
-        Binding("escape", "cancel", "Cancel"),
-        Binding("ctrl+s", "submit", "Submit"),
-        Binding("question_mark", "show_help", "Help"),
+        Binding("escape", "dismiss_modal", "Cancel", priority=True),
+        Binding("ctrl+s",  "submit",       "Start Scan"),
     ]
-    
+
     CSS = """
-    NewScanScreen {
-        layout: vertical;
+    NewScanModal {
         align: center middle;
     }
-    
-    #form-container {
-        width: 80;
-        height: auto;
-        border: solid $primary;
-        padding: 2;
+
+    #modal-box {
         background: $surface;
-    }
-    
-    #form-header {
+        border: round $primary;
+        padding: 2 3;
+        width: 70;
         height: auto;
-        margin-bottom: 2;
+        max-height: 90%;
     }
-    
-    #form-title {
-        text-align: center;
-        text-style: bold;
-        color: $accent;
-        margin-bottom: 1;
-    }
-    
-    #form-subtitle {
-        text-align: center;
-        color: $text-muted;
-    }
-    
-    .form-section {
-        height: auto;
-        margin-bottom: 1;
-        border: solid $surface;
-        padding: 1;
-    }
-    
-    .section-title {
+
+    #modal-title {
         color: $primary;
         text-style: bold;
+        text-align: center;
         margin-bottom: 1;
     }
-    
-    .form-row {
-        height: auto;
-        margin-bottom: 1;
-    }
-    
-    .form-label {
-        height: 1;
-        margin-bottom: 0;
-        color: $text-muted;
-    }
-    
-    .form-input {
-        height: 3;
+
+    .field-label {
+        color: $subtext0;
+        margin-top: 1;
         margin-bottom: 0;
     }
-    
-    Select {
+
+    #project-mode {
         height: 3;
         margin-bottom: 1;
     }
-    
-    .form-input.-invalid {
-        border: solid $error;
-    }
-    
-    #scan-type-container {
-        height: auto;
+
+    #existing-projects {
+        border: round $surface1;
+        height: 7;
+        padding: 0 1;
         margin-bottom: 1;
     }
-    
-    #scan-type-buttons {
+
+    #agent-count-row {
         height: 3;
+        margin: 1 0;
     }
-    
-    .scan-type-btn {
-        width: 15;
-        margin-right: 1;
-    }
-    
-    .scan-type-btn.-selected {
-        background: $accent;
-        color: $background;
-    }
-    
-    #agent-count-container {
-        height: auto;
-        margin-bottom: 1;
-    }
-    
-    #agent-count-label {
-        height: 1;
-        color: $text-muted;
-    }
-    
-    #agent-count-buttons {
-        height: 3;
-    }
-    
+
     .agent-btn {
-        width: 5;
+        min-width: 5;
         margin-right: 1;
     }
-    
-    .agent-btn.-selected {
-        background: $primary;
-        color: $background;
+
+    .agent-btn.-primary {
+        background: $accent;
+        color: $base;
     }
-    
-    #button-container {
+
+    #error-msg {
+        color: $red;
+        margin-top: 1;
+        height: auto;
+    }
+
+    #button-row {
+        align: right middle;
         height: 3;
         margin-top: 2;
-        align: center middle;
-    }
-    
-    #submit-btn {
-        margin-right: 2;
-        background: $accent;
-        color: $background;
-        min-width: 16;
-    }
-    
-    #cancel-btn {
-        min-width: 12;
-    }
-    
-    #error-message {
-        height: 2;
-        color: $error;
-        text-align: center;
-        margin-top: 1;
-    }
-    
-    #instructions-input {
-        height: 5;
     }
     """
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.agent_count = 3
-        self.error_message = ""
-        self.project_mode = "new"  # "new" or "existing"
-        self._existing_projects = []
-    
+        self._agent_count = 1
+
     def compose(self) -> ComposeResult:
-        """Compose the new scan form"""
-        yield Header()
-        
-        with Container(id="form-container"):
-            yield Static("🔍 Create New Scan", id="form-title")
-            
-            # Project Mode selection
-            with Vertical(classes="form-row"):
-                yield Label("Project:", classes="form-label")
-                with RadioSet(id="project-mode"):
-                    yield RadioButton("Create New Project", id="mode-new", value=True)
-                    yield RadioButton("Use Existing Project", id="mode-existing")
-            
-            # Existing Project Selection (Hidden by default)
-            with Vertical(id="existing-project-container", classes="form-row"):
-                yield Label("Select Project:", classes="form-label")
-                projects = app_state.get_all_projects()
-                options = [(p.name, p.id) for p in projects]
-                yield Select(options, id="project-select", prompt="Select a project...")
-            
-            # Project name (New only)
-            with Vertical(id="new-project-name-container", classes="form-row"):
-                yield Label("New Project Name:", classes="form-label")
-                yield Input(
-                    placeholder="Enter project name...",
-                    id="name-input",
-                    classes="form-input"
-                )
-            
-            # Target (New only)
-            with Vertical(id="target-container", classes="form-row"):
-                yield Label("Target (URL, IP, or Domain):", classes="form-label")
-                yield Input(
-                    placeholder="https://example.com or 192.168.1.1",
-                    id="target-input",
-                    classes="form-input",
-                    validators=[TargetValidator()]
-                )
-            
+        with Container(id="modal-box"):
+            yield Static("🔍 New Scan", id="modal-title")
+
+            # Project mode toggle
+            yield Label("Project", classes="field-label")
+            with RadioSet(id="project-mode"):
+                yield RadioButton("New project", id="radio-new",      value=True)
+                yield RadioButton("Existing project", id="radio-existing")
+
+            # New project name (conditional)
+            yield Label("Project Name", classes="field-label", id="label-project-name")
+            yield Input(
+                placeholder="e.g. HackerOne Target",
+                id="input-project-name",
+            )
+
+            # Existing project selector (shown when radio-existing active)
+            yield Label("Select Project", classes="field-label", id="label-existing")
+            from textual.widgets import DataTable as DT
+            yield DT(id="existing-projects", cursor_type="row")
+
+            # Target
+            yield Label("Target (URL / domain / IP)", classes="field-label")
+            yield Input(
+                placeholder="e.g. https://target.com or 192.168.1.1",
+                id="input-target",
+                validators=[TargetValidator()],
+            )
+
             # Instructions
-            with Vertical(classes="form-row"):
-                yield Label("Instructions (optional):", classes="form-label")
-                yield Input(
-                    placeholder="Special instructions for the agents...",
-                    id="instructions-input",
-                    classes="form-input"
-                )
-            
-            # Agent count
-            with Vertical(id="agent-count-container"):
-                yield Label("Number of Agents:", id="agent-count-label")
-                with Horizontal(id="agent-count-buttons"):
-                    for i in range(1, 6):
-                        btn = Button(str(i), id=f"agent-{i}", classes="agent-btn")
-                        if i == self.agent_count:
-                            btn.add_class("-selected")
-                        yield btn
-            
+            yield Label("Instructions (optional)", classes="field-label")
+            yield Input(
+                placeholder="Focus on auth bypass, API endpoints…",
+                id="input-instructions",
+            )
+
             # Error message
-            yield Static("", id="error-message")
-            
-            # Buttons
-            with Horizontal(id="button-container"):
-                yield Button("Create Scan", id="submit-btn", variant="primary")
-                yield Button("Cancel", id="cancel-btn", variant="default")
-        
-        yield Footer()
-    
+            yield Static("", id="error-msg")
+
+            with Horizontal(id="button-row"):
+                yield Button("Cancel",     id="btn-cancel",  variant="default")
+                yield Button("🚀 Start Scan", id="btn-submit", variant="success")
+
     def on_mount(self) -> None:
-        """Initialize the view"""
-        self.query_one("#existing-project-container").display = False
-        self.query_one("#name-input", Input).focus()
-    
+        # Hide existing projects panel by default
+        self._set_mode("new")
+        self.query_one("#input-project-name", Input).focus()
+
+    def _set_mode(self, mode: str) -> None:
+        show_new = (mode == "new")
+        try:
+            self.query_one("#input-project-name", Input).display = show_new
+            self.query_one("#label-project-name", Label).display = show_new
+            self.query_one("#existing-projects").display = not show_new
+            self.query_one("#label-existing", Label).display = not show_new
+        except Exception:
+            pass
+
+        if mode == "existing":
+            self._populate_existing_projects()
+
+    def _populate_existing_projects(self) -> None:
+        from textual.widgets import DataTable as DT
+        t = self.query_one("#existing-projects", DT)
+        if not t.columns:
+            t.add_column("Name",   width=24)
+            t.add_column("Target", width=26)
+        t.clear()
+        for p in app_state.get_all_projects():
+            t.add_row(p.name, getattr(p, "target", "") or "N/A", key=p.id)
+
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
-        """Handle project mode toggle"""
-        if event.pressed_button.id == "mode-new":
-            self.project_mode = "new"
-            self.query_one("#existing-project-container").display = False
-            self.query_one("#new-project-name-container").display = True
-            self.query_one("#target-container").display = True
-        else:
-            self.project_mode = "existing"
-            self.query_one("#existing-project-container").display = True
-            self.query_one("#new-project-name-container").display = False
-            self.query_one("#target-container").display = False
-    
+        mode = "existing" if event.index == 1 else "new"
+        self._set_mode(mode)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button presses"""
-        button_id = event.button.id
-        
-        if button_id == "submit-btn":
-            self._submit_form()
-        elif button_id == "cancel-btn":
-            self.action_cancel()
-        elif button_id and button_id.startswith("agent-"):
-            # Agent count button
-            count = int(button_id.split("-")[1])
-            self._set_agent_count(count)
-    
-    def _set_agent_count(self, count: int):
-        """Set the agent count and update button styles"""
-        self.agent_count = count
-        
-        # Update button styles
-        for i in range(1, 6):
-            btn = self.query_one(f"#agent-{i}", Button)
-            if i == count:
-                btn.add_class("-selected")
-            else:
-                btn.remove_class("-selected")
-    
-    def _submit_form(self):
-        """Validate and submit the form"""
-        error_display = self.query_one("#error-message", Static)
-        instructions_input = self.query_one("#instructions-input", Input)
-        instructions = instructions_input.value.strip()
-        
-        if self.project_mode == "new":
-            name_input = self.query_one("#name-input", Input)
-            target_input = self.query_one("#target-input", Input)
-            
-            name = name_input.value.strip()
-            target = target_input.value.strip()
-            
-            if not name:
-                error_display.update("❌ Project name is required")
-                name_input.focus()
-                return
-            
-            if not target:
-                error_display.update("❌ Target is required")
-                target_input.focus()
-                return
-            
-            validator = TargetValidator()
-            result = validator.validate(target)
-            if not result.is_valid:
-                error_display.update(f"❌ {result.failure_descriptions[0]}")
-                target_input.focus()
-                return
-            
-            # Create project and scan
-            try:
-                self._create_new_project_and_scan(name, target, instructions)
-            except Exception as e:
-                logger.error(f"Failed to create scan: {e}")
-                error_display.update(f"❌ Failed to create scan: {str(e)}")
-        else:
-            # Existing project
-            project_select = self.query_one("#project-select", Select)
-            if project_select.value == Select.BLANK:
-                error_display.update("❌ Please select a project")
-                project_select.focus()
-                return
-            
-            project_id = project_select.value
-            try:
-                self._create_scan_for_existing_project(project_id, instructions)
-            except Exception as e:
-                logger.error(f"Failed to create scan: {e}")
-                error_display.update(f"❌ Failed to create scan: {str(e)}")
-    
-    def _create_new_project_and_scan(self, name: str, target: str, instructions: str):
-        """Create a new project and scan"""
-        now = datetime.now()
-        
-        project = ProjectState(
-            id=str(uuid4()),
-            name=name,
-            description=instructions or f"Security scan of {target}",
-            target=target,
-            created_at=now,
-            updated_at=now
-        )
-        
-        app_state.projects[project.id] = project
-        self._create_scan_for_existing_project(project.id, instructions)
-    
-    def _create_scan_for_existing_project(self, project_id: str, instructions: str):
-        """Create a scan for an existing project"""
-        project = app_state.get_project(project_id)
-        if not project:
-            raise ValueError(f"Project {project_id} not found")
-            
-        now = datetime.now()
-        scan = ScanState(
-            id=str(uuid4()),
-            project_id=project.id,
-            name=f"Scan of {project.target}",
-            target=project.target,
-            status=ScanStatus.PENDING,
-            agent_count=self.agent_count,
-            created_at=now
-        )
-        
-        # Add scan to state
-        app_state.scans[scan.id] = scan
-        app_state.set_current_project(project.id)
-        app_state.set_current_scan(scan.id)
-        
-        # Create agents for the scan
-        for i in range(self.agent_count):
-            agent_id = str(uuid4())
-            agent_name = f"Agent-{i+1}"
-            app_state.add_agent_to_scan(scan.id, agent_id, agent_name)
-        
-        logger.info(f"Created scan for project '{project.name}' targeting '{project.target}' with {self.agent_count} agents")
-        self.notify(f"Created scan for {project.target} with {self.agent_count} agents", severity="information")
-        
-        # TODO: Start the scan through core bridge
-        # For now, just update status to RUNNING
-        app_state.update_scan_status(scan.id, ScanStatus.RUNNING)
-        
-        from kodiak.tui.views.mission_control import MissionControlScreen
-        self.app.switch_screen(MissionControlScreen())
-    
-    def action_quit(self) -> None:
-        """Quit the application (Global shortcut)"""
-        self.app.exit()
-    
-    def action_go_home(self) -> None:
-        """Go to home screen (Global shortcut)"""
-        # Don't trigger if input is focused
-        focused = self.app.focused
-        if focused and isinstance(focused, Input):
-            return
-        
-        # Pop all screens and go to home
-        while len(self.app.screen_stack) > 1:
-            self.app.pop_screen()
-        
-        # If we're not on home, push home screen
-        from kodiak.tui.views.home import HomeScreen
-        if not isinstance(self.app.screen, HomeScreen):
-            self.app.push_screen(HomeScreen())
-    
-    def action_show_help(self) -> None:
-        """Show help overlay (Global shortcut)"""
-        # Don't trigger if input is focused
-        focused = self.app.focused
-        if focused and isinstance(focused, Input):
-            return
-        
-        from kodiak.tui.views.help import HelpScreen
-        self.app.push_screen(HelpScreen())
-    
-    def action_cancel(self) -> None:
-        """Cancel and return to home"""
-        # Only cancel if no input is focused (allow ESC to clear input first)
-        focused = self.app.focused
-        if focused and isinstance(focused, Input) and focused.value:
-            return
-        self.app.pop_screen()
-    
+        if event.button.id == "btn-cancel":
+            self.action_dismiss_modal()
+        elif event.button.id == "btn-submit":
+            self.action_submit()
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss()
+
     def action_submit(self) -> None:
-        """Submit the form"""
-        # Only submit if no input is focused
-        focused = self.app.focused
-        if focused and isinstance(focused, Input):
+        self._do_submit()
+
+    def _do_submit(self) -> None:
+        err = self.query_one("#error-msg", Static)
+        err.update("")
+
+        target_input = self.query_one("#input-target", Input)
+        target = target_input.value.strip()
+
+        if not target:
+            err.update("⚠ Target is required")
+            target_input.focus()
             return
-        self._submit_form()
-    
-    def on_input_changed(self, event: Input.Changed) -> None:
-        """Clear error message when input changes"""
-        error_display = self.query_one("#error-message", Static)
-        error_display.update("")
-    
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle Enter key in inputs"""
-        # Move to next input or submit
-        if event.input.id == "name-input":
-            self.query_one("#target-input", Input).focus()
-        elif event.input.id == "target-input":
-            self.query_one("#instructions-input", Input).focus()
-        elif event.input.id == "instructions-input":
-            self._submit_form()
+
+        if not target_input.is_valid:
+            err.update("⚠ Enter a valid URL, domain, or IP address")
+            target_input.focus()
+            return
+
+        instructions = self.query_one("#input-instructions", Input).value.strip()
+
+        # Determine project mode
+        radio_set = self.query_one("#project-mode", RadioSet)
+        use_existing = (radio_set.pressed_index == 1)
+
+        if use_existing:
+            from textual.widgets import DataTable as DT
+            existing_tbl = self.query_one("#existing-projects", DT)
+            if existing_tbl.cursor_row < 0:
+                err.update("⚠ Select an existing project")
+                return
+            row = existing_tbl.get_row_at(existing_tbl.cursor_row)
+            project_name = str(row[0])
+            project = next(
+                (p for p in app_state.get_all_projects() if p.name == project_name), None
+            )
+            if not project:
+                err.update("⚠ Could not find selected project")
+                return
+            project_id = project.id
+        else:
+            project_name = self.query_one("#input-project-name", Input).value.strip()
+            if not project_name:
+                err.update("⚠ Project name is required")
+                self.query_one("#input-project-name", Input).focus()
+                return
+            # Create project in state (core_bridge will persist it)
+            from kodiak.database.models import Project
+            from datetime import timezone
+            new_proj = Project(name=project_name)
+            project_id = str(new_proj.id)
+            project_state = ProjectState(
+                id=project_id,
+                name=project_name,
+                description="",
+                target=target,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            app_state.add_project(new_proj)
+
+        # Kick off scan via core_bridge
+        cb = self.app.core_bridge
+        if cb:
+            self.app.call_later(
+                cb.create_scan,
+                project_id,
+                f"Scan {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                target,
+                1,      # Always 1 agent
+                instructions,
+            )
+        else:
+            # Fallback: create scan in state only (no DB)
+            scan_id = str(uuid4())
+            from kodiak.tui.state import ScanState, ScanStatus, AgentState, AgentStatus
+            scan_state = ScanState(
+                id=scan_id,
+                project_id=str(project_id),
+                name=f"Scan {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                target=target,
+                status=ScanStatus.PENDING,
+                agent_count=1,
+                created_at=datetime.now(),
+            )
+            app_state.add_scan_state(scan_state)
+            app_state.set_current_scan(scan_id)
+
+        self.notify("Scan queued — check Dashboard for status", timeout=4)
+        self.dismiss()
