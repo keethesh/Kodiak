@@ -575,20 +575,22 @@ class ManagerAgent:
             if host and "." in host:
                 self.scan_state.ensure_target(host)
 
-        for host, ports in disc.ports.items():
-            ts = self.scan_state.ensure_target(host)
-            for port in ports:
+        # ports is now List[HostPorts]
+        for hp in disc.ports:
+            ts = self.scan_state.ensure_target(hp.host)
+            for port in hp.ports:
                 if port not in ts.ports:
                     ts.ports.append(port)
 
-        for host, techs in disc.technologies.items():
-            ts = self.scan_state.ensure_target(host)
-            for tech in techs:
+        # technologies is now List[HostTechs]
+        for ht in disc.technologies:
+            ts = self.scan_state.ensure_target(ht.host)
+            for tech in ht.technologies:
                 if tech and tech not in ts.technologies and len(tech) < 60:
                     ts.technologies.append(tech)
             # Detect WAF/CDN presence
             if not self.scan_state.waf_detected:
-                for tech in techs:
+                for tech in ht.technologies:
                     if re.search(
                         r'\bcloudflare\b|\bwaf\b|\bakamai\b|\bfastly\b|\bimperva\b',
                         tech, re.IGNORECASE

@@ -302,6 +302,7 @@ class TestManagerAgent:
 
     def test_apply_discoveries_updates_scan_state(self):
         """Discoveries from LLM response should update scan state."""
+        from kodiak.core.response_schema import HostPorts, HostTechs
         manager = self._manager()
         manager.scan_state = ScanState(target="example.com")
 
@@ -309,8 +310,8 @@ class TestManagerAgent:
             analysis="Found new hosts and ports",
             discoveries=Discovery(
                 hosts=["sub1.example.com", "sub2.example.com"],
-                ports={"example.com": [80, 443, 8080]},
-                technologies={"example.com": ["Apache 2.4.41", "PHP 7.4"]},
+                ports=[HostPorts(host="example.com", ports=[80, 443, 8080])],
+                technologies=[HostTechs(host="example.com", technologies=["Apache 2.4.41", "PHP 7.4"])],
                 urls=["https://example.com/admin"],
             ),
             phase_action=PhaseAction.CONTINUE,

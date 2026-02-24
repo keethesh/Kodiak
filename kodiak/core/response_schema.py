@@ -7,12 +7,16 @@ matching `KodiakResponse`.  The orchestrator then:
   2. Persists findings[] and notes[] to the database
   3. Updates ScanState from discoveries
   4. Handles phase_action (advance / complete)
+
+IMPORTANT: Gemini API does not support `additionalProperties` in JSON schemas.
+All fields must use concrete types — no Dict[str, Any] or Dict[str, List[...]].
+Use typed list-of-objects instead of maps.
 """
 
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -101,6 +105,18 @@ class Note(BaseModel):
     content: str = Field(description="The observation to record")
 
 
+class HostPorts(BaseModel):
+    """Open ports discovered on a single host."""
+    host: str = Field(description="Hostname or IP address")
+    ports: List[int] = Field(default_factory=list, description="List of open TCP ports")
+
+
+class HostTechs(BaseModel):
+    """Technologies detected on a single host."""
+    host: str = Field(description="Hostname or IP address")
+    technologies: List[str] = Field(default_factory=list, description="Detected technologies, e.g. ['Apache 2.4', 'PHP 7.4']")
+
+
 class Discovery(BaseModel):
     """Structured state updates extracted from command results."""
 
@@ -108,13 +124,13 @@ class Discovery(BaseModel):
         default_factory=list,
         description="Newly discovered hostnames or IPs",
     )
-    ports: Dict[str, List[int]] = Field(
-        default_factory=dict,
-        description="Map of host → open ports, e.g. {'target.com': [80, 443]}",
+    ports: List[HostPorts] = Field(
+        default_factory=list,
+        description="Open ports per host",
     )
-    technologies: Dict[str, List[str]] = Field(
-        default_factory=dict,
-        description="Map of host → detected tech, e.g. {'target.com': ['Apache 2.4']}",
+    technologies: List[HostTechs] = Field(
+        default_factory=list,
+        description="Detected technologies per host",
     )
     urls: List[str] = Field(
         default_factory=list,
