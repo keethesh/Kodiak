@@ -20,6 +20,14 @@ class FindingSeverity(StrEnum):
     INFO = "info"
 
 
+class NoteCategory(StrEnum):
+    RECON_INTEL = "recon_intel"
+    BEHAVIORAL = "behavioral"
+    ATTACK_HINT = "attack_hint"
+    DEAD_END = "dead_end"
+    GENERAL = "general"
+
+
 class ScanStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -52,6 +60,8 @@ class Project(SQLModel, table=True):
     attempts: List["Attempt"] = Relationship(back_populates="project")
     insights: List["InsightMemory"] = Relationship(back_populates="project")
     verification_items: List["VerificationQueue"] = Relationship(back_populates="project")
+    notes: List["EngagementNote"] = Relationship(back_populates="project")
+    findings: List["Finding"] = Relationship(back_populates="project")
 
 
 class ScanJob(SQLModel, table=True):
@@ -158,18 +168,29 @@ class Task(SQLModel, table=True):
 
 class Finding(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    node_id: UUID = Field(foreign_key="node.id")
+    node_id: Optional[UUID] = Field(default=None, foreign_key="node.id")
+    project_id: Optional[UUID] = Field(default=None, foreign_key="project.id")
+    scan_id: Optional[UUID] = Field(default=None, foreign_key="scanjob.id")
     
     title: str
     description: str
     severity: FindingSeverity = Field(default=FindingSeverity.INFO)
+    target: Optional[str] = Field(default=None, index=True)
     vector: Optional[str] = None
     proof: Optional[str] = None
+    tool: Optional[str] = None
+    vulnerability_type: Optional[str] = None
+    exploitation_steps: Optional[str] = None
+    impact: Optional[str] = None
+    poc: Optional[str] = None
+    remediation: Optional[str] = None
+    raw_evidence: Optional[str] = None
     
     properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
     
-    node: Node = Relationship(back_populates="findings")
+    node: Optional[Node] = Relationship(back_populates="findings")
+    project: Optional[Project] = Relationship(back_populates="findings")
 
 
 class AgentLog(SQLModel, table=True):
@@ -182,3 +203,17 @@ class AgentLog(SQLModel, table=True):
     timestamp: datetime = Field(default_factory=utc_now)
     
     scan: ScanJob = Relationship(back_populates="logs")
+
+
+class EngagementNote(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    project_id: UUID = Field(foreign_key="project.id")
+    scan_id: Optional[UUID] = Field(default=None, foreign_key="scanjob.id")
+
+    category: NoteCategory = Field(default=NoteCategory.GENERAL, index=True)
+    target: str = Field(default="*", index=True)
+    content: str
+
+    created_at: datetime = Field(default_factory=utc_now)
+
+    project: Project = Relationship(back_populates="notes")

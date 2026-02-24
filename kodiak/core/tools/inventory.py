@@ -42,6 +42,7 @@ class ToolInventory:
             PythonStartTool, PythonExecuteTool, PythonHistoryTool, PythonStopTool
         )
         from kodiak.core.tools.definitions.complete_scan import CompleteScanTool
+        from kodiak.core.tools.definitions.engagement_memory import SaveNoteTool, SaveFindingTool
 
         # Register all tools
         self.register(NmapTool())
@@ -78,6 +79,10 @@ class ToolInventory:
 
         # Register scan control tools
         self.register(CompleteScanTool())
+
+        # Register engagement memory tools (in-process, intercepted by manager)
+        self.register(SaveNoteTool())
+        self.register(SaveFindingTool())
 
 
 # Legacy global instance for backward compatibility

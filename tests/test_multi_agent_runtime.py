@@ -207,3 +207,198 @@ class TestScanRunnerPreflight:
         assert missing == []
         script = captured["command"][2]
         assert "fi\ndone" in script
+
+
+# =====================================================================
+# Engagement Memory Tests
+# =====================================================================
+
+class TestEngagementMemoryModels:
+    """Tests for EngagementNote and enriched Finding models."""
+
+    def test_engagement_note_model_fields(self):
+        from kodiak.database.models import EngagementNote, NoteCategory
+        note = EngagementNote(
+            project_id="00000000-0000-0000-0000-000000000001",
+            scan_id="00000000-0000-0000-0000-000000000002",
+            category=NoteCategory.ATTACK_HINT,
+            target="example.com",
+            content="Parameter id= is suspiciously reflective",
+        )
+        assert note.category == NoteCategory.ATTACK_HINT
+        assert note.target == "example.com"
+        assert "reflective" in note.content
+
+    def test_note_category_enum_values(self):
+        from kodiak.database.models import NoteCategory
+        assert NoteCategory.RECON_INTEL == "recon_intel"
+        assert NoteCategory.BEHAVIORAL == "behavioral"
+        assert NoteCategory.ATTACK_HINT == "attack_hint"
+        assert NoteCategory.DEAD_END == "dead_end"
+        assert NoteCategory.GENERAL == "general"
+
+    def test_enriched_finding_model_fields(self):
+        from kodiak.database.models import Finding, FindingSeverity
+        finding = Finding(
+            project_id="00000000-0000-0000-0000-000000000001",
+            title="SQL Injection — POST /login",
+            description="The username parameter is vulnerable to boolean-based blind SQLi",
+            severity=FindingSeverity.CRITICAL,
+            target="example.com",
+            tool="sqlmap",
+            vulnerability_type="sqli",
+            exploitation_steps="1. Run sqlmap -u ...\n2. Use --dump flag",
+            impact="Full database read, potential RCE via INTO OUTFILE",
+            poc="' OR 1=1-- returns 200 + session cookie",
+            remediation="Use parameterized queries",
+            raw_evidence="sqlmap output...",
+        )
+        assert finding.severity == FindingSeverity.CRITICAL
+        assert finding.vulnerability_type == "sqli"
+        assert "parameterized" in finding.remediation
+        assert finding.target == "example.com"
+        assert finding.tool == "sqlmap"
+
+    def test_finding_has_optional_target(self):
+        from kodiak.database.models import Finding
+        finding = Finding(
+            title="Test",
+            description="desc",
+        )
+        assert finding.target is None
+        assert finding.node_id is None
+        assert finding.project_id is None
+
+
+class TestEngagementMemoryTools:
+    """Tests for save_note and save_finding tool definitions."""
+
+    def test_save_note_tool_schema(self):
+        from kodiak.core.tools.definitions.engagement_memory import SaveNoteTool
+        tool = SaveNoteTool()
+        assert tool.name == "save_note"
+        schema = tool.parameters_schema
+        assert "target" in schema["properties"]
+        assert "category" in schema["properties"]
+        assert "content" in schema["properties"]
+        assert set(schema["required"]) == {"target", "category", "content"}
+        # Category should have enum
+        assert "enum" in schema["properties"]["category"]
+
+    def test_save_finding_tool_schema(self):
+        from kodiak.core.tools.definitions.engagement_memory import SaveFindingTool
+        tool = SaveFindingTool()
+        assert tool.name == "save_finding"
+        schema = tool.parameters_schema
+        assert "target" in schema["properties"]
+        assert "title" in schema["properties"]
+        assert "severity" in schema["properties"]
+        assert "exploitation_steps" in schema["properties"]
+        assert "poc" in schema["properties"]
+        assert "remediation" in schema["properties"]
+        assert set(schema["required"]) == {"target", "title", "severity", "description"}
+
+    @pytest.mark.asyncio
+    async def test_save_note_tool_execute(self):
+        from kodiak.core.tools.definitions.engagement_memory import SaveNoteTool
+        tool = SaveNoteTool()
+        result = await tool.execute(
+            target="example.com",
+            category="behavioral",
+            content="WAF blocks after 10 req/s",
+        )
+        assert result.success
+        assert result.data["saved"]
+        assert result.data["category"] == "behavioral"
+        assert "WAF" in result.output
+
+    @pytest.mark.asyncio
+    async def test_save_finding_tool_execute(self):
+        from kodiak.core.tools.definitions.engagement_memory import SaveFindingTool
+        tool = SaveFindingTool()
+        result = await tool.execute(
+            target="example.com",
+            title="XSS in search",
+            severity="high",
+            description="Reflected XSS in search param",
+        )
+        assert result.success
+        assert result.data["saved"]
+        assert "HIGH" in result.output
+
+    def test_tools_registered_in_inventory(self):
+        from kodiak.core.tools.inventory import ToolInventory
+        inv = ToolInventory()
+        inv.initialize_tools()
+        assert inv.get("save_note") is not None
+        assert inv.get("save_finding") is not None
+
+    def test_tools_included_in_manager_tool_list(self):
+        manager = self._manager()
+        tools = manager._prepare_tools()
+        names = [t["function"]["name"] for t in tools]
+        assert "save_note" in names
+        assert "save_finding" in names
+
+    def _manager(self) -> ManagerAgent:
+        from kodiak.core.tools.inventory import ToolInventory
+        inv = ToolInventory()
+        inv.initialize_tools()
+        return ManagerAgent(
+            event_manager=TUIEventManager(),
+            tool_inventory=inv,
+        )
+
+
+class TestManagerPriorKnowledge:
+    """Tests for prior knowledge loading and system prompt injection."""
+
+    def _manager(self) -> ManagerAgent:
+        from kodiak.core.tools.inventory import ToolInventory
+        inv = ToolInventory()
+        inv.initialize_tools()
+        return ManagerAgent(
+            event_manager=TUIEventManager(),
+            tool_inventory=inv,
+        )
+
+    def test_system_prompt_includes_recording_tools_section(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        prompt = manager._build_system_prompt()
+        assert "<recording_tools>" in prompt
+        assert "save_note" in prompt
+        assert "save_finding" in prompt
+        assert "dead_end" in prompt
+
+    def test_system_prompt_includes_prior_knowledge_when_available(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        manager._prior_knowledge = (
+            "<prior_knowledge>\n"
+            "<prior_notes count=\"1\">\n"
+            "  [2025-01-15 behavioral] (example.com) WAF rate limit 10/s\n"
+            "</prior_notes>\n"
+            "</prior_knowledge>"
+        )
+        prompt = manager._build_system_prompt()
+        assert "<prior_knowledge>" in prompt
+        assert "WAF rate limit" in prompt
+
+    def test_system_prompt_omits_prior_knowledge_when_empty(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        manager._prior_knowledge = ""
+        prompt = manager._build_system_prompt()
+        assert "<prior_knowledge>" not in prompt
+        # But recording tools section should still be there
+        assert "<recording_tools>" in prompt
+
+    def test_system_prompt_task_is_last_section(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        prompt = manager._build_system_prompt()
+        # <task> should be after <recording_tools>
+        rec_idx = prompt.index("<recording_tools>")
+        task_idx = prompt.index("<task>")
+        assert task_idx > rec_idx

@@ -27,7 +27,7 @@ from kodiak.core.scan_state import ScanPhase, ScanState
 from kodiak.core.tools.inventory import ToolInventory
 from kodiak.core.worker import WorkerResult, WorkerTask, dispatch_batch
 from kodiak.database import crud
-from kodiak.database.models import Attempt
+from kodiak.database.models import Attempt, EngagementNote, Finding, NoteCategory, FindingSeverity
 from kodiak.services import llm
 from kodiak.services.gemini_client import GeminiClient, GeminiResponse
 
@@ -70,6 +70,7 @@ class ManagerAgent:
         self.tool_inventory = tool_inventory
         self._gemini = GeminiClient()
         self.scan_state: Optional[ScanState] = None
+        self._prior_knowledge: str = ""
 
         # Built once during run()
         self._tools_for_llm: List[Dict[str, Any]] = []
@@ -98,6 +99,9 @@ class ManagerAgent:
 
         # Seed the target in state
         self.scan_state.ensure_target(target)
+
+        # Load prior engagement knowledge for this project
+        self._prior_knowledge = await self._load_prior_knowledge(session, project_id)
 
         scan_id_str = str(scan_id)
         history: List[Dict[str, Any]] = [
@@ -204,12 +208,30 @@ class ManagerAgent:
                             iterations=iteration,
                         )
 
-                # Build worker tasks for non-complete tools
+                # Handle in-process tools (save_note, save_finding) before dispatch
+                in_process_tools = {"save_note", "save_finding"}
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    tool_name = fn.get("name", "").strip()
+                    if tool_name in in_process_tools:
+                        args = self._parse_args(fn.get("arguments"))
+                        result_text = await self._handle_in_process_tool(
+                            tool_name, args, session, project_id, scan_id,
+                        )
+                        history.append({
+                            "role": "tool",
+                            "name": tool_name,
+                            "tool_call_id": tc.get("id", f"call_{uuid4().hex[:12]}"),
+                            "content": result_text,
+                        })
+
+                # Build worker tasks for non-complete, non-in-process tools
+                skip_tools = {"complete_scan"} | in_process_tools
                 tasks: List[WorkerTask] = []
                 for tc in tool_calls:
                     fn = tc.get("function", {})
                     name = fn.get("name", "").strip()
-                    if not name or name == "complete_scan":
+                    if not name or name in skip_tools:
                         continue
                     args = self._parse_args(fn.get("arguments"))
                     tasks.append(WorkerTask(tool_name=name, args=args))
@@ -398,11 +420,37 @@ class ManagerAgent:
             self.scan_state.to_prompt_context(),
             "</scan_state>",
             "",
+        ]
+
+        # Prior engagement knowledge (from previous scans of this project)
+        if self._prior_knowledge:
+            sections.append(self._prior_knowledge)
+            sections.append("")
+
+        sections.extend([
+            "<recording_tools>",
+            "You have two tools for persisting knowledge across scans:",
+            "",
+            "save_note — Record observations that help in future scans:",
+            "  - recon_intel: discovered infrastructure (staging servers, CDNs, internal hostnames)",
+            "  - behavioral: WAF/rate-limit behavior, server quirks, timing patterns",
+            "  - attack_hint: promising attack surface worth deeper investigation next time",
+            "  - dead_end: paths that wasted time (skip these in future scans)",
+            "  - general: any other observation worth remembering",
+            "",
+            "save_finding — Record confirmed vulnerabilities with full detail:",
+            "  - Call as SOON as a vulnerability is confirmed — do not wait for REPORTING",
+            "  - Include: exploitation_steps, impact, poc (proof-of-concept), remediation",
+            "  - Duplicate findings (same title + target) are automatically skipped",
+            "",
+            "Use these tools proactively throughout the scan, not just at the end.",
+            "</recording_tools>",
+            "",
             "<task>",
             f"Based on the scan state above, dispatch the most impactful tools for the {phase.value.upper()} phase.",
             "Prioritise breadth in RECON and ENUMERATION. Prioritise precision and depth in VULN_SCAN and EXPLOITATION.",
             "</task>",
-        ]
+        ])
 
         return "\n".join(sections)
 
@@ -546,6 +594,159 @@ class ManagerAgent:
                     evidence=output[:300],
                     tool="commix",
                 )
+
+    # ------------------------------------------------------------------
+    # In-process tool handlers (save_note, save_finding)
+    # ------------------------------------------------------------------
+
+    async def _handle_in_process_tool(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        session: Any,
+        project_id: UUID,
+        scan_id: UUID,
+    ) -> str:
+        """Handle save_note / save_finding: persist to DB, return confirmation text."""
+        try:
+            if tool_name == "save_note":
+                return await self._handle_save_note(args, session, project_id, scan_id)
+            elif tool_name == "save_finding":
+                return await self._handle_save_finding(args, session, project_id, scan_id)
+            return f"Unknown in-process tool: {tool_name}"
+        except Exception as exc:
+            logger.warning(f"Failed to handle {tool_name}: {exc}")
+            return f"Error saving {tool_name}: {exc}"
+
+    async def _handle_save_note(
+        self,
+        args: Dict[str, Any],
+        session: Any,
+        project_id: UUID,
+        scan_id: UUID,
+    ) -> str:
+        target = str(args.get("target", "*")).strip()
+        raw_category = str(args.get("category", "general")).strip().lower()
+        content = str(args.get("content", "")).strip()
+
+        try:
+            category = NoteCategory(raw_category)
+        except ValueError:
+            category = NoteCategory.GENERAL
+
+        note = EngagementNote(
+            project_id=project_id,
+            scan_id=scan_id,
+            category=category,
+            target=target,
+            content=content[:2000],
+        )
+        await crud.note.create(session, note)
+        logger.info(f"📝 Note saved [{category.value}]: {content[:80]}")
+        return f"Note saved: [{category.value}] {content[:120]}"
+
+    async def _handle_save_finding(
+        self,
+        args: Dict[str, Any],
+        session: Any,
+        project_id: UUID,
+        scan_id: UUID,
+    ) -> str:
+        target = str(args.get("target", "")).strip()
+        title = str(args.get("title", "Untitled")).strip()
+        raw_severity = str(args.get("severity", "info")).strip().lower()
+
+        try:
+            severity = FindingSeverity(raw_severity)
+        except ValueError:
+            severity = FindingSeverity.INFO
+
+        # Dedup: check if this finding already exists for this project
+        existing = await crud.finding.find_by_title_and_target(
+            session, project_id, title, target,
+        )
+        if existing:
+            logger.info(f"🔄 Finding already exists, skipping: {title}")
+            return f"Finding already recorded: {title} (skipped duplicate)"
+
+        finding = Finding(
+            project_id=project_id,
+            scan_id=scan_id,
+            target=target,
+            title=title,
+            description=str(args.get("description", "")).strip()[:4000],
+            severity=severity,
+            tool=str(args.get("tool", "")).strip() or None,
+            vulnerability_type=str(args.get("vulnerability_type", "")).strip() or None,
+            exploitation_steps=str(args.get("exploitation_steps", "")).strip()[:4000] or None,
+            impact=str(args.get("impact", "")).strip()[:2000] or None,
+            poc=str(args.get("poc", "")).strip()[:4000] or None,
+            remediation=str(args.get("remediation", "")).strip()[:2000] or None,
+        )
+        await crud.finding.create(session, finding)
+
+        # Also record in scan state for prompt context
+        self.scan_state.add_finding(
+            title=title,
+            severity=raw_severity,
+            target=target,
+            evidence=str(args.get("poc", ""))[:300],
+            tool=str(args.get("tool", "")),
+        )
+
+        logger.info(f"🎯 Finding saved [{severity.value}]: {title}")
+        return f"Finding saved: [{severity.value.upper()}] {title}"
+
+    # ------------------------------------------------------------------
+    # Prior knowledge loading
+    # ------------------------------------------------------------------
+
+    async def _load_prior_knowledge(
+        self,
+        session: Any,
+        project_id: UUID,
+    ) -> str:
+        """Load prior notes and findings for this project. Returns XML block."""
+        try:
+            notes = await crud.note.list_for_project(session, project_id, limit=30)
+            findings = await crud.finding.list_for_project(session, project_id, limit=20)
+        except Exception as exc:
+            logger.warning(f"Failed to load prior knowledge: {exc}")
+            return ""
+
+        if not notes and not findings:
+            return ""
+
+        lines: List[str] = ["<prior_knowledge>"]
+
+        if notes:
+            lines.append(f"<prior_notes count=\"{len(notes)}\">")
+            for n in reversed(notes):  # oldest first
+                date = n.created_at.strftime("%Y-%m-%d") if n.created_at else "?"
+                lines.append(f"  [{date} {n.category.value}] ({n.target}) {n.content[:200]}")
+            lines.append("</prior_notes>")
+
+        if findings:
+            lines.append(f"<prior_findings count=\"{len(findings)}\">")
+            for f in reversed(findings):  # oldest first
+                sev = f.severity.value.upper() if f.severity else "INFO"
+                target = f.target or "?"
+                desc = (f.description or "")[:100]
+                remediation = f"  Remediation: {f.remediation[:80]}" if f.remediation else ""
+                lines.append(f"  [{sev}] {f.title} — {target}")
+                if desc:
+                    lines.append(f"    {desc}")
+                if remediation:
+                    lines.append(f"    {remediation}")
+            lines.append("</prior_findings>")
+
+        lines.append("</prior_knowledge>")
+
+        block = "\n".join(lines)
+        # Hard cap at ~6K chars (~1500 tokens)
+        if len(block) > 6000:
+            block = block[:5997] + "..."
+        return block
 
     # ------------------------------------------------------------------
     # History management

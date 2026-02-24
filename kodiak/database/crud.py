@@ -16,6 +16,7 @@ from kodiak.database.models import (
     InsightMemory,
     VerificationQueue,
     VerificationQueueStatus,
+    EngagementNote,
 )
 from kodiak.core.error_handling import (
     ErrorHandler, DatabaseError, handle_errors, ErrorCategory
@@ -533,9 +534,108 @@ class CRUDVerificationQueue:
             })
 
 
+class CRUDEngagementNote:
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def create(self, session: AsyncSession, note: EngagementNote) -> EngagementNote:
+        try:
+            session.add(note)
+            await session.commit()
+            await session.refresh(note)
+            return note
+        except SQLAlchemyError as e:
+            await _safe_rollback(session)
+            raise ErrorHandler.handle_database_error("create_engagement_note", e, {
+                "project_id": str(getattr(note, "project_id", "unknown")),
+                "category": str(getattr(note, "category", "unknown")),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_for_project(
+        self, session: AsyncSession, project_id: UUID, limit: int = 100
+    ) -> List[EngagementNote]:
+        try:
+            statement = (
+                select(EngagementNote)
+                .where(EngagementNote.project_id == project_id)
+                .order_by(EngagementNote.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_engagement_notes", e, {
+                "project_id": str(project_id),
+                "limit": limit,
+            })
+
+
+class CRUDFinding:
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def create(self, session: AsyncSession, finding: Finding) -> Finding:
+        try:
+            session.add(finding)
+            await session.commit()
+            await session.refresh(finding)
+            return finding
+        except SQLAlchemyError as e:
+            await _safe_rollback(session)
+            raise ErrorHandler.handle_database_error("create_finding", e, {
+                "project_id": str(getattr(finding, "project_id", "unknown")),
+                "title": getattr(finding, "title", "unknown"),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def list_for_project(
+        self, session: AsyncSession, project_id: UUID, limit: int = 50
+    ) -> List[Finding]:
+        try:
+            statement = (
+                select(Finding)
+                .where(Finding.project_id == project_id)
+                .order_by(Finding.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(statement)
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("list_findings", e, {
+                "project_id": str(project_id),
+                "limit": limit,
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def find_by_title_and_target(
+        self,
+        session: AsyncSession,
+        project_id: UUID,
+        title: str,
+        target: str,
+    ) -> Optional[Finding]:
+        try:
+            statement = (
+                select(Finding)
+                .where(
+                    Finding.project_id == project_id,
+                    Finding.title == title,
+                    Finding.target == target,
+                )
+                .order_by(Finding.created_at.desc())
+            )
+            result = await session.execute(statement)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("find_finding_by_title_target", e, {
+                "project_id": str(project_id),
+                "title": title,
+                "target": target,
+            })
+
+
 project = CRUDProject()
 scan_job = CRUDScanJob()
 node = CRUDNode()
 attempt = CRUDAttempt()
 insight_memory = CRUDInsightMemory()
 verification_queue = CRUDVerificationQueue()
+note = CRUDEngagementNote()
+finding = CRUDFinding()
