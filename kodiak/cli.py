@@ -22,6 +22,17 @@ from loguru import logger
 
 console = Console()
 
+# Severity color styles for Rich markup
+SEVERITY_STYLES: dict = {
+    "critical": "bold red",
+    "high": "red",
+    "medium": "yellow",
+    "low": "cyan",
+    "info": "white",
+}
+# Phase display order
+SCAN_PHASES = ["RECON", "ENUMERATION", "VULN_SCAN", "EXPLOITATION", "REPORTING"]
+
 # Check for optional dependencies
 HAS_DATABASE = True
 HAS_BROWSER = True
@@ -121,6 +132,7 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.option("--instructions", "-i", help="Custom scan instructions", default="Conduct a security assessment")
 @click.option("--model", "-m", help="LLM model to use")
 @click.option("--max-iterations", "-n", default=100, help="Total manager iteration budget")
+@click.option("--project", "-p", default=None, help="Project name — reuse across scans to load prior knowledge")
 @click.option("--agents", "-a", type=int, default=None, hidden=True)
 @click.option("--force-agents", is_flag=True, help="Allow agent count above KODIAK_MAX_AGENTS")
 @click.option(
@@ -142,6 +154,7 @@ def scan(
     instructions: str,
     model: Optional[str],
     max_iterations: int,
+    project: Optional[str],
     agents: Optional[int],
     force_agents: bool,
     report_format: str,
@@ -189,7 +202,9 @@ def scan(
 
         console.print(f"\n🎯 [bold]Target:[/bold] {target}")
         console.print(f"🧠 [bold]Model:[/bold] {settings.llm_model}")
-        console.print(f"📋 [bold]Instructions:[/bold] {instructions}\n")
+        console.print(f"📋 [bold]Instructions:[/bold] {instructions}")
+        if project:
+            console.print(f"📁 [bold]Project:[/bold] {project} [dim](prior knowledge will be loaded if project exists)[/dim]")
         console.print(f"👤 [bold]Architecture:[/bold] Manager-Worker (single brain, parallel tools)")
         if agents is not None:
             console.print("[yellow]Note: --agents is ignored in Manager-Worker mode.[/yellow]")
@@ -209,6 +224,7 @@ def scan(
             force_agents=force_agents,
             report_format=report_format.lower(),
             report_path=report_path,
+            project_name=project,
         )
         
         # If verbose, bypass the TUI overlay and just let logs stream freely
@@ -245,7 +261,27 @@ def scan(
                         finding = payload.get("finding", {})
                         title = finding.get("title", "Unnamed finding")
                         sev = finding.get("severity", "info").upper()
-                        console.print(f"[magenta][finding][/magenta] {sev} {title}")
+                        sev_style = SEVERITY_STYLES.get(sev.lower(), "white")
+                        console.print(f"[magenta][finding][/magenta] [{sev_style}]{sev}[/{sev_style}] {title}")
+                    elif event.type == "note_saved":
+                        cat = payload.get("category", "general")
+                        tgt = payload.get("target", "*")
+                        prev = payload.get("preview", "")[:80]
+                        console.print(f"[green][memory:note][/green] [{cat}] ({tgt}) {prev}")
+                    elif event.type == "finding_saved":
+                        sev = payload.get("severity", "info").upper()
+                        sev_style = SEVERITY_STYLES.get(sev.lower(), "white")
+                        title = payload.get("title", "Untitled")
+                        tgt = payload.get("target", "")
+                        console.print(f"[green][memory:finding][/green] [{sev_style}]{sev}[/{sev_style}] {title} @ {tgt}")
+                    elif event.type == "phase_advanced":
+                        old = payload.get("old_phase", "?").upper()
+                        new = payload.get("new_phase", "?").upper()
+                        console.print(f"[bold cyan][phase][/bold cyan] {old} → {new}")
+                    elif event.type == "prior_knowledge_loaded":
+                        n = payload.get("notes_count", 0)
+                        f_ = payload.get("findings_count", 0)
+                        console.print(f"[blue][memory][/blue] 🧠 Prior knowledge loaded: {n} notes, {f_} findings")
                     elif event.type == "scan_failed":
                         console.print(f"[red][scan][/red] failed: {payload.get('error', 'unknown error')}")
 
@@ -286,6 +322,13 @@ def scan(
             "deduped_findings": 0,
             "duplicate_findings_filtered": 0,
             "report_paths": {},
+            # New state fields
+            "phase": "RECON",
+            "iteration": 0,
+            "prior_knowledge": "",
+            "last_thought": "",
+            "last_memory_event": "",
+            "project_name": project or "",
         }
 
         def severity_breakdown(findings: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -297,21 +340,48 @@ def scan(
                 else:
                     counts["info"] += 1
             return counts
-        
+
+        def _sev_markup(sev: str) -> str:
+            style = SEVERITY_STYLES.get(sev.lower(), "white")
+            return f"[{style}]{sev}[/{style}]"
+
         def create_view():
             elapsed = (datetime.utcnow() - state["start_time"]).total_seconds()
-            
+
+            # Phase tracker
+            current_phase = state["phase"].upper()
+            try:
+                current_idx = SCAN_PHASES.index(current_phase)
+            except ValueError:
+                current_idx = 0
+            phase_parts = []
+            for i, p in enumerate(SCAN_PHASES):
+                if i < current_idx:
+                    phase_parts.append(f"[dim green]✓ {p}[/dim green]")
+                elif i == current_idx:
+                    phase_parts.append(f"[bold cyan]▶ {p}[/bold cyan]")
+                else:
+                    phase_parts.append(f"[dim]{p}[/dim]")
+            phase_str = "  →  ".join(phase_parts)
+
             # Header
-            header = Panel(
-                f"[bold cyan]🔍 Kodiak Scan: {target}[/bold cyan] | {int(elapsed)}s elapsed",
-                box=box.DOUBLE, style="cyan"
-            )
-            
+            header_lines = [
+                f"[bold cyan]🔍 Kodiak Scan: {target}[/bold cyan]  |  {int(elapsed)}s elapsed",
+            ]
+            if state["project_name"]:
+                header_lines.append(f"📁 Project: [bold]{state['project_name']}[/bold]")
+            if state["prior_knowledge"]:
+                header_lines.append(f"🧠 {state['prior_knowledge']}")
+            header_lines.append(phase_str)
+            header = Panel("\n".join(header_lines), box=box.DOUBLE, style="cyan")
+
             # Activity
             activity = Table(show_header=False, box=box.SIMPLE)
             activity.add_row("🤖 Status:", state["status"])
             if state["scan_id"]:
                 activity.add_row("🧾 Scan ID:", state["scan_id"])
+            if state["iteration"]:
+                activity.add_row("🔄 Iteration:", f"{state['iteration']}/{max_iterations}")
             if state["active_tool"]:
                 active_for = (
                     int((datetime.utcnow() - state["active_tool_started_at"]).total_seconds())
@@ -320,30 +390,39 @@ def scan(
                 )
                 activity.add_row("🛠️ Active Tool:", f"{state['active_tool']} ({active_for}s)")
             activity.add_row("📈 Tools:", f"{state['tool_count']} total / {state['tool_failures']} failed")
+            if state["last_memory_event"]:
+                activity.add_row("💾 Saved:", state["last_memory_event"])
+            if state["last_thought"]:
+                thought_lines = [ln.strip() for ln in state["last_thought"].split("\n") if ln.strip()][:2]
+                if thought_lines:
+                    activity.add_row("💭 Thinking:", thought_lines[0][:100])
+                    if len(thought_lines) > 1:
+                        activity.add_row("", thought_lines[1][:100])
             if state["last_error"]:
                 activity.add_row("❗ Last Error:", state["last_error"][:140])
-            
+
             # Tools
             tools_table = Table(title="🔧 Recent Tools", box=box.SIMPLE)
             tools_table.add_column("Tool")
             tools_table.add_column("Target")
             tools_table.add_column("Result")
-            for t in state["tools"][-5:]:
-                res = "✅" if t['success'] else "❌" if t['success'] is False else "⏳"
-                tools_table.add_row(t['name'], t['target'], res)
-            
-            # Findings
+            for t in state["tools"][-7:]:
+                res = "✅" if t["success"] else "❌" if t["success"] is False else "⏳"
+                tools_table.add_row(t["name"], t["target"], res)
+
+            # Findings (color-coded severity)
             findings_table = Table(title="⚠️ Findings", box=box.SIMPLE)
-            findings_table.add_column("Sev", style="red")
+            findings_table.add_column("Sev")
             findings_table.add_column("Target")
             findings_table.add_column("Title")
-            for f in state["findings"][-5:]:
+            for f in state["findings"][-10:]:
+                sev_str = str(f.get("severity", "info")).upper()
                 findings_table.add_row(
-                    str(f.get("severity", "info")).upper(),
+                    _sev_markup(sev_str),
                     str(f.get("target", ""))[:36],
                     str(f.get("title", "Untitled"))[:72],
                 )
-            
+
             from rich.console import Group
             return Group(header, activity, tools_table, findings_table)
 
@@ -353,9 +432,19 @@ def scan(
                 async for event in interface.subscribe_events(run_id):
                     payload = event.payload
                     if event.type == "agent_thinking":
-                        state["status"] = payload.get("message", "Thinking...")
+                        msg = payload.get("message", "Thinking...")
+                        state["status"] = msg
+                        # Extract iteration number from "Iteration N" message
+                        if msg.startswith("Iteration "):
+                            try:
+                                state["iteration"] = int(msg.split()[1])
+                            except (ValueError, IndexError):
+                                pass
                     elif event.type == "agent_thought":
                         state["status"] = "Generating plan..."
+                        thought = str(payload.get("thought", "") or "").strip()
+                        if thought:
+                            state["last_thought"] = thought
                     elif event.type == "tool_start":
                         tool_name = payload.get("tool_name", "unknown")
                         state["status"] = f"Running {tool_name}"
@@ -395,6 +484,23 @@ def scan(
                     elif event.type == "scan_failed":
                         state["status"] = "Scan failed"
                         state["last_error"] = str(payload.get("error", "Scan failed"))
+                    elif event.type == "phase_advanced":
+                        new_phase = str(payload.get("new_phase", "")).upper()
+                        if new_phase:
+                            state["phase"] = new_phase
+                            state["status"] = f"Phase: {new_phase}"
+                    elif event.type == "note_saved":
+                        cat = payload.get("category", "general")
+                        prev = (payload.get("preview") or "")[:60]
+                        state["last_memory_event"] = f"📝 Note [{cat}]: {prev}"
+                    elif event.type == "finding_saved":
+                        sev = str(payload.get("severity", "info")).upper()
+                        title = payload.get("title", "Untitled")[:50]
+                        state["last_memory_event"] = f"🎯 Finding [{_sev_markup(sev)}] {title}"
+                    elif event.type == "prior_knowledge_loaded":
+                        n = payload.get("notes_count", 0)
+                        f_ = payload.get("findings_count", 0)
+                        state["prior_knowledge"] = f"Prior knowledge: {n} notes, {f_} findings loaded"
 
                     live.update(create_view())
 
@@ -410,43 +516,67 @@ def scan(
             logger.exception("CLI Scan failure")
             return 1
 
-        console.print("\n" + "="*50)
-        console.print("[bold green]📊 Final Results[/bold green]")
-        console.print("="*50)
+        # --- Final Summary (Rich Table) ---
+        console.print("")
         if result:
             sev = severity_breakdown(state["findings"])
-            console.print(
-                f"Status: {result.status} | Nodes: {result.nodes_discovered} | Findings: {result.findings_count}"
+
+            summary_table = Table(
+                box=box.ROUNDED,
+                title="📊 Scan Summary",
+                title_style="bold green",
+                show_header=True,
             )
-            console.print(
-                f"Iterations: {result.iterations} | Duration: {int(result.duration_seconds)}s | "
-                f"Tools Run: {state['tool_count']} | Tool Failures: {state['tool_failures']}"
-            )
-            console.print(
-                "Severity: "
-                f"C={sev['critical']} H={sev['high']} M={sev['medium']} L={sev['low']} I={sev['info']}"
-            )
-            if state["raw_findings"] > 0:
-                console.print(
-                    f"Findings Dedup: raw={state['raw_findings']} unique={state['deduped_findings']} "
-                    f"filtered={state['duplicate_findings_filtered']}"
-                )
+            summary_table.add_column("Metric", style="dim", min_width=22)
+            summary_table.add_column("Value", style="bold")
+
+            status_style = "green" if result.status == "completed" else "red"
+            summary_table.add_row("Status", f"[{status_style}]{result.status.upper()}[/{status_style}]")
+            summary_table.add_row("Target", target)
+            if state["project_name"]:
+                summary_table.add_row("Project", state["project_name"])
             if state["scan_id"]:
-                console.print(f"Scan ID: {state['scan_id']}")
+                summary_table.add_row("Scan ID", state["scan_id"])
+            summary_table.add_row("Nodes Discovered", str(result.nodes_discovered))
+            summary_table.add_row("Findings (DB)", str(result.findings_count))
+            summary_table.add_row("Iterations", str(result.iterations))
+            summary_table.add_row("Duration", f"{int(result.duration_seconds)}s")
+            summary_table.add_row("Tools Run", str(state["tool_count"]))
+            summary_table.add_row("Tool Failures", str(state["tool_failures"]))
+            summary_table.add_section()
+            for sev_name in ("critical", "high", "medium", "low", "info"):
+                count = sev[sev_name]
+                if count > 0:
+                    summary_table.add_row(
+                        f"Severity: {sev_name.upper()}",
+                        _sev_markup(f"{count}"),
+                    )
+
+            if state["raw_findings"] > 0:
+                summary_table.add_section()
+                summary_table.add_row("Raw Findings", str(state["raw_findings"]))
+                summary_table.add_row("Unique Findings", str(state["deduped_findings"]))
+
             if state["report_paths"]:
-                for label, path in state["report_paths"].items():
-                    console.print(f"Report ({label}): {path}")
+                summary_table.add_section()
+                for label, rpath in state["report_paths"].items():
+                    summary_table.add_row(f"Report ({label})", rpath)
+
             db_path = os.path.expanduser(settings.sqlite_path or "~/.kodiak/kodiak.db")
             log_path = str(Path.home() / ".kodiak" / "logs" / "scan.log")
-            console.print(f"DB: {db_path}")
-            console.print(f"Logs: {log_path}")
+            summary_table.add_section()
+            summary_table.add_row("Database", db_path)
+            summary_table.add_row("Logs", log_path)
+
+            console.print(summary_table)
+
             if state["last_error"]:
-                console.print(f"Last Error: {state['last_error'][:220]}")
+                console.print(f"[dim]Last Error: {state['last_error'][:220]}[/dim]")
             if state["failed_tools"]:
-                console.print("Top Failed Tools:")
+                console.print("[dim]Top Failed Tools:[/dim]")
                 for item in state["failed_tools"][-3:]:
-                    console.print(f" - {item['tool']}: {item['error'][:180]}")
-            console.print("Next: re-run with `--verbose` for detailed event stream if needed.")
+                    console.print(f"  [dim]- {item['tool']}: {item['error'][:180]}[/dim]")
+            console.print("[dim]Re-run with [bold]--verbose[/bold] for detailed event stream.[/dim]")
             return 0 if result.status == "completed" else 1
 
         console.print(

@@ -100,10 +100,23 @@ class ManagerAgent:
         # Seed the target in state
         self.scan_state.ensure_target(target)
 
-        # Load prior engagement knowledge for this project
-        self._prior_knowledge = await self._load_prior_knowledge(session, project_id)
-
+        # scan_id string needed for events (before prior knowledge load)
         scan_id_str = str(scan_id)
+
+        # Load prior engagement knowledge for this project
+        self._prior_knowledge, _pk_notes, _pk_findings = await self._load_prior_knowledge(
+            session, project_id
+        )
+        if (_pk_notes > 0 or _pk_findings > 0) and self.event_manager:
+            try:
+                await self.event_manager.emit_prior_knowledge_loaded(
+                    notes_count=_pk_notes,
+                    findings_count=_pk_findings,
+                    scan_id=scan_id_str,
+                )
+            except Exception:
+                pass
+
         history: List[Dict[str, Any]] = [
             {
                 "role": "user",
@@ -161,7 +174,7 @@ class ManagerAgent:
                     pass
 
             # Check for explicit phase advancement
-            self._check_phase_advance(response.content or "")
+            await self._check_phase_advance(response.content or "", scan_id_str)
 
             # 2. DISPATCH -----------------------------------------------------
             if response.tool_calls:
@@ -643,6 +656,18 @@ class ManagerAgent:
         )
         await crud.note.create(session, note)
         logger.info(f"📝 Note saved [{category.value}]: {content[:80]}")
+
+        if self.event_manager:
+            try:
+                await self.event_manager.emit_note_saved(
+                    category=category.value,
+                    target=target,
+                    preview=content[:100],
+                    scan_id=str(scan_id),
+                )
+            except Exception:
+                pass
+
         return f"Note saved: [{category.value}] {content[:120]}"
 
     async def _handle_save_finding(
@@ -695,6 +720,18 @@ class ManagerAgent:
         )
 
         logger.info(f"🎯 Finding saved [{severity.value}]: {title}")
+
+        if self.event_manager:
+            try:
+                await self.event_manager.emit_finding_saved(
+                    title=title,
+                    severity=severity.value,
+                    target=target,
+                    scan_id=str(scan_id),
+                )
+            except Exception:
+                pass
+
         return f"Finding saved: [{severity.value.upper()}] {title}"
 
     # ------------------------------------------------------------------
@@ -705,17 +742,20 @@ class ManagerAgent:
         self,
         session: Any,
         project_id: UUID,
-    ) -> str:
-        """Load prior notes and findings for this project. Returns XML block."""
+    ) -> tuple[str, int, int]:
+        """Load prior notes and findings for this project.
+
+        Returns (xml_block, notes_count, findings_count).
+        """
         try:
             notes = await crud.note.list_for_project(session, project_id, limit=30)
             findings = await crud.finding.list_for_project(session, project_id, limit=20)
         except Exception as exc:
             logger.warning(f"Failed to load prior knowledge: {exc}")
-            return ""
+            return "", 0, 0
 
         if not notes and not findings:
-            return ""
+            return "", 0, 0
 
         lines: List[str] = ["<prior_knowledge>"]
 
@@ -743,10 +783,10 @@ class ManagerAgent:
         lines.append("</prior_knowledge>")
 
         block = "\n".join(lines)
-        # Hard cap at ~6K chars (~1500 tokens)
-        if len(block) > 6000:
-            block = block[:5997] + "..."
-        return block
+        # Hard cap at ~12K chars (~3000 tokens)
+        if len(block) > 12000:
+            block = block[:11997] + "..."
+        return block, len(notes), len(findings)
 
     # ------------------------------------------------------------------
     # History management
@@ -843,14 +883,25 @@ class ManagerAgent:
     # Phase advancement
     # ------------------------------------------------------------------
 
-    def _check_phase_advance(self, assistant_text: str) -> bool:
+    async def _check_phase_advance(self, assistant_text: str, scan_id: str) -> bool:
         """Check if the Manager explicitly requested a phase advance."""
         if not assistant_text:
             return False
         if "ADVANCE_PHASE" in assistant_text.upper():
+            old_phase = self.scan_state.phase.value
             advanced = self.scan_state.advance_phase()
             if advanced:
-                logger.info(f"📍 Phase advanced to: {self.scan_state.phase.value}")
+                new_phase = self.scan_state.phase.value
+                logger.info(f"📍 Phase advanced to: {new_phase}")
+                if self.event_manager:
+                    try:
+                        await self.event_manager.emit_phase_advanced(
+                            old_phase=old_phase,
+                            new_phase=new_phase,
+                            scan_id=scan_id,
+                        )
+                    except Exception:
+                        pass
             return advanced
         return False
 
@@ -896,7 +947,7 @@ class ManagerAgent:
         project_id: UUID,
         scan_id: UUID,
     ) -> None:
-        """Emit finding events for all discovered findings."""
+        """Emit finding events and persist auto-extracted findings to DB."""
         if not self.scan_state:
             return
         for finding in self.scan_state.findings:
@@ -914,6 +965,30 @@ class ManagerAgent:
                 )
             except Exception as exc:
                 logger.warning(f"Failed to emit finding event: {exc}")
+
+            # Persist auto-extracted finding to DB with dedup check
+            try:
+                existing = await crud.finding.find_by_title_and_target(
+                    session, project_id, finding.title, finding.target
+                )
+                if not existing:
+                    try:
+                        sev_enum = FindingSeverity(finding.severity.lower())
+                    except ValueError:
+                        sev_enum = FindingSeverity.INFO
+                    db_finding = Finding(
+                        project_id=project_id,
+                        scan_id=scan_id,
+                        target=finding.target,
+                        title=finding.title,
+                        description=finding.evidence[:4000] if finding.evidence else "",
+                        severity=sev_enum,
+                        tool=finding.tool or None,
+                        raw_evidence=finding.evidence[:2000] if finding.evidence else None,
+                    )
+                    await crud.finding.create(session, db_finding)
+            except Exception as exc:
+                logger.warning(f"Failed to persist auto-extracted finding '{finding.title}': {exc}")
 
     # ------------------------------------------------------------------
     # Helpers

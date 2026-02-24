@@ -1,0 +1,939 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0
+rootdir: C:\Users\keeth\PycharmProjects\Kodiak
+configfile: pyproject.toml
+plugins: anyio-4.12.1, hypothesis-6.150.0, asyncio-0.23.8
+asyncio: mode=Mode.STRICT
+collected 84 items
+
+tests\test_asset_discovery_persistence.py .........                      [ 10%]
+tests\test_database_model_consistency.py ......F..                       [ 21%]
+tests\test_error_handling.py FFFFFFF                                     [ 29%]
+tests\test_event_broadcasting.py .F.FF                                   [ 35%]
+tests\test_failure_policy_and_reporting.py ...                           [ 39%]
+tests\test_multi_agent_runtime.py ...........                            [ 52%]
+tests\test_mvp_runtime_regressions.py .............                      [ 67%]
+tests\test_tool_availability.py .....                                    [ 73%]
+tests\test_tool_execution.py FFFFFF                                      [ 80%]
+tests\test_tool_naming_consistency.py ......                             [ 88%]
+tests\test_tool_registration.py FFFFFFFF                                 [ 97%]
+tests\test_tool_scheduler.py ..                                          [100%]
+
+================================== FAILURES ===================================
+_ TestDatabaseModelConsistencyProperties.test_database_model_consistency_error_handling _
+
+self = <tests.test_database_model_consistency.TestDatabaseModelConsistencyProperties.test_database_model_consistency_error_handling.<locals>.ErrorSession object at 0x00000215AC825F50>
+statement = <sqlmodel.sql.expression.SelectOfScalar object at 0x00000215AC8266D0>
+
+    async def execute(self, statement):
+        from sqlalchemy.exc import SQLAlchemyError
+>       raise SQLAlchemyError("Query execution failed")
+E       sqlalchemy.exc.SQLAlchemyError: Query execution failed
+
+tests\test_database_model_consistency.py:314: SQLAlchemyError
+
+During handling of the above exception, another exception occurred:
+
+self = <tests.test_database_model_consistency.TestDatabaseModelConsistencyProperties object at 0x00000215A636DC50>
+
+    @pytest.mark.asyncio
+    async def test_database_model_consistency_error_handling(self):
+        """
+        Property 6: Database model consistency with error handling
+        For any CRUD operation that fails, the system should handle errors
+        consistently while maintaining Node model usage.
+    
+        **Validates: Requirements 2.1**
+        """
+        # Create a session that will raise SQLAlchemy errors
+        class ErrorSession(MockAsyncSession):
+            async def commit(self):
+                from sqlalchemy.exc import SQLAlchemyError
+                raise SQLAlchemyError("Database connection failed")
+    
+            async def execute(self, statement):
+                from sqlalchemy.exc import SQLAlchemyError
+                raise SQLAlchemyError("Query execution failed")
+    
+        error_session = ErrorSession()
+        test_project, test_nodes = self.create_test_fixtures()
+    
+        # Test error handling in create operation
+        with pytest.raises(DatabaseError, match="Database connection failed"):
+            await node.create(error_session, test_nodes[0])
+    
+        # Verify rollback was called
+        assert error_session.rolled_back == True
+    
+        # Test error handling in get operation
+        with pytest.raises(RuntimeError, match="Failed to get node"):
+>           await node.get(error_session, test_nodes[0].id)
+
+tests\test_database_model_consistency.py:328: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+kodiak\core\error_handling.py:301: in async_wrapper
+    return await func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <kodiak.database.crud.CRUDNode object at 0x00000215A634DE90>
+session = <tests.test_database_model_consistency.TestDatabaseModelConsistencyProperties.test_database_model_consistency_error_handling.<locals>.ErrorSession object at 0x00000215AC825F50>
+node_id = UUID('39e664cd-11ce-4ca8-bf98-08ffa2caff8a')
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get(self, session: AsyncSession, node_id: UUID) -> Optional[Node]:
+        """Get a node by ID"""
+        try:
+            statement = select(Node).where(Node.id == node_id)
+            result = await session.execute(statement)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+>           raise ErrorHandler.handle_database_error("get_node", e, {
+                "node_id": str(node_id)
+            })
+E           kodiak.core.error_handling.DatabaseError: Database error during get_node: Query execution failed
+
+kodiak\database\crud.py:119: DatabaseError
+---------------------------- Captured stderr call -----------------------------
+2026-02-22 12:47:44.181 | ERROR    | kodiak.core.error_handling:log_error:175 - HIGH SEVERITY: Database connection failed during create_node
+2026-02-22 12:47:44.181 | WARNING  | kodiak.core.error_handling:log_error:177 - MEDIUM SEVERITY: Database error during get_node: Query execution failed
+_ TestErrorHandlingProperties.test_error_handling_consistency_network_errors __
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6381290>
+
+    @pytest.mark.asyncio
+    async def test_error_handling_consistency_network_errors(self):
+        """
+        Property 3: Error handling consistency for network errors
+        For any tool execution that fails with network errors, the system should return
+        a ToolResult with success=False and a descriptive error message without crashing.
+    
+        **Validates: Requirements 1.3, 2.3**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_error_handling.py:108: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6381290>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_error_handling.py:95: TypeError
+_ TestErrorHandlingProperties.test_error_handling_consistency_validation_errors _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6381A50>
+
+    @pytest.mark.asyncio
+    async def test_error_handling_consistency_validation_errors(self):
+        """
+        Property 3: Error handling consistency for validation errors
+        For any tool execution that fails with validation errors, the system should
+        return a ToolResult with success=False and descriptive error without crashing.
+    
+        **Validates: Requirements 1.3, 2.3**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_error_handling.py:147: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6381A50>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_error_handling.py:95: TypeError
+_ TestErrorHandlingProperties.test_error_handling_consistency_permission_errors _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6382210>
+
+    @pytest.mark.asyncio
+    async def test_error_handling_consistency_permission_errors(self):
+        """
+        Property 3: Error handling consistency for permission errors
+        For any tool execution that fails with permission errors, the system should
+        return a ToolResult with success=False and descriptive error without crashing.
+    
+        **Validates: Requirements 1.3, 2.3**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_error_handling.py:178: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6382210>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_error_handling.py:95: TypeError
+_ TestErrorHandlingProperties.test_error_handling_consistency_without_event_manager _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6382A10>
+
+    @pytest.mark.asyncio
+    async def test_error_handling_consistency_without_event_manager(self):
+        """
+        Property 3: Error handling consistency without EventManager
+        For any tool execution that fails without EventManager, the system should
+        still return a ToolResult with error information without crashing.
+    
+        **Validates: Requirements 1.3, 2.3**
+        """
+        # Create tool without event manager
+>       tool = GenericErrorTool(event_manager=None, error_message="No event manager error")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_error_handling.py:210: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_error_handling.GenericErrorTool object at 0x00000215AB7BC990>
+event_manager = None, error_message = 'No event manager error'
+
+    def __init__(self, event_manager=None, error_message="Generic error"):
+>       super().__init__(event_manager)
+E       TypeError: BaseTool.__init__() takes 1 positional argument but 2 were given
+
+tests\test_error_handling.py:67: TypeError
+_ TestErrorHandlingProperties.test_error_handling_consistency_multiple_error_types _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A63831D0>
+
+    @pytest.mark.asyncio
+    async def test_error_handling_consistency_multiple_error_types(self):
+        """
+        Property 3: Error handling consistency across multiple error types
+        For any tool execution that fails with different error types, the system
+        should consistently return ToolResult with error information.
+    
+        **Validates: Requirements 1.3, 2.3**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_error_handling.py:237: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A63831D0>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_error_handling.py:95: TypeError
+______ TestErrorHandlingProperties.test_error_handling_preserves_context ______
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6383990>
+
+    @pytest.mark.asyncio
+    async def test_error_handling_preserves_context(self):
+        """
+        Property 3: Error handling preserves execution context
+        For any tool execution that fails, the error should preserve context information
+        like agent_id and scan_id for proper event broadcasting.
+    
+        **Validates: Requirements 1.3, 2.3**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_error_handling.py:273: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6383990>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_error_handling.py:95: TypeError
+_____ TestErrorHandlingProperties.test_error_handling_concurrent_failures _____
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6390190>
+
+    @pytest.mark.asyncio
+    async def test_error_handling_concurrent_failures(self):
+        """
+        Property 3: Error handling consistency under concurrent failures
+        For any concurrent tool executions that fail, each should return consistent
+        error information without interfering with each other.
+    
+        **Validates: Requirements 1.3, 2.3**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_error_handling.py:312: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_error_handling.TestErrorHandlingProperties object at 0x00000215A6390190>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_error_handling.py:95: TypeError
+____ TestEventBroadcastingProperties.test_event_broadcasting_with_failures ____
+
+self = <tests.test_event_broadcasting.TestEventBroadcastingProperties object at 0x00000215A6391590>
+
+    @pytest.mark.asyncio
+    async def test_event_broadcasting_with_failures(self):
+        """
+        Property 2 (Error case): Event broadcasting completeness for failed tools
+        For any tool execution that fails, the Event_Manager should broadcast start
+        and failure events to all connected TUI clients.
+    
+        **Validates: Requirements 1.2, 4.1**
+        """
+        event_manager, mock_tui_bridge, MockToolResult = self.create_test_fixtures()
+    
+        # Test data
+        tool_name = "sqlmap"
+        target = "http://example.com"
+        agent_id = "agent_002"
+        scan_id = "scan_456"
+        error_message = "Connection timeout"
+    
+        # Create a failed tool result
+        result = MockToolResult(success=False, error=error_message, output=None)
+    
+        # Execute the event sequence for a failed tool
+        await event_manager.emit_tool_start(tool_name, target, agent_id, scan_id)
+        await event_manager.emit_tool_complete(tool_name, result, scan_id)
+    
+        # Verify start and failure events were broadcast
+>       assert mock_tui_bridge.send_tool_update.call_count == 2
+E       AssertionError: assert 0 == 2
+E        +  where 0 = <AsyncMock name='mock.send_tool_update' id='2292094629264'>.call_count
+E        +    where <AsyncMock name='mock.send_tool_update' id='2292094629264'> = <MagicMock id='2292111631568'>.send_tool_update
+
+tests\test_event_broadcasting.py:131: AssertionError
+---------------------------- Captured stderr call -----------------------------
+2026-02-22 12:47:44.778 | INFO     | kodiak.api.events:__init__:46 - TUIEventManager initialized
+2026-02-22 12:47:44.780 | INFO     | kodiak.api.events:emit_tool_start:104 - Tool sqlmap started by agent agent_002 on target http://example.com
+2026-02-22 12:47:44.780 | ERROR    | kodiak.api.events:emit_tool_complete:160 - Tool sqlmap failed: Connection timeout
+______ TestEventBroadcastingProperties.test_discovery_event_broadcasting ______
+
+self = <tests.test_event_broadcasting.TestEventBroadcastingProperties object at 0x00000215A6391DD0>
+
+    @pytest.mark.asyncio
+    async def test_discovery_event_broadcasting(self):
+        """
+        Property 2 (Discovery): Discovery events should be broadcast correctly
+        For any discovery event, the Event_Manager should broadcast it to TUI clients.
+    
+        **Validates: Requirements 1.2, 4.1**
+        """
+        event_manager, mock_tui_bridge, MockToolResult = self.create_test_fixtures()
+    
+        discovery_data = {
+            "type": "service",
+            "host": "192.168.1.100",
+            "port": 80,
+            "service": "http"
+        }
+        scan_id = "scan_789"
+    
+>       await event_manager.emit_discovery(discovery_data, scan_id)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'TUIEventManager' object has no attribute 'emit_discovery'
+
+tests\test_event_broadcasting.py:190: AttributeError
+---------------------------- Captured stderr call -----------------------------
+2026-02-22 12:47:44.797 | INFO     | kodiak.api.events:__init__:46 - TUIEventManager initialized
+___ TestEventBroadcastingProperties.test_event_broadcasting_multiple_tools ____
+
+self = <tests.test_event_broadcasting.TestEventBroadcastingProperties object at 0x00000215A6392510>
+
+    @pytest.mark.asyncio
+    async def test_event_broadcasting_multiple_tools(self):
+        """
+        Property 2 (Multiple tools): Event broadcasting should work for multiple concurrent tools
+        For any multiple tool executions, the Event_Manager should broadcast all events correctly.
+    
+        **Validates: Requirements 1.2, 4.1**
+        """
+        event_manager, mock_tui_bridge, MockToolResult = self.create_test_fixtures()
+    
+        # Test concurrent tool executions
+        tools = [
+            ("nmap", "192.168.1.1", "agent_001"),
+            ("nuclei", "example.com", "agent_002"),
+            ("sqlmap", "http://test.com", "agent_003")
+        ]
+        scan_id = "scan_multi"
+    
+        # Execute all tools
+        for tool_name, target, agent_id in tools:
+            result = MockToolResult(success=True, output=f"{tool_name} output")
+            await event_manager.emit_tool_start(tool_name, target, agent_id, scan_id)
+            await event_manager.emit_tool_complete(tool_name, result, scan_id)
+    
+        # Verify all events were broadcast (2 events per tool = 6 total)
+>       assert mock_tui_bridge.send_tool_update.call_count == 6
+E       AssertionError: assert 0 == 6
+E        +  where 0 = <AsyncMock name='mock.send_tool_update' id='2292111697424'>.call_count
+E        +    where <AsyncMock name='mock.send_tool_update' id='2292111697424'> = <MagicMock id='2292111689040'>.send_tool_update
+
+tests\test_event_broadcasting.py:223: AssertionError
+---------------------------- Captured stderr call -----------------------------
+2026-02-22 12:47:44.808 | INFO     | kodiak.api.events:__init__:46 - TUIEventManager initialized
+2026-02-22 12:47:44.812 | INFO     | kodiak.api.events:emit_tool_start:104 - Tool nmap started by agent agent_001 on target 192.168.1.1
+2026-02-22 12:47:44.813 | INFO     | kodiak.api.events:emit_tool_complete:162 - Tool nmap completed
+2026-02-22 12:47:44.813 | INFO     | kodiak.api.events:emit_tool_start:104 - Tool nuclei started by agent agent_002 on target example.com
+2026-02-22 12:47:44.813 | INFO     | kodiak.api.events:emit_tool_complete:162 - Tool nuclei completed
+2026-02-22 12:47:44.813 | INFO     | kodiak.api.events:emit_tool_start:104 - Tool sqlmap started by agent agent_003 on target http://test.com
+2026-02-22 12:47:44.813 | INFO     | kodiak.api.events:emit_tool_complete:162 - Tool sqlmap completed
+_ TestToolExecutionProperties.test_tool_execution_returns_structured_results __
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB708290>
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_returns_structured_results(self):
+        """
+        Property 1: Tool execution returns structured results
+        For any registered tool and valid parameters, executing the tool should return
+        a ToolResult object with success status and either data or error information.
+    
+        **Validates: Requirements 1.1**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_execution.py:94: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB708290>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_tool_execution.py:81: TypeError
+____ TestToolExecutionProperties.test_tool_execution_without_event_manager ____
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB708A50>
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_without_event_manager(self):
+        """
+        Property 1 (No EventManager): Tool execution should work without EventManager
+        For any tool without EventManager, executing should still return ToolResult.
+    
+        **Validates: Requirements 1.1**
+        """
+        # Create tool without event manager
+>       tool = MockTool(event_manager=None)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: BaseTool.__init__() got an unexpected keyword argument 'event_manager'
+
+tests\test_tool_execution.py:135: TypeError
+______ TestToolExecutionProperties.test_tool_execution_with_dict_return _______
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB709210>
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_with_dict_return(self):
+        """
+        Property 1 (Dict return): Tool execution should handle dict returns
+        For any tool that returns a dict, execute should convert it to ToolResult.
+    
+        **Validates: Requirements 1.1**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_execution.py:161: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB709210>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_tool_execution.py:81: TypeError
+_______ TestToolExecutionProperties.test_tool_execution_error_handling ________
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB6FBE90>
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_error_handling(self):
+        """
+        Property 1 (Error handling): Tool execution should handle exceptions gracefully
+        For any tool that raises an exception, execute should return ToolResult with error.
+    
+        **Validates: Requirements 1.1**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_execution.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB6FBE90>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_tool_execution.py:81: TypeError
+_______ TestToolExecutionProperties.test_tool_execution_multiple_calls ________
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB6ED310>
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_multiple_calls(self):
+        """
+        Property 1 (Multiple calls): Tool execution should work consistently across multiple calls
+        For any tool, multiple executions should return consistent ToolResult structures.
+    
+        **Validates: Requirements 1.1**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_execution.py:224: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB6ED310>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_tool_execution.py:81: TypeError
+____ TestToolExecutionProperties.test_tool_execution_parameter_validation _____
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB709310>
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_parameter_validation(self):
+        """
+        Property 1 (Parameter handling): Tool execution should handle various parameter types
+        For any tool with different parameter types, execute should handle them correctly.
+    
+        **Validates: Requirements 1.1**
+        """
+>       event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_execution.py:260: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_execution.TestToolExecutionProperties object at 0x00000215AB709310>
+
+    def create_test_fixtures(self):
+        """Create test fixtures for each test run."""
+        # Mock TUI bridge
+        mock_tui_bridge = MagicMock()
+        mock_tui_bridge.send_tool_update = AsyncMock()
+        mock_tui_bridge.send_agent_update = AsyncMock()
+        mock_tui_bridge.send_finding_update = AsyncMock()
+    
+        # Event manager
+>       event_manager = EventManager(mock_tui_bridge)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+
+tests\test_tool_execution.py:81: TypeError
+_ TestToolRegistrationProperties.test_tool_registration_validation_complete_tools _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB71F910>
+
+    @pytest.mark.asyncio
+    async def test_tool_registration_validation_complete_tools(self):
+        """
+        Property 4: Tool registration validation for complete tools
+        For any tool registration attempt with complete _execute method implementation,
+        the tool should be successfully registered in the Tool_Inventory.
+    
+        **Validates: Requirements 1.4**
+        """
+>       inventory = self.create_test_inventory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_registration.py:127: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB71F910>
+
+    def create_test_inventory(self):
+        """Create a fresh test inventory for each test."""
+        # Create a new inventory instance to avoid conflicts
+        test_inventory = ToolInventory()
+        # Since ToolInventory uses class-level _tools, we need to save and restore
+>       self.original_tools = ToolInventory._tools.copy()
+                              ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: type object 'ToolInventory' has no attribute '_tools'
+
+tests\test_tool_registration.py:110: AttributeError
+_ TestToolRegistrationProperties.test_tool_registration_validation_incomplete_tools _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72C110>
+
+    @pytest.mark.asyncio
+    async def test_tool_registration_validation_incomplete_tools(self):
+        """
+        Property 4: Tool registration validation for incomplete tools
+        For any tool registration attempt without complete _execute method implementation,
+        the tool should not be successfully registered or should fail validation.
+    
+        **Validates: Requirements 1.4**
+        """
+>       inventory = self.create_test_inventory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_registration.py:165: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72C110>
+
+    def create_test_inventory(self):
+        """Create a fresh test inventory for each test."""
+        # Create a new inventory instance to avoid conflicts
+        test_inventory = ToolInventory()
+        # Since ToolInventory uses class-level _tools, we need to save and restore
+>       self.original_tools = ToolInventory._tools.copy()
+                              ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: type object 'ToolInventory' has no attribute '_tools'
+
+tests\test_tool_registration.py:110: AttributeError
+_ TestToolRegistrationProperties.test_tool_registration_validation_abstract_tools _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB70B750>
+
+    @pytest.mark.asyncio
+    async def test_tool_registration_validation_abstract_tools(self):
+        """
+        Property 4: Tool registration validation for abstract tools
+        For any tool that raises NotImplementedError in _execute,
+        the tool should fail validation when executed.
+    
+        **Validates: Requirements 1.4**
+        """
+>       inventory = self.create_test_inventory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_registration.py:199: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB70B750>
+
+    def create_test_inventory(self):
+        """Create a fresh test inventory for each test."""
+        # Create a new inventory instance to avoid conflicts
+        test_inventory = ToolInventory()
+        # Since ToolInventory uses class-level _tools, we need to save and restore
+>       self.original_tools = ToolInventory._tools.copy()
+                              ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: type object 'ToolInventory' has no attribute '_tools'
+
+tests\test_tool_registration.py:110: AttributeError
+_ TestToolRegistrationProperties.test_tool_registration_validation_broken_tools _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72C210>
+
+    @pytest.mark.asyncio
+    async def test_tool_registration_validation_broken_tools(self):
+        """
+        Property 4: Tool registration validation for broken tools
+        For any tool with broken _execute implementation that raises exceptions,
+        the tool should handle errors gracefully when executed.
+    
+        **Validates: Requirements 1.4**
+        """
+>       inventory = self.create_test_inventory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_registration.py:229: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72C210>
+
+    def create_test_inventory(self):
+        """Create a fresh test inventory for each test."""
+        # Create a new inventory instance to avoid conflicts
+        test_inventory = ToolInventory()
+        # Since ToolInventory uses class-level _tools, we need to save and restore
+>       self.original_tools = ToolInventory._tools.copy()
+                              ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: type object 'ToolInventory' has no attribute '_tools'
+
+tests\test_tool_registration.py:110: AttributeError
+_ TestToolRegistrationProperties.test_tool_registration_validation_multiple_tools _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72C750>
+
+    @pytest.mark.asyncio
+    async def test_tool_registration_validation_multiple_tools(self):
+        """
+        Property 4: Tool registration validation for multiple tools
+        For any collection of tools with varying implementation completeness,
+        only tools with proper implementations should execute successfully.
+    
+        **Validates: Requirements 1.4**
+        """
+>       inventory = self.create_test_inventory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_registration.py:259: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72C750>
+
+    def create_test_inventory(self):
+        """Create a fresh test inventory for each test."""
+        # Create a new inventory instance to avoid conflicts
+        test_inventory = ToolInventory()
+        # Since ToolInventory uses class-level _tools, we need to save and restore
+>       self.original_tools = ToolInventory._tools.copy()
+                              ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: type object 'ToolInventory' has no attribute '_tools'
+
+tests\test_tool_registration.py:110: AttributeError
+_ TestToolRegistrationProperties.test_tool_registration_validation_interface_compliance _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72CB50>
+
+    @pytest.mark.asyncio
+    async def test_tool_registration_validation_interface_compliance(self):
+        """
+        Property 4: Tool registration validation for interface compliance
+        For any tool registration, the tool should comply with the BaseTool interface
+        and have all required properties and methods.
+    
+        **Validates: Requirements 1.4**
+        """
+>       inventory = self.create_test_inventory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_registration.py:303: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72CB50>
+
+    def create_test_inventory(self):
+        """Create a fresh test inventory for each test."""
+        # Create a new inventory instance to avoid conflicts
+        test_inventory = ToolInventory()
+        # Since ToolInventory uses class-level _tools, we need to save and restore
+>       self.original_tools = ToolInventory._tools.copy()
+                              ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: type object 'ToolInventory' has no attribute '_tools'
+
+tests\test_tool_registration.py:110: AttributeError
+_ TestToolRegistrationProperties.test_tool_registration_validation_duplicate_names _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72CF90>
+
+    @pytest.mark.asyncio
+    async def test_tool_registration_validation_duplicate_names(self):
+        """
+        Property 4: Tool registration validation for duplicate names
+        For any tool registration with duplicate names, the later registration
+        should override the earlier one.
+    
+        **Validates: Requirements 1.4**
+        """
+>       inventory = self.create_test_inventory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_registration.py:344: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72CF90>
+
+    def create_test_inventory(self):
+        """Create a fresh test inventory for each test."""
+        # Create a new inventory instance to avoid conflicts
+        test_inventory = ToolInventory()
+        # Since ToolInventory uses class-level _tools, we need to save and restore
+>       self.original_tools = ToolInventory._tools.copy()
+                              ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: type object 'ToolInventory' has no attribute '_tools'
+
+tests\test_tool_registration.py:110: AttributeError
+_ TestToolRegistrationProperties.test_tool_registration_validation_execution_context _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72D750>
+
+    @pytest.mark.asyncio
+    async def test_tool_registration_validation_execution_context(self):
+        """
+        Property 4: Tool registration validation with execution context
+        For any registered tool, it should handle execution context properly
+        including agent_id, scan_id, and other parameters.
+    
+        **Validates: Requirements 1.4**
+        """
+>       inventory = self.create_test_inventory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_tool_registration.py:383: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tests.test_tool_registration.TestToolRegistrationProperties object at 0x00000215AB72D750>
+
+    def create_test_inventory(self):
+        """Create a fresh test inventory for each test."""
+        # Create a new inventory instance to avoid conflicts
+        test_inventory = ToolInventory()
+        # Since ToolInventory uses class-level _tools, we need to save and restore
+>       self.original_tools = ToolInventory._tools.copy()
+                              ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: type object 'ToolInventory' has no attribute '_tools'
+
+tests\test_tool_registration.py:110: AttributeError
+============================== warnings summary ===============================
+tests/test_asset_discovery_persistence.py: 9 warnings
+tests/test_database_model_consistency.py: 9 warnings
+tests/test_error_handling.py: 7 warnings
+tests/test_event_broadcasting.py: 5 warnings
+tests/test_multi_agent_runtime.py: 3 warnings
+tests/test_mvp_runtime_regressions.py: 9 warnings
+tests/test_tool_execution.py: 6 warnings
+tests/test_tool_registration.py: 8 warnings
+tests/test_tool_scheduler.py: 2 warnings
+  C:\Users\keeth\PycharmProjects\Kodiak\.venv\Lib\site-packages\pytest_asyncio\plugin.py:761: DeprecationWarning: The event_loop fixture provided by pytest-asyncio has been redefined in
+  C:\Users\keeth\PycharmProjects\Kodiak\tests\conftest.py:30
+  Replacing the event_loop fixture with a custom implementation is deprecated
+  and will lead to errors in the future.
+  If you want to request an asyncio event loop with a scope other than function
+  scope, use the "scope" argument to the asyncio mark when marking the tests.
+  If you want to return different types of event loops, use the event_loop_policy
+  fixture.
+  
+    warnings.warn(
+
+tests/test_mvp_runtime_regressions.py: 12 warnings
+  C:\Users\keeth\PycharmProjects\Kodiak\kodiak\core\tools\base.py:86: PydanticDeprecatedSince20: The `dict` method is deprecated; use `model_dump` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    kwargs.update(validated_args.dict())
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_database_model_consistency.py::TestDatabaseModelConsistencyProperties::test_database_model_consistency_error_handling
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_network_errors
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_validation_errors
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_permission_errors
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_without_event_manager
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_multiple_error_types
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_preserves_context
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_concurrent_failures
+FAILED tests/test_event_broadcasting.py::TestEventBroadcastingProperties::test_event_broadcasting_with_failures
+FAILED tests/test_event_broadcasting.py::TestEventBroadcastingProperties::test_discovery_event_broadcasting
+FAILED tests/test_event_broadcasting.py::TestEventBroadcastingProperties::test_event_broadcasting_multiple_tools
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_returns_structured_results
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_without_event_manager
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_with_dict_return
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_error_handling
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_multiple_calls
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_parameter_validation
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_complete_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_incomplete_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_abstract_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_broken_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_multiple_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_interface_compliance
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_duplicate_names
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_execution_context
+================= 25 failed, 59 passed, 70 warnings in 6.09s ==================

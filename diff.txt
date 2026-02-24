@@ -1,0 +1,429 @@
+diff --git a/kodiak/core/tools/definitions/discovery.py b/kodiak/core/tools/definitions/discovery.py
+index 4e90bfe..fb50333 100644
+--- a/kodiak/core/tools/definitions/discovery.py
++++ b/kodiak/core/tools/definitions/discovery.py
+@@ -626,11 +626,20 @@ class FfufArgs(BaseModel):
+         "/usr/share/seclists/Discovery/Web-Content/common.txt",
+         description="Path to wordlist file inside the Docker container"
+     )
++    wordlists: Optional[List[str]] = Field(
++        None,
++        description="Optional multiple wordlists (e.g., ['/tmp/users.txt:USER','/tmp/passwords.txt:PASS'])"
++    )
+     extensions: Optional[str] = Field(None, description="File extensions to append to each word (e.g., 'php,html,asp')")
+     filter_status: Optional[str] = Field("404", description="HTTP status codes to filter OUT of results (comma-separated, e.g., '404,403')")
++    match_status: Optional[str] = Field(None, description="HTTP status codes to include (comma-separated)")
++    filter_regex: Optional[str] = Field(None, description="Regex to filter out responses")
++    match_regex: Optional[str] = Field(None, description="Regex to include matching responses")
+     threads: int = Field(40, description="Number of concurrent threads")
+     timeout: int = Field(10, description="Request timeout in seconds")
+     method: str = Field("GET", description="HTTP method (GET, POST, etc.)")
++    data: Optional[str] = Field(None, description="Request body (for POST/PUT fuzzing)")
++    mode: Optional[str] = Field(None, description="Fuzz mode: sniper, clusterbomb, pitchfork")
+     headers: Optional[str] = Field(None, description="Additional HTTP headers (e.g., 'Authorization: Bearer token')")
+     cookies: Optional[str] = Field(None, description="Cookie string to include with requests")
+ 
+@@ -653,6 +662,11 @@ class FfufTool(KodiakTool):
+                     "type": "string",
+                     "description": "Wordlist file path (default: /usr/share/seclists/Discovery/Web-Content/common.txt). Other options: /usr/share/seclists/Discovery/Web-Content/big.txt"
+                 },
++                "wordlists": {
++                    "type": "array",
++                    "items": {"type": "string"},
++                    "description": "Optional list of multiple wordlists with keyword aliases, e.g. ['/tmp/users.txt:USER','/tmp/passwords.txt:PASS']"
++                },
+                 "extensions": {
+                     "type": "string",
+                     "description": "Comma-separated file extensions to try (e.g., 'php,html,txt,bak')"
+@@ -661,6 +675,18 @@ class FfufTool(KodiakTool):
+                     "type": "string",
+                     "description": "HTTP status codes to HIDE from results (e.g., '404' or '404,403,400')"
+                 },
++                "match_status": {
++                    "type": "string",
++                    "description": "HTTP status codes to INCLUDE (e.g., '200,301,302')"
++                },
++                "filter_regex": {
++                    "type": "string",
++                    "description": "Regex to exclude response bodies containing this pattern"
++                },
++                "match_regex": {
++                    "type": "string",
++                    "description": "Regex to include only response bodies containing this pattern"
++                },
+                 "threads": {
+                     "type": "integer",
+                     "description": "Number of concurrent threads (default: 40)"
+@@ -673,6 +699,14 @@ class FfufTool(KodiakTool):
+                     "type": "string",
+                     "description": "HTTP method to use (default: GET)"
+                 },
++                "data": {
++                    "type": "string",
++                    "description": "Raw request body for POST/PUT fuzzing"
++                },
++                "mode": {
++                    "type": "string",
++                    "description": "Fuzz mode: sniper (default), clusterbomb, or pitchfork"
++                },
+                 "headers": {
+                     "type": "string",
+                     "description": "Additional HTTP headers to include"
+@@ -689,22 +723,41 @@ class FfufTool(KodiakTool):
+         url = args["url"]
+         # HARDCODED: Default wordlist path inside the Kodiak Docker container (from seclists)
+         wordlist = args.get("wordlist", "/usr/share/seclists/Discovery/Web-Content/common.txt")
++        method = str(args.get("method", "GET")).upper()
+ 
+         command = [
+             "ffuf",
+             "-u", url,
+-            "-w", wordlist,
+             "-t", str(args.get("threads", 40)),
+             "-timeout", str(args.get("timeout", 10)),
+-            "-X", args.get("method", "GET"),
++            "-X", method,
+             "-json",
+             "-s",  # Silent mode
+         ]
+ 
++        multi_wordlists = args.get("wordlists") or []
++        if multi_wordlists:
++            for wl in multi_wordlists:
++                wl_value = str(wl).strip()
++                if wl_value:
++                    command.extend(["-w", wl_value])
++        else:
++            command.extend(["-w", wordlist])
++
+         if args.get("extensions"):
+             command.extend(["-e", args["extensions"]])
+         if args.get("filter_status"):
+             command.extend(["-fc", args["filter_status"]])
++        if args.get("match_status"):
++            command.extend(["-mc", args["match_status"]])
++        if args.get("filter_regex"):
++            command.extend(["-fr", args["filter_regex"]])
++        if args.get("match_regex"):
++            command.extend(["-mr", args["match_regex"]])
++        if args.get("data"):
++            command.extend(["-d", args["data"]])
++        if args.get("mode"):
++            command.extend(["-mode", args["mode"]])
+         if args.get("headers"):
+             command.extend(["-H", args["headers"]])
+         if args.get("cookies"):
+@@ -759,22 +812,36 @@ class FfufTool(KodiakTool):
+                 # ffuf JSON output has a top-level 'results' array when using -json flag
+                 if "results" in data:
+                     for r in data["results"]:
++                        input_data = r.get("input", {}) or {}
++                        if isinstance(input_data, dict):
++                            input_summary = ", ".join(
++                                f"{k}={v}" for k, v in sorted(input_data.items())
++                            )
++                        else:
++                            input_summary = str(input_data)
+                         results.append({
+                             "url": r.get("url", ""),
+                             "status": r.get("status", 0),
+                             "length": r.get("length", 0),
+                             "words": r.get("words", 0),
+                             "lines": r.get("lines", 0),
+-                            "input": r.get("input", {}).get("FUZZ", ""),
++                            "input": input_summary or "",
+                         })
+                 elif "url" in data:
++                    input_data = data.get("input", {}) or {}
++                    if isinstance(input_data, dict):
++                        input_summary = ", ".join(
++                            f"{k}={v}" for k, v in sorted(input_data.items())
++                        )
++                    else:
++                        input_summary = str(input_data)
+                     results.append({
+                         "url": data.get("url", ""),
+                         "status": data.get("status", 0),
+                         "length": data.get("length", 0),
+                         "words": data.get("words", 0),
+                         "lines": data.get("lines", 0),
+-                        "input": data.get("input", {}).get("FUZZ", ""),
++                        "input": input_summary or "",
+                     })
+             except json.JSONDecodeError:
+                 continue
+diff --git a/kodiak/core/tools/definitions/terminal.py b/kodiak/core/tools/definitions/terminal.py
+index 5d180ea..8de0426 100644
+--- a/kodiak/core/tools/definitions/terminal.py
++++ b/kodiak/core/tools/definitions/terminal.py
+@@ -56,6 +56,38 @@ class TerminalSession:
+ 
+ # Global terminal sessions
+ _terminal_sessions: Dict[str, TerminalSession] = {}
++_SUPPORTED_SHELLS = {"bash", "sh", "zsh", "python"}
++_SHELL_ALIASES = {"py": "python", "python3": "python"}
++_STALE_INACTIVE_SECONDS = 900  # 15 minutes
++_MAX_SESSION_AGE_SECONDS = 86400  # 24 hours
++
++
++def _cleanup_stale_terminal_sessions() -> int:
++    """Drop very old or inactive sessions to avoid stale state buildup."""
++    now = time.time()
++    stale_ids = []
++    for session_id, session in _terminal_sessions.items():
++        age = now - session.created_at
++        inactive_for = now - session.last_activity
++        if age > _MAX_SESSION_AGE_SECONDS or (not session.is_active and inactive_for > _STALE_INACTIVE_SECONDS):
++            stale_ids.append(session_id)
++
++    for session_id in stale_ids:
++        _terminal_sessions.pop(session_id, None)
++    return len(stale_ids)
++
++
++def _format_session_not_found_output(session_id: str) -> str:
++    active = [
++        sid
++        for sid, s in _terminal_sessions.items()
++        if s.is_active
++    ]
++    sample = ", ".join(sorted(active)[:3]) if active else "none"
++    return (
++        f"Terminal session {session_id} not found. Start a session first with terminal_start. "
++        f"Active sessions: {len(active)} ({sample})."
++    )
+ 
+ 
+ class TerminalStartArgs(BaseModel):
+@@ -103,11 +135,23 @@ class TerminalStartTool(KodiakTool):
+ 
+     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
+         global _terminal_sessions
++        _cleanup_stale_terminal_sessions()
+         
+         # Generate unique session ID
+         session_id = f"term_{uuid.uuid4().hex[:8]}"
+         
+-        shell_type = args.get("shell_type", "bash")
++        raw_shell = str(args.get("shell_type", "bash")).strip().lower()
++        shell_type = _SHELL_ALIASES.get(raw_shell, raw_shell)
++        if shell_type not in _SUPPORTED_SHELLS:
++            return ToolResult(
++                success=False,
++                output=(
++                    f"Unsupported shell type: {raw_shell}. "
++                    f"Supported shells: {', '.join(sorted(_SUPPORTED_SHELLS))}."
++                ),
++                error="Unsupported shell type"
++            )
++
+         environment = args.get("environment") or {}
+         working_directory = args.get("working_directory", "/tmp")
+         
+@@ -141,6 +185,18 @@ class TerminalStartTool(KodiakTool):
+                     timeout=30
+                 )
+             else:
++                shell_probe = await asyncio.wait_for(
++                    executor.run_command(
++                        ["/bin/sh", "-c", f"command -v {shell_type} >/dev/null 2>&1"],
++                        cwd=working_directory,
++                        env=session.environment
++                    ),
++                    timeout=30
++                )
++                if shell_probe.exit_code != 0:
++                    raise RuntimeError(
++                        f"Requested shell '{shell_type}' is not available in container {docker_image}"
++                    )
+                 result = await asyncio.wait_for(
+                     executor.run_command(
+                         [shell_type, "-c", test_command],
+@@ -242,6 +298,7 @@ class TerminalExecuteTool(KodiakTool):
+ 
+     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
+         global _terminal_sessions
++        _cleanup_stale_terminal_sessions()
+         
+         session_id = args["session_id"]
+         command = args["command"]
+@@ -253,14 +310,17 @@ class TerminalExecuteTool(KodiakTool):
+         if not session:
+             return ToolResult(
+                 success=False,
+-                output=f"Terminal session {session_id} not found. Start a session first with terminal_start.",
++                output=_format_session_not_found_output(session_id),
+                 error="Session not found"
+             )
+         
+         if not session.is_active:
+             return ToolResult(
+                 success=False,
+-                output=f"Terminal session {session_id} is not active.",
++                output=(
++                    f"Terminal session {session_id} is not active. "
++                    "Start a new one with terminal_start."
++                ),
+                 error="Session inactive"
+             )
+         
+@@ -612,6 +672,7 @@ class TerminalHistoryTool(KodiakTool):
+ 
+     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
+         global _terminal_sessions
++        _cleanup_stale_terminal_sessions()
+         
+         session_id = args["session_id"]
+         limit = args.get("limit", 20)
+@@ -621,7 +682,7 @@ class TerminalHistoryTool(KodiakTool):
+         if not session:
+             return ToolResult(
+                 success=False,
+-                output=f"Terminal session {session_id} not found.",
++                output=_format_session_not_found_output(session_id),
+                 error="Session not found"
+             )
+         
+@@ -704,6 +765,7 @@ class TerminalStopTool(KodiakTool):
+ 
+     async def _execute(self, args: Dict[str, Any]) -> ToolResult:
+         global _terminal_sessions
++        _cleanup_stale_terminal_sessions()
+         
+         session_id = args["session_id"]
+         
+@@ -711,7 +773,7 @@ class TerminalStopTool(KodiakTool):
+         if not session:
+             return ToolResult(
+                 success=False,
+-                output=f"Terminal session {session_id} not found.",
++                output=_format_session_not_found_output(session_id),
+                 error="Session not found"
+             )
+         
+diff --git a/tests/test_mvp_runtime_regressions.py b/tests/test_mvp_runtime_regressions.py
+index 8981676..a48ec2c 100644
+--- a/tests/test_mvp_runtime_regressions.py
++++ b/tests/test_mvp_runtime_regressions.py
+@@ -6,6 +6,7 @@ import kodiak.core.memory_central as memory_central_module
+ import kodiak.services.executor as executor_module
+ from kodiak.core.agent import KodiakAgent
+ from kodiak.core.memory_central import CentralMemoryService
++from kodiak.core.tools.definitions.discovery import FfufTool
+ from kodiak.core.tools.definitions.exploitation import SQLMapTool
+ from kodiak.core.tools.definitions.terminal import (
+     TerminalExecuteTool,
+@@ -96,8 +97,8 @@ async def test_terminal_execute_does_not_treat_equals_as_env_assignment(monkeypa
+     )
+ 
+     assert result.success is True
+-    assert len(fake_executor.calls) == 2
+-    assert fake_executor.calls[1]["command"] == ["bash", "-c", command]
++    assert len(fake_executor.calls) == 3
++    assert fake_executor.calls[2]["command"] == ["bash", "-c", command]
+     assert _terminal_sessions[session_id].environment == {}
+ 
+ 
+@@ -121,7 +122,7 @@ async def test_terminal_execute_explicit_export_updates_session_environment(monk
+     assert result.success is True
+     assert "TOKEN=abc123" in result.output
+     assert "REGION=us-east-1" in result.output
+-    assert len(fake_executor.calls) == 1  # startup only; export handled in-memory
++    assert len(fake_executor.calls) == 2  # startup shell probe + pwd; export handled in-memory
+     assert _terminal_sessions[session_id].environment["TOKEN"] == "abc123"
+     assert _terminal_sessions[session_id].environment["REGION"] == "us-east-1"
+ 
+@@ -146,11 +147,45 @@ async def test_terminal_execute_chained_export_is_executed_normally(monkeypatch)
+     )
+ 
+     assert result.success is True
+-    assert len(fake_executor.calls) == 2
+-    assert fake_executor.calls[1]["command"] == ["bash", "-c", command]
++    assert len(fake_executor.calls) == 3
++    assert fake_executor.calls[2]["command"] == ["bash", "-c", command]
+     assert "TOKEN" not in _terminal_sessions[session_id].environment
+ 
+ 
++@pytest.mark.asyncio
++async def test_terminal_start_rejects_unsupported_shell(monkeypatch):
++    fake_executor = FakeExecutor(stdout="/tmp")
++    monkeypatch.setattr(
++        "kodiak.core.tools.definitions.terminal.get_executor",
++        lambda mode="local": fake_executor,
++    )
++
++    result = await TerminalStartTool().execute(shell_type="fish")
++
++    assert result.success is False
++    assert "Unsupported shell type" in result.output
++
++
++@pytest.mark.asyncio
++async def test_terminal_execute_session_not_found_message_lists_active_sessions(monkeypatch):
++    fake_executor = FakeExecutor(stdout="/tmp")
++    monkeypatch.setattr(
++        "kodiak.core.tools.definitions.terminal.get_executor",
++        lambda mode="local": fake_executor,
++    )
++
++    started = await TerminalStartTool().execute(shell_type="bash")
++    assert started.success is True
++
++    result = await TerminalExecuteTool().execute(
++        session_id="term_missing",
++        command="echo hello",
++    )
++
++    assert result.success is False
++    assert "Active sessions: 1" in result.output
++
++
+ @pytest.mark.asyncio
+ async def test_central_memory_handles_none_error_without_crashing(monkeypatch):
+     statuses = []
+@@ -242,6 +277,45 @@ async def test_sqlmap_appends_privilege_and_context_flags(monkeypatch):
+         assert flag in command
+ 
+ 
++@pytest.mark.asyncio
++async def test_ffuf_supports_multi_wordlists_post_and_match_filters(monkeypatch):
++    captured = {}
++
++    class FakeDockerExecutor:
++        async def run_command(self, command, cwd=None, env=None, stdin=None):
++            captured["command"] = command
++            return CommandResult(exit_code=0, stdout='{"results":[]}', stderr="")
++
++    async def fake_get_docker_executor(preferred_image=None, fallback_image=None, fallback_entrypoint=None):
++        return FakeDockerExecutor()
++
++    monkeypatch.setattr(executor_module, "get_docker_executor", fake_get_docker_executor)
++
++    tool = FfufTool()
++    result = await tool.execute(
++        url="https://example.com/login",
++        method="POST",
++        data="username=USER&password=PASS",
++        wordlists=["/tmp/users.txt:USER", "/tmp/passwords.txt:PASS"],
++        mode="clusterbomb",
++        match_status="302",
++        filter_regex="Invalid username or password",
++        headers="Content-Type: application/x-www-form-urlencoded",
++    )
++
++    assert result.success is True
++    command = captured["command"]
++    assert command.count("-w") == 2
++    assert "/tmp/users.txt:USER" in command
++    assert "/tmp/passwords.txt:PASS" in command
++    assert "-d" in command
++    assert "username=USER&password=PASS" in command
++    assert "-mode" in command
++    assert "clusterbomb" in command
++    assert "-mc" in command and "302" in command
++    assert "-fr" in command
++
++
+ def test_agent_history_content_includes_compact_tool_data():
+     agent = _make_agent()
+     content = agent._build_tool_history_content(

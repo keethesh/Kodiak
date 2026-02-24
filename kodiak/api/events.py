@@ -371,6 +371,74 @@ class TUIEventManager:
         except Exception as e:
             # Don't create recursive error handling for error events
             logger.error(f"Failed to emit error event: {e}")
+
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_note_saved(self, category: str, target: str, preview: str, scan_id: str = None):
+        """Broadcast engagement note saved event."""
+        try:
+            event = TUIEvent("note_saved", {
+                "category": category,
+                "target": target,
+                "preview": preview,
+            })
+            await self.emit(event, scan_id)
+        except Exception as e:
+            raise EventBroadcastingError(
+                message="Failed to emit note_saved event",
+                event_type="note_saved",
+                details={"category": category, "target": target, "scan_id": scan_id, "original_error": str(e)},
+            )
+
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_finding_saved(self, title: str, severity: str, target: str, scan_id: str = None):
+        """Broadcast enriched finding saved event."""
+        try:
+            event = TUIEvent("finding_saved", {
+                "title": title,
+                "severity": severity,
+                "target": target,
+            })
+            await self.emit(event, scan_id)
+        except Exception as e:
+            raise EventBroadcastingError(
+                message="Failed to emit finding_saved event",
+                event_type="finding_saved",
+                details={"title": title, "severity": severity, "scan_id": scan_id, "original_error": str(e)},
+            )
+
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_phase_advanced(self, old_phase: str, new_phase: str, scan_id: str = None):
+        """Broadcast scan phase advancement."""
+        try:
+            logger.info(f"📍 Phase advanced: {old_phase.upper()} → {new_phase.upper()}")
+            event = TUIEvent("phase_advanced", {
+                "old_phase": old_phase,
+                "new_phase": new_phase,
+            })
+            await self.emit(event, scan_id)
+        except Exception as e:
+            raise EventBroadcastingError(
+                message="Failed to emit phase_advanced event",
+                event_type="phase_advanced",
+                details={"old_phase": old_phase, "new_phase": new_phase, "scan_id": scan_id, "original_error": str(e)},
+            )
+
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_prior_knowledge_loaded(self, notes_count: int, findings_count: int, scan_id: str = None):
+        """Broadcast prior engagement knowledge loaded."""
+        try:
+            logger.info(f"🧠 Prior knowledge loaded: {notes_count} notes, {findings_count} findings")
+            event = TUIEvent("prior_knowledge_loaded", {
+                "notes_count": notes_count,
+                "findings_count": findings_count,
+            })
+            await self.emit(event, scan_id)
+        except Exception as e:
+            raise EventBroadcastingError(
+                message="Failed to emit prior_knowledge_loaded event",
+                event_type="prior_knowledge_loaded",
+                details={"notes_count": notes_count, "findings_count": findings_count, "scan_id": scan_id, "original_error": str(e)},
+            )
     
     def get_health_status(self) -> Dict[str, Any]:
         """Get EventManager health status"""

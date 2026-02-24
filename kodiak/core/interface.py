@@ -27,6 +27,7 @@ class _RunState:
     force_agents: bool
     report_format: str
     report_path: Optional[str]
+    project_name: Optional[str] = None
     queue: asyncio.Queue[CoreEvent] = field(default_factory=asyncio.Queue)
     task: Optional[asyncio.Task] = None
     result: Optional[ScanResult] = None
@@ -56,6 +57,10 @@ class CoreInterface:
             "finding_discovered",
             "agent_thinking",
             "agent_thought",
+            "note_saved",
+            "finding_saved",
+            "phase_advanced",
+            "prior_knowledge_loaded",
         ]
 
     async def start_scan(
@@ -69,6 +74,7 @@ class CoreInterface:
         force_agents: bool = False,
         report_format: str = "json+md",
         report_path: Optional[str] = None,
+        project_name: Optional[str] = None,
     ) -> str:
         await self._ensure_subscriptions()
 
@@ -86,6 +92,7 @@ class CoreInterface:
             force_agents=force_agents,
             report_format=report_format,
             report_path=report_path,
+            project_name=project_name,
         )
 
         async with self._lock:
@@ -158,6 +165,7 @@ class CoreInterface:
                     force_agents=state.force_agents,
                     report_format=state.report_format,
                     report_path=state.report_path,
+                    project_name=state.project_name,
                 )
                 state.result = result
             finally:

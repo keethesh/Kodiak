@@ -75,6 +75,17 @@ class CRUDProject:
         except SQLAlchemyError as e:
             raise ErrorHandler.handle_database_error("get_all_projects", e)
 
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_by_name(self, session: AsyncSession, name: str) -> Optional[Project]:
+        try:
+            statement = select(Project).where(Project.name == name)
+            result = await session.execute(statement)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_project_by_name", e, {
+                "project_name": name
+            })
+
 
 class CRUDScanJob:
     @handle_errors(ErrorCategory.DATABASE, reraise=True)

@@ -94,8 +94,8 @@ class ScanRunner:
 
         async for session in get_session():
             try:
-                # 1. Create project and scan in database
-                project = await self._create_project(session, project_name)
+                # 1. Get or create project (reuse existing for prior knowledge)
+                project = await self._get_or_create_project(session, project_name)
                 scan_job = await self._create_scan_job(
                     session, project.id, target, instructions, report_format, report_path
                 )
@@ -242,7 +242,12 @@ class ScanRunner:
                     except Exception as unsubscribe_error:
                         logger.warning(f"Failed to unsubscribe finding capture: {unsubscribe_error}")
     
-    async def _create_project(self, session: AsyncSession, name: str) -> Project:
+    async def _get_or_create_project(self, session: AsyncSession, name: str) -> Project:
+        """Return an existing project by name, or create a new one."""
+        existing = await crud.project.get_by_name(session, name)
+        if existing:
+            logger.info(f"♻️  Reusing project '{name}' ({existing.id})")
+            return existing
         project = Project(name=name, description=f"Security scan project: {name}")
         return await crud.project.create(session, project)
     

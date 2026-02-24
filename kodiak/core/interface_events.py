@@ -55,4 +55,22 @@ def map_tui_event_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, An
             "thought": data.get("thought"),
             "status": data.get("status"),
         }
+    if event_type in {"note_saved", "finding_saved"}:
+        return {
+            "category": data.get("category"),
+            "target": data.get("target"),
+            "preview": data.get("preview"),
+            "title": data.get("title"),
+            "severity": data.get("severity"),
+        }
+    if event_type == "phase_advanced":
+        return {
+            "old_phase": data.get("old_phase"),
+            "new_phase": data.get("new_phase"),
+        }
+    if event_type == "prior_knowledge_loaded":
+        return {
+            "notes_count": data.get("notes_count", 0),
+            "findings_count": data.get("findings_count", 0),
+        }
     return data or {}
