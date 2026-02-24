@@ -75,7 +75,7 @@ async def execute_command(
     Uses the existing DockerExecutor infrastructure.
     """
     # Lazy import to avoid circular dependency at module load time
-    from kodiak.core.tools.executor import get_docker_executor
+    from kodiak.services.executor import get_docker_executor
 
     t0 = time.monotonic()
 
