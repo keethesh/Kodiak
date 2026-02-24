@@ -174,7 +174,6 @@ def scan(
     async def run_scan_internal() -> int:
         from kodiak.core.interface import CoreInterface
         from kodiak.core.config import settings
-        from kodiak.core.agent_scaling import resolve_agent_count
         from kodiak.services import llm
         
         # If not verbose, silence loguru so messages don't break the Rich Live display
@@ -188,21 +187,11 @@ def scan(
         if model:
             settings.llm_model = llm.normalize_model_name(model)
 
-        requested_agents = agents or settings.default_agent_count
-        resolved_agents = resolve_agent_count(
-            requested=requested_agents,
-            max_agents=settings.max_concurrent_agents,
-            force_agents=force_agents,
-        )
-            
         console.print(f"\n🎯 [bold]Target:[/bold] {target}")
         console.print(f"🧠 [bold]Model:[/bold] {settings.llm_model}")
         console.print(f"📋 [bold]Instructions:[/bold] {instructions}\n")
-        console.print(f"👥 [bold]Agents:[/bold] requested={resolved_agents.requested} effective={resolved_agents.effective}")
-        console.print(f"🧩 [bold]Role Strategy:[/bold] {role_strategy}")
+        console.print(f"👤 [bold]Architecture:[/bold] Manager-Worker (single brain, parallel tools)")
         console.print(f"📝 [bold]Report:[/bold] format={report_format} path={report_path or settings.report_output_path}")
-        if resolved_agents.warning:
-            console.print(f"[yellow]{resolved_agents.warning}[/yellow]")
         console.print("")
         
         interface = CoreInterface()
@@ -211,8 +200,8 @@ def scan(
             instructions=instructions,
             model=model,
             max_iterations=max_iterations,
-            agent_count=requested_agents,
-            role_strategy=role_strategy.replace("-", "_"),
+            agent_count=1,
+            role_strategy="role_hinted",
             force_agents=force_agents,
             report_format=report_format.lower(),
             report_path=report_path,

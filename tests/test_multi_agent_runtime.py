@@ -4,110 +4,125 @@ from types import SimpleNamespace
 import pytest
 
 from kodiak.api.events import TUIEventManager
-from kodiak.core.agent_scaling import resolve_agent_count
 from kodiak.core.scan_runner import ScanRunner
+from kodiak.core.scan_state import ScanState, ScanPhase
+from kodiak.core.manager import ManagerAgent
 
 
-class TestAgentScaling:
-    def test_resolve_agent_count_within_limit(self):
-        resolved = resolve_agent_count(requested=3, max_agents=5, force_agents=False)
-        assert resolved.requested == 3
-        assert resolved.effective == 3
-        assert resolved.clamped is False
-        assert resolved.warning is None
+class TestScanStateBasics:
+    """Tests for the ScanState model."""
 
-    def test_resolve_agent_count_clamped_without_force(self):
-        resolved = resolve_agent_count(requested=9, max_agents=4, force_agents=False)
-        assert resolved.requested == 9
-        assert resolved.effective == 4
-        assert resolved.clamped is True
-        assert "Clamping to 4" in (resolved.warning or "")
+    def test_initial_phase_is_recon(self):
+        state = ScanState(target="example.com")
+        assert state.phase == ScanPhase.RECON
 
-    def test_resolve_agent_count_force_override(self):
-        resolved = resolve_agent_count(requested=9, max_agents=4, force_agents=True)
-        assert resolved.requested == 9
-        assert resolved.effective == 9
-        assert resolved.clamped is False
-        assert "force_agents" in (resolved.warning or "")
+    def test_advance_phase_cycles_correctly(self):
+        state = ScanState(target="example.com")
+        assert state.advance_phase()
+        assert state.phase == ScanPhase.ENUMERATION
+        assert state.advance_phase()
+        assert state.phase == ScanPhase.VULN_SCAN
+        assert state.advance_phase()
+        assert state.phase == ScanPhase.EXPLOITATION
+        assert state.advance_phase()
+        assert state.phase == ScanPhase.REPORTING
+        assert not state.advance_phase()  # no more phases
+
+    def test_ensure_target_creates_new(self):
+        state = ScanState(target="example.com")
+        ts = state.ensure_target("sub.example.com")
+        assert ts.hostname == "sub.example.com"
+        assert "sub.example.com" in state.targets
+
+    def test_ensure_target_returns_existing(self):
+        state = ScanState(target="example.com")
+        ts1 = state.ensure_target("host.com")
+        ts1.ports.append(80)
+        ts2 = state.ensure_target("host.com")
+        assert ts2.ports == [80]
+
+    def test_record_tool_result(self):
+        state = ScanState(target="example.com")
+        state.record_tool_result("nmap", "example.com", "success", "3 ports open")
+        assert len(state.completed_tools) == 1
+        assert state.completed_tools[0].tool == "nmap"
+
+    def test_add_finding(self):
+        state = ScanState(target="example.com")
+        state.add_finding("SQLi", "high", "example.com/login", evidence="parameter id")
+        assert state.findings_count == 1
+        assert state.findings[0].severity == "high"
+
+    def test_has_tool_been_run(self):
+        state = ScanState(target="example.com")
+        assert not state.has_tool_been_run("nmap", "example.com")
+        state.record_tool_result("nmap", "example.com", "success", "done")
+        assert state.has_tool_been_run("nmap", "example.com")
+
+    def test_to_prompt_context_bounded(self):
+        state = ScanState(target="example.com")
+        for i in range(100):
+            state.record_tool_result(f"tool{i}", "example.com", "success", f"result {i}")
+        ctx = state.to_prompt_context(max_tool_records=10)
+        assert "showing last 10" in ctx
+        assert len(ctx) < 5000  # bounded
 
 
-class TestScanRunnerHelpers:
+class TestManagerAgent:
+    """Unit tests for the ManagerAgent helper methods."""
+
+    def _manager(self) -> ManagerAgent:
+        from kodiak.core.tools.inventory import ToolInventory
+        inv = ToolInventory()
+        inv.initialize_tools()
+        return ManagerAgent(
+            event_manager=TUIEventManager(),
+            tool_inventory=inv,
+        )
+
+    def test_prepare_tools_excludes_blackboard(self):
+        manager = self._manager()
+        tools = manager._prepare_tools()
+        names = [t["function"]["name"] for t in tools]
+        assert not any(n.startswith("blackboard_") for n in names)
+        assert "complete_scan" in names
+
+    def test_check_phase_advance_with_keyword(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        assert manager.scan_state.phase == ScanPhase.RECON
+        manager._check_phase_advance("Recon is done. ADVANCE_PHASE to enumeration.")
+        assert manager.scan_state.phase == ScanPhase.ENUMERATION
+
+    def test_check_phase_advance_without_keyword(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        manager._check_phase_advance("Running nmap next.")
+        assert manager.scan_state.phase == ScanPhase.RECON
+
+    def test_parse_args_string(self):
+        args = ManagerAgent._parse_args('{"target": "example.com"}')
+        assert args == {"target": "example.com"}
+
+    def test_parse_args_dict(self):
+        args = ManagerAgent._parse_args({"target": "example.com"})
+        assert args == {"target": "example.com"}
+
+    def test_parse_args_invalid(self):
+        args = ManagerAgent._parse_args("not json")
+        assert args == {}
+
+    def test_extract_key_evidence(self):
+        output = "80/tcp open http\n443/tcp open https\nSome noise line"
+        evidence = ManagerAgent._extract_key_evidence(output)
+        assert any("open" in e for e in evidence)
+
+
+class TestScanRunnerPreflight:
+    """Tests for Docker toolbox preflight checks."""
+
     def _runner(self) -> ScanRunner:
         return ScanRunner(TUIEventManager())
-
-    def test_role_strategy_role_hinted_cycles(self):
-        runner = self._runner()
-        assert runner._role_for_index(0, "role_hinted") == "scout"
-        assert runner._role_for_index(1, "role_hinted") == "mapper"
-        assert runner._role_for_index(5, "role_hinted") == "scout"
-
-    def test_role_strategy_assigns_verifier_when_enough_agents(self):
-        runner = self._runner()
-        assert runner._role_for_index(3, "role_hinted", total_agents=4) == "verifier"
-        assert runner._role_for_index(4, "role_hinted", total_agents=6) == "analyst"
-
-    def test_role_strategy_generic(self):
-        runner = self._runner()
-        assert runner._role_for_index(0, "generic") == "generalist"
-
-    def test_build_agent_goal_includes_role_hint(self):
-        runner = self._runner()
-        goal = runner._build_agent_goal(
-            base_instructions="Conduct a security assessment",
-            target="https://example.com",
-            role="scout",
-            index=0,
-            total=3,
-            role_strategy="role_hinted",
-        )
-        assert "Role: scout" in goal
-        assert "agent 1 of 3" in goal
-
-    def test_build_agent_goal_includes_verifier_instructions(self):
-        runner = self._runner()
-        goal = runner._build_agent_goal(
-            base_instructions="Conduct a security assessment",
-            target="https://example.com",
-            role="verifier",
-            index=3,
-            total=4,
-            role_strategy="role_hinted",
-        )
-        assert "Role: verifier" in goal
-        assert "blackboard_query_verification_queue" in goal
-
-    def test_aggregate_prefers_deduped_finding_count(self):
-        runner = self._runner()
-        raw_results = [
-            SimpleNamespace(status="completed", summary="a", findings_count=7, iterations=10),
-            SimpleNamespace(status="completed", summary="b", findings_count=4, iterations=9),
-        ]
-        result = runner._aggregate_agent_results(raw_results, max_iterations=20, deduped_finding_count=5)
-        assert result.status == "completed"
-        assert result.findings_count == 5
-        assert result.iterations == 19
-
-    def test_aggregate_max_iterations(self):
-        runner = self._runner()
-        raw_results = [
-            SimpleNamespace(status="max_iterations", summary="m1", findings_count=1, iterations=10),
-            SimpleNamespace(status="max_iterations", summary="m2", findings_count=2, iterations=10),
-        ]
-        result = runner._aggregate_agent_results(raw_results, max_iterations=20, deduped_finding_count=0)
-        assert result.status == "max_iterations"
-        assert result.findings_count == 3
-
-    @pytest.mark.asyncio
-    async def test_cancel_cancels_all_agent_tasks(self):
-        runner = self._runner()
-        task_one = asyncio.create_task(asyncio.sleep(30))
-        task_two = asyncio.create_task(asyncio.sleep(30))
-        runner._agent_tasks = [task_one, task_two]
-
-        await runner.cancel()
-
-        assert all(task.done() for task in runner._agent_tasks)
-        assert all(task.cancelled() for task in runner._agent_tasks)
 
     @pytest.mark.asyncio
     async def test_preflight_gates_missing_docker_tools(self, monkeypatch):
@@ -191,4 +206,4 @@ class TestScanRunnerHelpers:
         assert set(allowed) == {"nuclei", "whatweb"}
         assert missing == []
         script = captured["command"][2]
-        assert "fi; done" in script
+        assert "fi\ndone" in script

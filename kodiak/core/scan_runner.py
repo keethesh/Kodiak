@@ -3,7 +3,6 @@ Scan Runner - Clean implementation of scan execution
 """
 
 import asyncio
-import math
 import shlex
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
@@ -13,11 +12,9 @@ from dataclasses import dataclass
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kodiak.core.agent import KodiakAgent
+from kodiak.core.manager import ManagerAgent, ManagerResult
 from kodiak.core.tools.inventory import ToolInventory
 from kodiak.core.config import settings
-from kodiak.core.agent_scaling import resolve_agent_count
-from kodiak.core.tool_scheduler import ToolScheduler
 from kodiak.core.reporting import write_scan_report
 from kodiak.api.events import TUIEventManager
 from kodiak.database.engine import get_session
@@ -40,18 +37,19 @@ class ScanResult:
 class ScanRunner:
     """
     Executes a single security scan from start to finish.
+
+    Uses a single ManagerAgent (Phased Manager-Worker architecture):
+    one LLM brain dispatches parallel stateless workers.
     """
     
     def __init__(self, event_manager: TUIEventManager):
         self.event_manager = event_manager
-        self._agents: List[KodiakAgent] = []
-        self._agent_tasks: List[asyncio.Task] = []
         self._cancel_requested = False
+        self._manager_task: Optional[asyncio.Task] = None
         self._finding_event_count = 0
         self._finding_keys: set[str] = set()
         self._finding_counts_by_severity: Dict[str, int] = {}
         self._finding_records: Dict[str, Dict[str, Any]] = {}
-        self._tool_scheduler: Optional[ToolScheduler] = None
         self._docker_tool_map = {
             "nmap": "nmap",
             "nuclei": "nuclei",
@@ -70,7 +68,7 @@ class ScanRunner:
         target: str,
         instructions: str = "",
         project_name: Optional[str] = None,
-        max_iterations: int = 25,
+        max_iterations: int = 30,
         agent_count: int = 1,
         role_strategy: str = "role_hinted",
         force_agents: bool = False,
@@ -78,28 +76,21 @@ class ScanRunner:
         report_path: Optional[str] = None,
     ) -> ScanResult:
         """
-        Execute a complete scan.
+        Execute a complete scan using the Manager-Worker architecture.
+
+        ``agent_count`` and ``role_strategy`` are accepted for API compatibility
+        but ignored — the Manager architecture always uses a single brain.
         """
         start_time = datetime.now(timezone.utc)
         
-        # Default project name
         if not project_name:
             project_name = f"Scan_{target}_{start_time.strftime('%Y%m%d_%H%M%S')}"
         self._cancel_requested = False
-        self._agents = []
-        self._agent_tasks = []
+        self._manager_task = None
         self._finding_event_count = 0
         self._finding_keys = set()
         self._finding_counts_by_severity = {}
         self._finding_records = {}
-
-        agent_resolution = resolve_agent_count(
-            requested=agent_count,
-            max_agents=settings.max_concurrent_agents,
-            force_agents=force_agents,
-        )
-        if agent_resolution.warning:
-            logger.warning(agent_resolution.warning)
 
         async for session in get_session():
             try:
@@ -127,134 +118,47 @@ class ScanRunner:
 
                 self.event_manager.subscribe_scan(scan_id_str, _capture_scan_event)
                 
-                # Emit scan started event
                 await self.event_manager.emit_scan_started(
                     scan_id=scan_id_str,
                     scan_name=project.name,
                     target=target
                 )
                 
-                # 2. Setup Agents
-                effective_agents = agent_resolution.effective
-                per_agent_iterations = max(1, math.ceil(max_iterations / effective_agents))
-                preflight_inventory = ToolInventory()
-                preflight_inventory.initialize_tools()
-                allowed_tools, missing_tools = await self._preflight_available_tools(preflight_inventory)
+                # 2. Preflight Docker toolbox
+                tool_inventory = ToolInventory()
+                tool_inventory.initialize_tools()
+                allowed_tools, missing_tools = await self._preflight_available_tools(tool_inventory)
                 if missing_tools:
                     logger.warning(
-                        "Tool preflight disabled unavailable toolbox tools for this scan: "
+                        "Tool preflight disabled unavailable toolbox tools: "
                         + ", ".join(sorted(missing_tools))
                     )
                 logger.info(
-                    f"Tool preflight complete: {len(allowed_tools)} enabled, {len(missing_tools)} disabled"
+                    f"Tool preflight: {len(allowed_tools)} enabled, {len(missing_tools)} disabled"
                 )
 
-                if settings.tool_scheduler == "queue":
-                    self._tool_scheduler = ToolScheduler(queue_limit=settings.tool_queue_limit)
-                    heavy_parallel = max(1, settings.heavy_tool_parallel_limit)
-                    light_parallel = max(1, heavy_parallel * 2)
-                    scheduler_concurrency = {
-                        "nmap": 1,
-                        "sqlmap": 1,
-                        "nuclei": heavy_parallel,
-                        "ffuf": heavy_parallel,
-                        "katana": heavy_parallel,
-                        "whatweb": light_parallel,
-                        "httpx": light_parallel,
-                        "subfinder": light_parallel,
-                        "searchsploit": 1,
-                    }
-                    for tool_name, concurrency in scheduler_concurrency.items():
-                        self._tool_scheduler.register_tool(tool_name, concurrency=concurrency)
-                    await self._tool_scheduler.start()
-
-                global_heavy_semaphore = asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit))
-                per_tool_semaphores = {
-                    "nmap": asyncio.Semaphore(1),
-                    "sqlmap": asyncio.Semaphore(1),
-                    "nuclei": asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit)),
-                    "ffuf": asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit)),
-                    "katana": asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit)),
-                }
-                logger.info(
-                    f"Starting {effective_agents} agent(s) with {per_agent_iterations} max iterations each"
+                # 3. Create and run Manager
+                manager = ManagerAgent(
+                    event_manager=self.event_manager,
+                    tool_inventory=tool_inventory,
                 )
 
-                for index in range(effective_agents):
-                    role = self._role_for_index(index, role_strategy, effective_agents)
-                    tool_inventory = ToolInventory()
-                    tool_inventory.initialize_tools()
-                    agent_allowed_tools = allowed_tools
-                    if role == "verifier":
-                        verifier_tool_allowlist = {
-                            "blackboard_query_verification_queue",
-                            "blackboard_query_facts",
-                            "blackboard_query_edges",
-                            "blackboard_query_events",
-                            "blackboard_publish_fact",
-                            "blackboard_publish_edge",
-                            "httpx",
-                            "whatweb",
-                            "nmap",
-                            "nuclei",
-                            "sqlmap",
-                            "ffuf",
-                            "katana",
-                            "complete_scan",
-                        }
-                        agent_allowed_tools = [name for name in allowed_tools if name in verifier_tool_allowlist]
-                        if "complete_scan" not in agent_allowed_tools:
-                            agent_allowed_tools.append("complete_scan")
+                logger.info(f"Starting Manager with {max_iterations} max iterations")
 
-                    agent = KodiakAgent(
-                        agent_id=f"scanner-{scan_job.id}-{index + 1}",
-                        tool_inventory=tool_inventory,
-                        event_manager=self.event_manager,
-                        session=None,
-                        role=role,
-                        project_id=project.id,
-                        global_tool_semaphore=global_heavy_semaphore,
-                        tool_semaphores=per_tool_semaphores,
-                        tool_scheduler=self._tool_scheduler,
-                        allowed_tools=agent_allowed_tools,
-                    )
-                    await agent.register_with_hive_mind()
-                    self._agents.append(agent)
-
-                # 3. Run Agent Loops
-                for index, agent in enumerate(self._agents):
-                    goal = self._build_agent_goal(
-                        base_instructions=instructions,
-                        target=target,
-                        role=agent.role,
-                        index=index,
-                        total=effective_agents,
-                        role_strategy=role_strategy,
-                    )
-                    task = asyncio.create_task(
-                        self._run_agent_with_own_session(
-                            agent=agent,
-                            goal=goal,
-                            target=target,
-                            project_id=project.id,
-                            scan_id=scan_job.id,
-                            max_iterations=per_agent_iterations,
-                        ),
-                        name=f"kodiak-agent-{scan_job.id}-{index + 1}",
-                    )
-                    self._agent_tasks.append(task)
-
-                agent_results = await asyncio.gather(*self._agent_tasks, return_exceptions=True)
-                result = self._aggregate_agent_results(
-                    agent_results,
+                manager_result = await manager.run(
+                    target=target,
+                    instructions=instructions,
+                    session=session,
+                    project_id=project.id,
+                    scan_id=scan_job.id,
                     max_iterations=max_iterations,
-                    deduped_finding_count=len(self._finding_keys),
+                    allowed_tools=allowed_tools,
                 )
                 
                 # 4. Finalize
                 final_status = (
                     ScanStatus.COMPLETED
-                    if result.status == "completed"
+                    if manager_result.status == "completed"
                     else ScanStatus.FAILED
                 )
                 await crud.scan_job.update_status(session, scan_job.id, final_status)
@@ -263,12 +167,12 @@ class ScanRunner:
                 duration = (datetime.now(timezone.utc) - start_time).total_seconds()
                 
                 scan_result = ScanResult(
-                    status=result.status,
-                    summary=result.summary,
+                    status=manager_result.status,
+                    summary=manager_result.summary,
                     nodes_discovered=len(nodes),
-                    findings_count=result.findings_count,
+                    findings_count=manager_result.findings_count,
                     duration_seconds=duration,
-                    iterations=result.iterations
+                    iterations=manager_result.iterations,
                 )
                 
                 attempts = await crud.attempt.get_attempts_by_scan(session, scan_job.id, limit=400)
@@ -277,18 +181,15 @@ class ScanRunner:
                     "scan_name": project.name,
                     "project_id": str(project.id),
                     "target": target,
-                    "status": result.status,
+                    "status": manager_result.status,
                     "summary": {
-                        "agents_requested": agent_resolution.requested,
-                        "agents_running": agent_resolution.effective,
                         "nodes_discovered": len(nodes),
                         "raw_findings": self._finding_event_count,
                         "deduped_findings": len(self._finding_keys),
-                        "duplicate_findings_filtered": max(0, self._finding_event_count - len(self._finding_keys)),
                         "findings_by_severity": self._finding_counts_by_severity,
-                        "findings_count": result.findings_count,
+                        "findings_count": manager_result.findings_count,
                         "duration_seconds": duration,
-                        "iterations": result.iterations,
+                        "iterations": manager_result.iterations,
                     },
                     "findings": list(self._finding_records.values()),
                     "attempts": [
@@ -317,14 +218,11 @@ class ScanRunner:
                     scan_name=project.name,
                     status=final_status,
                     summary={
-                        "agents_requested": agent_resolution.requested,
-                        "agents_running": agent_resolution.effective,
                         "nodes_discovered": len(nodes),
                         "raw_findings": self._finding_event_count,
                         "deduped_findings": len(self._finding_keys),
-                        "duplicate_findings_filtered": max(0, self._finding_event_count - len(self._finding_keys)),
                         "findings_by_severity": self._finding_counts_by_severity,
-                        "findings_count": result.findings_count,
+                        "findings_count": manager_result.findings_count,
                         "duration": duration,
                         "report_paths": report_paths,
                     }
@@ -338,22 +236,11 @@ class ScanRunner:
                     await crud.scan_job.update_status(session, scan_job.id, ScanStatus.FAILED)
                 raise
             finally:
-                for agent in self._agents:
-                    try:
-                        await agent.unregister_from_hive_mind()
-                    except Exception as unregister_error:
-                        logger.warning(f"Failed to unregister agent {agent.agent_id}: {unregister_error}")
-                if self._tool_scheduler is not None:
-                    try:
-                        await self._tool_scheduler.stop()
-                    except Exception as scheduler_error:
-                        logger.warning(f"Failed to stop tool scheduler cleanly: {scheduler_error}")
-                    self._tool_scheduler = None
                 if 'scan_id_str' in locals():
                     try:
                         self.event_manager.unsubscribe_scan(scan_id_str, _capture_scan_event)
                     except Exception as unsubscribe_error:
-                        logger.warning(f"Failed to unsubscribe finding capture handler: {unsubscribe_error}")
+                        logger.warning(f"Failed to unsubscribe finding capture: {unsubscribe_error}")
     
     async def _create_project(self, session: AsyncSession, name: str) -> Project:
         project = Project(name=name, description=f"Security scan project: {name}")
@@ -381,50 +268,13 @@ class ScanRunner:
         )
         return await crud.scan_job.create(session, scan)
 
-    async def _run_agent_with_own_session(
-        self,
-        agent: KodiakAgent,
-        goal: str,
-        target: str,
-        project_id: UUID,
-        scan_id: UUID,
-        max_iterations: int,
-    ) -> Any:
-        """Run an agent with its own isolated DB session.
-
-        Each concurrent agent must own its session exclusively.  Sharing a
-        single AsyncSession across asyncio.gather() tasks causes SQLAlchemy
-        to receive overlapping commit()/rollback() calls, corrupting the
-        session state.
-        """
-        async for agent_session in get_session():
-            return await agent.run(
-                goal=goal,
-                target=target,
-                session=agent_session,
-                project_id=project_id,
-                scan_id=scan_id,
-                max_iterations=max_iterations,
-            )
-
     async def cancel(self):
         """Cancel the scan"""
         logger.info("🛑 Scan cancellation requested")
         self._cancel_requested = True
-        for task in self._agent_tasks:
-            if not task.done():
-                task.cancel()
-        if self._agent_tasks:
-            await asyncio.gather(*self._agent_tasks, return_exceptions=True)
-
-    def _role_for_index(self, index: int, role_strategy: str, total_agents: int = 1) -> str:
-        if role_strategy != "role_hinted":
-            return "generalist"
-        if total_agents >= 4:
-            roles = ["scout", "mapper", "attacker", "verifier", "analyst", "reporter"]
-        else:
-            roles = ["scout", "mapper", "attacker", "analyst", "reporter"]
-        return roles[index % len(roles)]
+        if self._manager_task and not self._manager_task.done():
+            self._manager_task.cancel()
+            await asyncio.gather(self._manager_task, return_exceptions=True)
 
     async def _preflight_available_tools(self, inventory: ToolInventory) -> tuple[List[str], List[str]]:
         """
@@ -491,101 +341,6 @@ class ScanRunner:
         except Exception as e:
             logger.warning(f"Tool preflight probe failed unexpectedly. Keeping all tools enabled: {e}")
             return registered_tools, []
-
-    def _build_agent_goal(
-        self,
-        base_instructions: str,
-        target: str,
-        role: str,
-        index: int,
-        total: int,
-        role_strategy: str,
-    ) -> str:
-        base_goal = base_instructions or f"Perform a security scan of {target}"
-        if role_strategy != "role_hinted":
-            return base_goal
-
-        role_focus = {
-            "scout": "prioritize broad discovery and service enumeration",
-            "mapper": "prioritize endpoint mapping and technology fingerprinting",
-            "attacker": "prioritize focused vulnerability validation on high-value targets",
-            "verifier": "prioritize resolving blackboard conflicts and validating disputed evidence",
-            "analyst": "prioritize triage, evidence quality, and false-positive reduction",
-            "reporter": "prioritize consolidation, impact statements, and concise findings",
-        }.get(role, "prioritize useful work without duplicating peers")
-        role_specific = ""
-        if role == "verifier":
-            role_specific = (
-                "- Start each iteration with blackboard_query_verification_queue.\n"
-                "- Validate one disputed fact at a time with focused tools.\n"
-                "- Publish verified updates via blackboard_publish_fact/blackboard_publish_edge.\n"
-            )
-
-        return (
-            "<agent_assignment>\n"
-            f"You are agent {index + 1} of {total}.\n"
-            f"Role: {role}. Focus: {role_focus}.\n"
-            "</agent_assignment>\n"
-            "<mission>\n"
-            f"{base_goal}\n"
-            "</mission>\n"
-            "<coordination_rules>\n"
-            "- Reuse peer evidence before launching new scans.\n"
-            "- Avoid repeating commands already attempted by peers unless you changed strategy.\n"
-            "- If re-trying, state what changed and why.\n"
-            f"{role_specific}"
-            "</coordination_rules>"
-        )
-
-    def _aggregate_agent_results(
-        self,
-        raw_results: List[Any],
-        max_iterations: int,
-        deduped_finding_count: int = 0,
-    ) -> ScanResult:
-        successful_results = []
-        failures = 0
-        cancelled = 0
-
-        for item in raw_results:
-            if isinstance(item, asyncio.CancelledError):
-                cancelled += 1
-                continue
-            if isinstance(item, Exception):
-                failures += 1
-                logger.error(f"Agent task failed: {item}")
-                continue
-            successful_results.append(item)
-
-        total_iterations = sum(r.iterations for r in successful_results)
-        aggregated_findings = sum(r.findings_count for r in successful_results)
-        findings_count = deduped_finding_count if deduped_finding_count > 0 else aggregated_findings
-        summaries = [r.summary for r in successful_results if r.summary]
-
-        if self._cancel_requested or (cancelled > 0 and not successful_results):
-            status = "cancelled"
-            summary = "Scan cancelled"
-        elif any(r.status == "completed" for r in successful_results):
-            status = "completed"
-            summary = " | ".join(summaries[:3]) if summaries else "Scan completed"
-        elif successful_results and all(r.status == "max_iterations" for r in successful_results):
-            status = "max_iterations"
-            summary = f"Reached iteration budget ({max_iterations}) across all agents"
-        elif failures > 0 and not successful_results:
-            status = "failed"
-            summary = "All agents failed"
-        else:
-            status = "failed"
-            summary = "Scan ended without completion"
-
-        return ScanResult(
-            status=status,
-            summary=summary,
-            nodes_discovered=0,
-            findings_count=findings_count,
-            duration_seconds=0,
-            iterations=total_iterations,
-        )
 
     def _finding_key(self, finding: Dict[str, Any]) -> str:
         title = str(finding.get("title", "")).strip().lower()
