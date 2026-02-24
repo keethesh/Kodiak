@@ -157,19 +157,20 @@ class ManagerAgent:
                 })
                 continue
 
-            # Emit thought for TUI
-            if response.content and self.event_manager:
+            # 2. PARSE STRUCTURED RESPONSE ------------------------------------
+            kodiak_resp = self._parse_kodiak_response(response.content)
+
+            # Emit thought for TUI (pass the actual reasoning, not raw JSON)
+            if self.event_manager and response.content:
+                thought_text = kodiak_resp.analysis if kodiak_resp else response.content
                 try:
                     await self.event_manager.emit_agent_thought(
                         agent_id="manager",
-                        thought=response.content[:500],
+                        thought=thought_text,
                         scan_id=scan_id_str,
                     )
                 except Exception:
                     pass
-
-            # 2. PARSE STRUCTURED RESPONSE ------------------------------------
-            kodiak_resp = self._parse_kodiak_response(response.content)
 
             if kodiak_resp is None:
                 history.append({"role": "assistant", "content": response.content or ""})
