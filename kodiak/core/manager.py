@@ -319,70 +319,90 @@ class ManagerAgent:
             return None
 
     def _build_system_prompt(self) -> str:
-        """Construct the Manager's system prompt with embedded scan state."""
+        """
+        Construct the Manager's system prompt following Gemini 3 agentic best practices:
+        - Role + knowledge cutoff at top
+        - Plan/Select/Validate/Advance reasoning framework
+        - Explicit constraints with risk tiers
+        - Large context (scan state) placed before the task
+        - Task/question anchored at the very end
+        """
         assert self.scan_state is not None
 
-        phase_reqs = {
+        phase = self.scan_state.phase
+
+        phase_objectives = {
             ScanPhase.RECON: (
-                "Discover attack surface: subdomain enumeration (subfinder), "
-                "port scanning (nmap), technology fingerprinting (whatweb/httpx). "
-                "Dispatch multiple tools in parallel when targets are independent."
+                "Discover the full attack surface. Run subdomain enumeration (subfinder), "
+                "port scanning (nmap), and technology fingerprinting (whatweb/httpx) against all targets. "
+                "Dispatch these tools in parallel where possible."
             ),
             ScanPhase.ENUMERATION: (
-                "Probe live hosts: HTTP probing (httpx), crawling for endpoints (katana), "
-                "directory fuzzing (ffuf) on web services. "
-                "Map the full attack surface before scanning for vulnerabilities."
+                "Map services on live hosts. Probe all HTTP/HTTPS services (httpx), "
+                "crawl for endpoints (katana), and fuzz for directories/files (ffuf). "
+                "Prioritise hosts with the most exposed ports and services."
             ),
             ScanPhase.VULN_SCAN: (
-                "Scan for vulnerabilities: nuclei templates, sqlmap on forms/params, "
-                "commix on suspicious parameters. Focus on technologies discovered earlier."
+                "Identify exploitable vulnerabilities. Run nuclei against live hosts, "
+                "sqlmap on discovered forms and parameters, and commix on input fields. "
+                "Target scans to the specific technologies found in ENUMERATION."
             ),
             ScanPhase.EXPLOITATION: (
-                "Validate and exploit confirmed vulnerabilities: deeper sqlmap/commix runs, "
-                "manual payload testing. Gather proof-of-concept evidence."
+                "Confirm and deepen vulnerability findings. Run targeted sqlmap/commix with "
+                "full exploitation flags on confirmed injection points. Gather proof-of-concept "
+                "evidence: payloads, responses, extracted data."
             ),
             ScanPhase.REPORTING: (
-                "Compile all findings with evidence. Call complete_scan with a comprehensive "
-                "summary including severity, proof, and remediation guidance."
+                "Compile the full engagement report. Review every finding in the scan state. "
+                "Call complete_scan with a comprehensive summary: severity, evidence, "
+                "CVSS context, and remediation guidance for each finding."
             ),
         }
 
         sections = [
-            "<system_instruction>",
             "<role>",
-            "You are KODIAK, an autonomous penetration testing AI.",
-            "You are the sole decision-maker for this engagement.",
+            "You are KODIAK, an expert autonomous penetration testing AI.",
+            f"Current date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}. Your knowledge cutoff is January 2025.",
+            "You are the sole decision-maker for this security engagement.",
             "</role>",
-            "<time_context>",
-            f"Current UTC date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
-            "</time_context>",
-            "<objective>",
-            "Find high-impact security issues with reproducible evidence.",
-            "Work through phases systematically: recon → enumeration → vuln_scan → exploitation → reporting.",
-            "</objective>",
-            "<current_phase>",
-            f"Phase: {self.scan_state.phase.value}",
-            f"Requirements: {phase_reqs.get(self.scan_state.phase, '')}",
-            "</current_phase>",
+            "",
+            "<instructions>",
+            "Before dispatching any tools, reason through these steps:",
+            "1. PLAN: Review the scan state. Identify what phase objectives remain incomplete.",
+            "2. SELECT: Choose the highest-value tools to run. Prefer parallel dispatch over sequential.",
+            "3. VALIDATE: After results arrive, extract findings. Confirm whether the phase objective is satisfied.",
+            "4. ADVANCE: If the phase is complete, say \"ADVANCE_PHASE\" in your reasoning to transition.",
+            "</instructions>",
+            "",
+            "<constraints>",
+            "- Dispatch MULTIPLE tools in a single response — they execute concurrently.",
+            "- Never repeat a tool on the same target with identical parameters.",
+            "- Risk tiers (low → high): subdomain/port discovery → web probing/crawling → vulnerability scanning → sqlmap/commix/exploitation.",
+            "  Only escalate to the next risk tier after confirming findings at the current tier.",
+            "- Timed-out tools: retry once with reduced scope (fewer ports, smaller wordlist). If it times out again, skip it.",
+            "- Reasoning: 3–4 lines maximum. State which tools you are dispatching and why.",
+            "- Do NOT call complete_scan until you are in the REPORTING phase.",
+            "</constraints>",
+            "",
+            "<phase_rules>",
+            f"Current phase: {phase.value.upper()}",
+            f"Objective: {phase_objectives.get(phase, '')}",
+            "",
+            "Phase order (strictly enforced): RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING",
+            "To advance to the next phase: include \"ADVANCE_PHASE\" in your reasoning text.",
+            "Phase transitions are manual — the system does NOT advance automatically.",
+            "</phase_rules>",
+            "",
             "<scan_state>",
             self.scan_state.to_prompt_context(),
             "</scan_state>",
-            "<execution_rules>",
-            "- You may dispatch MULTIPLE tools in a single response — they run in parallel.",
-            "- Do NOT repeat a tool on the same target unless you changed parameters.",
-            "- When a tool times out, retry once with reduced intensity; then move on.",
-            "- Advance to the next phase when the current phase is sufficiently explored.",
-            "- To advance phases, state your reasoning in assistant text (the system handles the transition).",
-            "- Call complete_scan only after exploitation is attempted or you've confirmed the target is hardened.",
-            "- Keep reasoning concise (max 4 lines). Focus on tool dispatch.",
-            "</execution_rules>",
-            "<phase_advancement>",
-            "You control phase transitions. When you believe the current phase is complete,",
-            "say 'ADVANCE_PHASE' in your reasoning and the system will move to the next phase.",
-            "The system will NOT advance automatically — you must explicitly request it.",
-            "</phase_advancement>",
-            "</system_instruction>",
+            "",
+            "<task>",
+            f"Based on the scan state above, dispatch the most impactful tools for the {phase.value.upper()} phase.",
+            "Prioritise breadth in RECON and ENUMERATION. Prioritise precision and depth in VULN_SCAN and EXPLOITATION.",
+            "</task>",
         ]
+
         return "\n".join(sections)
 
     # ------------------------------------------------------------------

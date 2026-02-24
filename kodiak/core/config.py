@@ -20,7 +20,10 @@ ERROR_MESSAGES = {
         "Supported: gemini/gemini-3.1-pro-preview, gemini/gemini-3-flash-preview"
     ),
     "missing_api_key": "GOOGLE_API_KEY is required for Gemini.",
-    "invalid_thinking_level": "KODIAK_GEMINI_THINKING_LEVEL must be one of: low, medium, high.",
+    "invalid_thinking_level": (
+        "KODIAK_GEMINI_THINKING_LEVEL must be one of: low, medium, high. "
+        "Flash also supports: minimal."
+    ),
 }
 
 

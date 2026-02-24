@@ -58,17 +58,20 @@ def get_google_api_key() -> str:
 
 def normalize_gemini_thinking_level(level: str) -> str:
     normalized = str(level or "").strip().lower()
-    if normalized in {"low", "medium", "high"}:
+    # "minimal" is a valid level for Gemini Flash models
+    if normalized in {"minimal", "low", "medium", "high"}:
         return normalized
     return "high"
 
 
 def resolve_gemini_thinking_level(model_string: str, configured_level: str) -> str:
     configured = str(configured_level or "").strip().lower()
-    if configured in {"low", "medium", "high"}:
-        return configured
     model = str(model_string or "").lower()
-    if "flash" in model:
-        return "low"
-    return "high"
+    is_flash = "flash" in model
+    # Flash supports minimal/low/medium/high; Pro supports low/medium/high
+    valid = {"minimal", "low", "medium", "high"} if is_flash else {"low", "medium", "high"}
+    if configured in valid:
+        return configured
+    # Default: Flash → "low" (cost-efficient); Pro → "high" (best reasoning)
+    return "low" if is_flash else "high"
 

@@ -113,9 +113,11 @@ class GeminiClient:
     ) -> types.GenerateContentConfig:
         self._ensure_library_available()
         function_declarations = self._convert_tools(tools)
+        # Gemini 3 docs: keep temperature at the default (1.0); explicitly tuning it
+        # degrades reasoning quality. Do not pass temperature to the SDK — let the
+        # model use its built-in default.
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
-            temperature=float(temperature),
             max_output_tokens=int(max_tokens),
             thinking_config=types.ThinkingConfig(
                 thinking_level=llm.normalize_gemini_thinking_level(thinking_level)
