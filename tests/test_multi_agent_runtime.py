@@ -7,6 +7,16 @@ from kodiak.api.events import TUIEventManager
 from kodiak.core.scan_runner import ScanRunner
 from kodiak.core.scan_state import ScanState, ScanPhase
 from kodiak.core.manager import ManagerAgent
+from kodiak.core.response_schema import (
+    Command,
+    Discovery,
+    Finding,
+    KodiakResponse,
+    Note,
+    PhaseAction,
+    SeverityEnum,
+    NoteCategoryEnum,
+)
 
 
 class TestScanStateBasics:
@@ -68,6 +78,118 @@ class TestScanStateBasics:
         assert len(ctx) < 5000  # bounded
 
 
+# =====================================================================
+# Response Schema Tests
+# =====================================================================
+
+class TestResponseSchema:
+    """Tests for the KodiakResponse structured output schema."""
+
+    def test_command_requires_rationale(self):
+        """Every command must have a rationale explaining why it's being run."""
+        cmd = Command(
+            command="nmap -sV -p- example.com",
+            rationale="Full port scan to discover all services on the target",
+        )
+        assert cmd.rationale
+        assert cmd.timeout == 300  # default
+
+    def test_command_custom_timeout(self):
+        cmd = Command(
+            command="sqlmap -u http://target.com --batch",
+            rationale="Test for SQL injection",
+            timeout=600,
+        )
+        assert cmd.timeout == 600
+
+    def test_kodiak_response_minimal(self):
+        """Minimal valid response: just analysis and phase_action."""
+        resp = KodiakResponse(
+            analysis="Initial scan — nothing discovered yet.",
+            phase_action=PhaseAction.CONTINUE,
+        )
+        assert resp.commands == []
+        assert resp.findings == []
+        assert resp.notes == []
+        assert resp.scan_summary is None
+
+    def test_kodiak_response_full(self):
+        """Full response with commands, findings, notes, discoveries."""
+        resp = KodiakResponse(
+            analysis="Found open ports, testing for vulns.",
+            commands=[
+                Command(
+                    command="nuclei -u http://target.com -rl 20",
+                    rationale="Scan for known vulnerabilities",
+                )
+            ],
+            discoveries=Discovery(
+                hosts=["sub.target.com"],
+                ports={"target.com": [80, 443]},
+                technologies={"target.com": ["Apache 2.4"]},
+            ),
+            findings=[
+                Finding(
+                    title="SQL Injection — POST /login",
+                    severity=SeverityEnum.HIGH,
+                    target="target.com",
+                    description="Boolean-based blind SQLi in username param",
+                    evidence="' OR 1=1-- returns 200",
+                    remediation="Use parameterized queries",
+                )
+            ],
+            notes=[
+                Note(
+                    category=NoteCategoryEnum.BEHAVIORAL,
+                    target="target.com",
+                    content="WAF blocks after 10 req/s",
+                )
+            ],
+            phase_action=PhaseAction.ADVANCE,
+        )
+        assert len(resp.commands) == 1
+        assert resp.commands[0].rationale == "Scan for known vulnerabilities"
+        assert len(resp.findings) == 1
+        assert resp.findings[0].severity == SeverityEnum.HIGH
+        assert len(resp.notes) == 1
+        assert resp.phase_action == PhaseAction.ADVANCE
+
+    def test_kodiak_response_complete_requires_summary(self):
+        """When phase_action is COMPLETE, scan_summary should be provided."""
+        resp = KodiakResponse(
+            analysis="Scan complete.",
+            phase_action=PhaseAction.COMPLETE,
+            scan_summary="Found 3 vulnerabilities: 1 critical, 2 high.",
+        )
+        assert resp.scan_summary is not None
+
+    def test_kodiak_response_from_json(self):
+        """Parse a JSON string into KodiakResponse."""
+        import json
+        data = {
+            "analysis": "Starting recon phase",
+            "commands": [
+                {
+                    "command": "subfinder -d example.com -silent",
+                    "rationale": "Enumerate subdomains",
+                    "timeout": 120,
+                }
+            ],
+            "discoveries": {"hosts": [], "ports": {}, "technologies": {}, "urls": []},
+            "findings": [],
+            "notes": [],
+            "phase_action": "continue",
+            "scan_summary": None,
+        }
+        resp = KodiakResponse.model_validate(data)
+        assert resp.commands[0].command == "subfinder -d example.com -silent"
+        assert resp.phase_action == PhaseAction.CONTINUE
+
+
+# =====================================================================
+# Manager Agent Tests
+# =====================================================================
+
 class TestManagerAgent:
     """Unit tests for the ManagerAgent helper methods."""
 
@@ -79,13 +201,6 @@ class TestManagerAgent:
             event_manager=TUIEventManager(),
             tool_inventory=inv,
         )
-
-    def test_prepare_tools_excludes_blackboard(self):
-        manager = self._manager()
-        tools = manager._prepare_tools()
-        names = [t["function"]["name"] for t in tools]
-        assert not any(n.startswith("blackboard_") for n in names)
-        assert "complete_scan" in names
 
     def test_check_phase_advance_with_keyword(self):
         manager = self._manager()
@@ -112,11 +227,132 @@ class TestManagerAgent:
         args = ManagerAgent._parse_args("not json")
         assert args == {}
 
-    def test_extract_key_evidence(self):
-        output = "80/tcp open http\n443/tcp open https\nSome noise line"
-        evidence = ManagerAgent._extract_key_evidence(output)
-        assert any("open" in e for e in evidence)
+    def test_system_prompt_contains_tool_catalog(self):
+        """System prompt should describe tools as text, not function declarations."""
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        prompt = manager._build_system_prompt()
+        assert "<tool_catalog>" in prompt
+        assert "subfinder" in prompt
+        assert "nmap" in prompt
+        assert "nuclei" in prompt
+        assert "sqlmap" in prompt
+        assert "curl" in prompt
 
+    def test_system_prompt_no_reasoning_line_limit(self):
+        """Reasoning line limit was removed — Gemini 3 handles token efficiency."""
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        prompt = manager._build_system_prompt()
+        assert "3–4 lines" not in prompt
+        assert "3-4 lines" not in prompt
+
+    def test_system_prompt_no_hardcoded_subdomain_list(self):
+        """Hardcoded subdomain priority list was removed."""
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        prompt = manager._build_system_prompt()
+        # The old prompt had a specific list: "prelive, staging, dev, gitlab, db, shop"
+        assert "prelive, staging, dev, gitlab, db, shop" not in prompt
+
+    def test_system_prompt_context_before_task(self):
+        """Scan state should appear before the task (Gemini 3 best practice)."""
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        prompt = manager._build_system_prompt()
+        state_idx = prompt.index("<scan_state>")
+        task_idx = prompt.index("<task>")
+        assert state_idx < task_idx
+
+    def test_system_prompt_has_recording_section(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        prompt = manager._build_system_prompt()
+        assert "<recording>" in prompt
+        assert "findings" in prompt
+        assert "notes" in prompt
+        assert "dead_end" in prompt
+
+    def test_system_prompt_waf_context_offensive(self):
+        """When WAF detected, prompt should have offensive bypass guidance."""
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        manager.scan_state.waf_detected = True
+        prompt = manager._build_system_prompt()
+        assert "<waf_context>" in prompt
+        assert "origin" in prompt.lower() or "bypass" in prompt.lower()
+        assert "Adapt" in prompt or "adapt" in prompt
+
+    def test_parse_kodiak_response_valid_json(self):
+        """Valid JSON should parse into KodiakResponse."""
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        json_str = '{"analysis":"test","commands":[],"phase_action":"continue"}'
+        resp = manager._parse_kodiak_response(json_str)
+        assert resp is not None
+        assert resp.analysis == "test"
+        assert resp.phase_action == PhaseAction.CONTINUE
+
+    def test_parse_kodiak_response_invalid_json(self):
+        """Invalid JSON should return None."""
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        resp = manager._parse_kodiak_response("not valid json at all")
+        assert resp is None
+
+    def test_apply_discoveries_updates_scan_state(self):
+        """Discoveries from LLM response should update scan state."""
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+
+        resp = KodiakResponse(
+            analysis="Found new hosts and ports",
+            discoveries=Discovery(
+                hosts=["sub1.example.com", "sub2.example.com"],
+                ports={"example.com": [80, 443, 8080]},
+                technologies={"example.com": ["Apache 2.4.41", "PHP 7.4"]},
+                urls=["https://example.com/admin"],
+            ),
+            phase_action=PhaseAction.CONTINUE,
+        )
+
+        manager._apply_discoveries(resp)
+
+        assert "sub1.example.com" in manager.scan_state.targets
+        assert "sub2.example.com" in manager.scan_state.targets
+        ts = manager.scan_state.targets["example.com"]
+        assert 80 in ts.ports
+        assert 443 in ts.ports
+        assert 8080 in ts.ports
+        assert "Apache 2.4.41" in ts.technologies
+
+    def test_system_prompt_includes_prior_knowledge_when_available(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        manager._prior_knowledge = (
+            "<prior_knowledge>\n"
+            "<prior_notes count=\"1\">\n"
+            "  [2025-01-15 behavioral] (example.com) WAF rate limit 10/s\n"
+            "</prior_notes>\n"
+            "</prior_knowledge>"
+        )
+        prompt = manager._build_system_prompt()
+        assert "<prior_knowledge>" in prompt
+        assert "WAF rate limit" in prompt
+
+    def test_system_prompt_omits_prior_knowledge_when_empty(self):
+        manager = self._manager()
+        manager.scan_state = ScanState(target="example.com")
+        manager._prior_knowledge = ""
+        prompt = manager._build_system_prompt()
+        assert "<prior_knowledge>" not in prompt
+        # But recording section should still be there
+        assert "<recording>" in prompt
+
+
+# =====================================================================
+# Scan Runner Preflight Tests
+# =====================================================================
 
 class TestScanRunnerPreflight:
     """Tests for Docker toolbox preflight checks."""
@@ -333,22 +569,6 @@ class TestEngagementMemoryTools:
         assert inv.get("save_note") is not None
         assert inv.get("save_finding") is not None
 
-    def test_tools_included_in_manager_tool_list(self):
-        manager = self._manager()
-        tools = manager._prepare_tools()
-        names = [t["function"]["name"] for t in tools]
-        assert "save_note" in names
-        assert "save_finding" in names
-
-    def _manager(self) -> ManagerAgent:
-        from kodiak.core.tools.inventory import ToolInventory
-        inv = ToolInventory()
-        inv.initialize_tools()
-        return ManagerAgent(
-            event_manager=TUIEventManager(),
-            tool_inventory=inv,
-        )
-
 
 class TestManagerPriorKnowledge:
     """Tests for prior knowledge loading and system prompt injection."""
@@ -362,13 +582,13 @@ class TestManagerPriorKnowledge:
             tool_inventory=inv,
         )
 
-    def test_system_prompt_includes_recording_tools_section(self):
+    def test_system_prompt_includes_recording_section(self):
         manager = self._manager()
         manager.scan_state = ScanState(target="example.com")
         prompt = manager._build_system_prompt()
-        assert "<recording_tools>" in prompt
-        assert "save_note" in prompt
-        assert "save_finding" in prompt
+        assert "<recording>" in prompt
+        assert "findings" in prompt
+        assert "notes" in prompt
         assert "dead_end" in prompt
 
     def test_system_prompt_includes_prior_knowledge_when_available(self):
@@ -391,14 +611,14 @@ class TestManagerPriorKnowledge:
         manager._prior_knowledge = ""
         prompt = manager._build_system_prompt()
         assert "<prior_knowledge>" not in prompt
-        # But recording tools section should still be there
-        assert "<recording_tools>" in prompt
+        # But recording section should still be there
+        assert "<recording>" in prompt
 
     def test_system_prompt_task_is_last_section(self):
         manager = self._manager()
         manager.scan_state = ScanState(target="example.com")
         prompt = manager._build_system_prompt()
-        # <task> should be after <recording_tools>
-        rec_idx = prompt.index("<recording_tools>")
+        # <task> should be after <recording>
+        rec_idx = prompt.index("<recording>")
         task_idx = prompt.index("<task>")
         assert task_idx > rec_idx

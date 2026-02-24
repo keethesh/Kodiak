@@ -1,13 +1,12 @@
 """
-Manager Agent — single LLM brain for Phased Manager-Worker scans.
+Manager Agent — single LLM brain using structured output for Kodiak scans.
 
-Replaces N autonomous ``KodiakAgent`` instances with one Manager that:
-
-1. Maintains a ``ScanState`` (structured, bounded context).
-2. Calls the LLM once per iteration to decide the next batch of tool calls.
-3. Dispatches tools via ``dispatch_batch()`` (parallel, stateless workers).
-4. Persists attempts to the database after each batch.
-5. Advances through phases: RECON → ENUM → VULN_SCAN → EXPLOIT → REPORT.
+Architecture (structured output, no function calling):
+  1. LLM returns a JSON `KodiakResponse` with commands[], findings[], notes[], etc.
+  2. Commands are executed in parallel via Docker (bash -c).
+  3. Findings and notes are persisted to the database by the orchestrator.
+  4. Scan state is updated from the LLM's `discoveries` field.
+  5. Phase advancement and scan completion are driven by `phase_action`.
 """
 
 from __future__ import annotations
@@ -23,9 +22,14 @@ from loguru import logger
 
 from kodiak.api.events import TUIEventManager
 from kodiak.core.config import settings
+from kodiak.core.response_schema import (
+    Command,
+    KodiakResponse,
+    PhaseAction,
+)
 from kodiak.core.scan_state import ScanPhase, ScanState
 from kodiak.core.tools.inventory import ToolInventory
-from kodiak.core.worker import WorkerResult, WorkerTask, dispatch_batch
+from kodiak.core.worker import CommandResult, CommandTask, dispatch_commands
 from kodiak.database import crud
 from kodiak.database.models import Attempt, EngagementNote, Finding, NoteCategory, FindingSeverity
 from kodiak.services import llm
@@ -33,45 +37,7 @@ from kodiak.services.gemini_client import GeminiClient, GeminiResponse
 
 
 # ---------------------------------------------------------------------------
-# Phase-aware tool blocking
-# ---------------------------------------------------------------------------
-# Some tools should not be dispatched until the scan has advanced to the
-# appropriate phase.  This is a hard guard — the LLM prompt soft-guidance
-# alone is not sufficient to prevent premature heavy scanner invocations.
-#
-# Key:   minimum phase required before the tool may run.
-# Tools not listed here are allowed in any phase.
-_TOOL_MIN_PHASE: dict[str, ScanPhase] = {
-    # Vulnerability scanners — need enumerated targets first
-    "nuclei":       ScanPhase.VULN_SCAN,
-    "nikto":        ScanPhase.VULN_SCAN,
-    "wpscan":       ScanPhase.VULN_SCAN,
-    # Active exploitation — need confirmed vulns first
-    "sqlmap":       ScanPhase.EXPLOITATION,
-    "commix":       ScanPhase.EXPLOITATION,
-    "searchsploit": ScanPhase.EXPLOITATION,
-}
-
-# Ordered list so we can compare phases numerically
-_PHASE_ORDER: list[ScanPhase] = [
-    ScanPhase.RECON,
-    ScanPhase.ENUMERATION,
-    ScanPhase.VULN_SCAN,
-    ScanPhase.EXPLOITATION,
-    ScanPhase.REPORTING,
-]
-
-
-def _phase_allowed(tool_name: str, current_phase: ScanPhase) -> bool:
-    """Return True if *tool_name* may run in *current_phase*."""
-    min_phase = _TOOL_MIN_PHASE.get(tool_name)
-    if min_phase is None:
-        return True
-    return _PHASE_ORDER.index(current_phase) >= _PHASE_ORDER.index(min_phase)
-
-
-# ---------------------------------------------------------------------------
-# Result container (mirrors the old AgentResult)
+# Result container
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -91,12 +57,12 @@ class ManagerAgent:
     """
     Single-brain orchestrator for a penetration-testing scan.
 
-    The Manager owns the full lifecycle:
-      think  → decide which tools to run next (LLM call)
-      dispatch → run those tools in parallel (no LLM)
-      observe → update ScanState with results
-      persist → write attempt records to DB
-      repeat  → until complete_scan is called or budget exhausted
+    Uses structured output (no function calling):
+      think    → LLM returns KodiakResponse JSON (commands, findings, notes, phase_action)
+      execute  → run commands in parallel via Docker
+      observe  → update ScanState from discoveries + command results
+      persist  → write findings/notes/attempts to DB
+      repeat   → until phase_action=complete or budget exhausted
     """
 
     def __init__(
@@ -109,9 +75,6 @@ class ManagerAgent:
         self._gemini = GeminiClient()
         self.scan_state: Optional[ScanState] = None
         self._prior_knowledge: str = ""
-
-        # Built once during run()
-        self._tools_for_llm: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Main loop
@@ -131,14 +94,8 @@ class ManagerAgent:
 
         logger.info(f"🚀 Manager starting scan against {target}")
         self.scan_state = ScanState(target=target)
-
-        # Prepare tool definitions for the LLM
-        self._tools_for_llm = self._prepare_tools(allowed_tools)
-
-        # Seed the target in state
         self.scan_state.ensure_target(target)
 
-        # scan_id string needed for events (before prior knowledge load)
         scan_id_str = str(scan_id)
 
         # Load prior engagement knowledge for this project
@@ -167,10 +124,6 @@ class ManagerAgent:
             }
         ]
 
-        # Loop-detection state: track tool names mentioned in consecutive text-only responses
-        _loop_last_text_tools: set[str] = set()
-        _loop_consecutive_count: int = 0
-
         for iteration in range(1, max_iterations + 1):
             logger.debug(f"🔄 Manager iteration {iteration}/{max_iterations}")
 
@@ -189,7 +142,7 @@ class ManagerAgent:
                     "role": "user",
                     "content": (
                         "<final_warning>Only 2 iterations remain. "
-                        "Produce final findings and call complete_scan NOW.</final_warning>"
+                        "Set phase_action to 'complete' with a scan_summary NOW.</final_warning>"
                     ),
                 })
 
@@ -197,10 +150,10 @@ class ManagerAgent:
             response = await self._think(history, iteration, scan_id_str)
 
             if response is None:
-                history.append({"role": "assistant", "content": "Error: LLM returned empty response"})
+                history.append({"role": "assistant", "content": '{"analysis":"Error: empty response","commands":[],"phase_action":"continue"}'})
                 history.append({
                     "role": "user",
-                    "content": "<retry>Previous call failed. Try again with a tool call.</retry>",
+                    "content": "<retry>Previous call failed. Output valid JSON with commands.</retry>",
                 })
                 continue
 
@@ -209,190 +162,114 @@ class ManagerAgent:
                 try:
                     await self.event_manager.emit_agent_thought(
                         agent_id="manager",
-                        thought=response.content,
+                        thought=response.content[:500],
                         scan_id=scan_id_str,
                     )
                 except Exception:
                     pass
 
-            # Check for explicit phase advancement
-            await self._check_phase_advance(response.content or "", scan_id_str)
+            # 2. PARSE STRUCTURED RESPONSE ------------------------------------
+            kodiak_resp = self._parse_kodiak_response(response.content)
 
-            # 2. DISPATCH -----------------------------------------------------
-            if response.tool_calls:
-                tool_calls = [self._tool_call_to_dict(tc) for tc in response.tool_calls]
-
-                # Record assistant message with tool calls
+            if kodiak_resp is None:
+                history.append({"role": "assistant", "content": response.content or ""})
                 history.append({
-                    "role": "assistant",
-                    "content": response.content,
-                    "tool_calls": tool_calls,
+                    "role": "user",
+                    "content": (
+                        "<retry>Your response was not valid JSON matching the schema. "
+                        "Output a JSON object with: analysis, commands[], discoveries, "
+                        "findings[], notes[], phase_action.</retry>"
+                    ),
                 })
+                continue
 
-                # Check for complete_scan first (no need to dispatch workers)
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    if fn.get("name") == "complete_scan":
-                        if self.scan_state.phase != ScanPhase.REPORTING:
-                            logger.warning(
-                                f"complete_scan rejected in phase '{self.scan_state.phase.value}' — "
-                                "manager must advance through all phases first"
+            # Record assistant response in history
+            history.append({"role": "assistant", "content": response.content})
+
+            # 3. PROCESS DISCOVERIES ------------------------------------------
+            self._apply_discoveries(kodiak_resp)
+
+            # 4. PERSIST FINDINGS & NOTES -------------------------------------
+            for finding in kodiak_resp.findings:
+                await self._persist_finding(finding, session, project_id, scan_id)
+
+            for note in kodiak_resp.notes:
+                await self._persist_note(note, session, project_id, scan_id)
+
+            # 5. HANDLE PHASE ACTION ------------------------------------------
+            if kodiak_resp.phase_action == PhaseAction.COMPLETE:
+                summary = kodiak_resp.scan_summary or "Scan completed"
+                if self.scan_state.phase != ScanPhase.REPORTING:
+                    # Force advance through remaining phases
+                    while self.scan_state.phase != ScanPhase.REPORTING:
+                        self.scan_state.advance_phase()
+
+                await self._persist_final_findings(session, project_id, scan_id)
+
+                logger.info(f"✅ Manager scan complete: {summary}")
+                return ManagerResult(
+                    status="completed",
+                    summary=summary,
+                    findings_count=self.scan_state.findings_count,
+                    iterations=iteration,
+                )
+
+            if kodiak_resp.phase_action == PhaseAction.ADVANCE:
+                old_phase = self.scan_state.phase.value
+                advanced = self.scan_state.advance_phase()
+                if advanced:
+                    new_phase = self.scan_state.phase.value
+                    logger.info(f"📍 Phase advanced: {old_phase} → {new_phase}")
+                    if self.event_manager:
+                        try:
+                            await self.event_manager.emit_phase_advanced(
+                                old_phase=old_phase,
+                                new_phase=new_phase,
+                                scan_id=scan_id_str,
                             )
-                            history.append({
-                                "role": "user",
-                                "content": (
-                                    f"<rejection>complete_scan rejected: current phase is "
-                                    f"'{self.scan_state.phase.value}'. You must advance through all "
-                                    "phases (recon → enumeration → vuln_scan → exploitation → reporting) "
-                                    "by saying 'ADVANCE_PHASE' in each phase before calling complete_scan.</rejection>"
-                                ),
-                            })
-                            break  # reject, fall through to dispatch remaining tool calls
+                        except Exception:
+                            pass
 
-                        args = self._parse_args(fn.get("arguments"))
-                        summary = args.get("summary", "Scan completed")
+            # 6. EXECUTE COMMANDS ---------------------------------------------
+            if kodiak_resp.commands:
+                tasks = [
+                    CommandTask(
+                        command=cmd.command,
+                        rationale=cmd.rationale,
+                        timeout=cmd.timeout,
+                    )
+                    for cmd in kodiak_resp.commands
+                ]
 
-                        # Persist any findings from final state
-                        await self._persist_final_findings(session, project_id, scan_id)
+                results = await dispatch_commands(
+                    commands=tasks,
+                    event_manager=self.event_manager,
+                    scan_id=scan_id_str,
+                    global_concurrency=settings.global_tool_concurrency,
+                )
 
-                        logger.info(f"✅ Manager scan complete: {summary}")
-                        return ManagerResult(
-                            status="completed",
-                            summary=summary,
-                            findings_count=self.scan_state.findings_count,
-                            iterations=iteration,
-                        )
-
-                # Handle in-process tools (save_note, save_finding) before dispatch
-                in_process_tools = {"save_note", "save_finding"}
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    tool_name = fn.get("name", "").strip()
-                    if tool_name in in_process_tools:
-                        args = self._parse_args(fn.get("arguments"))
-                        result_text = await self._handle_in_process_tool(
-                            tool_name, args, session, project_id, scan_id,
-                        )
-                        history.append({
-                            "role": "tool",
-                            "name": tool_name,
-                            "tool_call_id": tc.get("id", f"call_{uuid4().hex[:12]}"),
-                            "content": result_text,
-                        })
-
-                # Build worker tasks for non-complete, non-in-process tools
-                skip_tools = {"complete_scan"} | in_process_tools
-                tasks: List[WorkerTask] = []
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    name = fn.get("name", "").strip()
-                    if not name or name in skip_tools:
-                        continue
-                    args = self._parse_args(fn.get("arguments"))
-
-                    # Hard phase guard — reject heavy scanners run too early
-                    if not _phase_allowed(name, self.scan_state.phase):
-                        min_phase = _TOOL_MIN_PHASE[name]
-                        rejection = (
-                            f"<phase_rejection tool='{name}'>"
-                            f"'{name}' requires phase '{min_phase.value}' but current phase is "
-                            f"'{self.scan_state.phase.value}'. "
-                            f"Complete the current phase objectives and say ADVANCE_PHASE before "
-                            f"dispatching this tool."
-                            f"</phase_rejection>"
-                        )
-                        logger.warning(
-                            f"⛔ Phase guard: '{name}' blocked in phase "
-                            f"'{self.scan_state.phase.value}' (requires '{min_phase.value}')"
-                        )
-                        history.append({
-                            "role": "tool",
-                            "name": name,
-                            "tool_call_id": tc.get("id", f"call_{uuid4().hex[:12]}"),
-                            "content": rejection,
-                        })
-                        continue
-
-                    tasks.append(WorkerTask(tool_name=name, args=args))
-
-                if tasks:
-                    results = await dispatch_batch(
-                        tasks=tasks,
-                        tool_inventory=self.tool_inventory,
-                        event_manager=self.event_manager,
-                        scan_id=scan_id_str,
-                        global_concurrency=settings.global_tool_concurrency,
+                # Persist attempts to DB
+                for cr in results:
+                    await self._persist_command_attempt(
+                        session, project_id, scan_id, cr
                     )
 
-                    # Reset loop-detection counter on any successful dispatch
-                    _loop_last_text_tools = set()
-                    _loop_consecutive_count = 0
-
-                    # 3. OBSERVE — update state and build tool-result messages
-                    for wr in results:
-                        self._observe(wr)
-
-                        # Persist attempt to DB
-                        await self._persist_attempt(
-                            session, project_id, scan_id, wr
-                        )
-
-                        # Add tool result to history
-                        tc_id = next(
-                            (tc.get("id") for tc in tool_calls
-                             if tc.get("function", {}).get("name") == wr.tool_name),
-                            f"call_{uuid4().hex[:12]}",
-                        )
-                        history.append({
-                            "role": "tool",
-                            "name": wr.tool_name,
-                            "tool_call_id": str(tc_id),
-                            "content": self._build_tool_history(wr),
-                        })
+                # Build command results message for next iteration
+                results_text = self._format_command_results(results)
+                history.append({
+                    "role": "user",
+                    "content": results_text,
+                })
             else:
-                # No tool calls — text-only response.
-                # Detect if the LLM is looping (writing tool calls as text instead of function calls).
-                content = response.content or ""
-                mentioned_tools = {
-                    name for name in self.tool_inventory.get_all_tools()
-                    if re.search(rf'\b{re.escape(name)}\b', content)
-                }
-                if mentioned_tools:
-                    if mentioned_tools == _loop_last_text_tools:
-                        _loop_consecutive_count += 1
-                    else:
-                        _loop_last_text_tools = mentioned_tools
-                        _loop_consecutive_count = 1
-
-                history.append({"role": "assistant", "content": content})
-
-                if _loop_consecutive_count >= 2:
-                    # LLM is stuck — inject a targeted loop-break nudge
-                    stuck_tools = ", ".join(sorted(_loop_last_text_tools))
-                    logger.warning(
-                        f"⚠️  Loop detected: same tool set mentioned {_loop_consecutive_count}x "
-                        f"without dispatch — {stuck_tools}"
-                    )
-                    history.append({
-                        "role": "user",
-                        "content": (
-                            f"<loop_detected>You have mentioned [{stuck_tools}] {_loop_consecutive_count} times "
-                            "without dispatching them. Text tool references are NEVER executed. "
-                            "You MUST invoke tools via the function-calling interface right now — "
-                            "not as text in your response. Dispatch the tools as function calls immediately, "
-                            "or call save_note(category='dead_end') and move on.</loop_detected>"
-                        ),
-                    })
-                    # Reset so we don't spam the nudge every iteration
-                    _loop_consecutive_count = 0
-                else:
-                    history.append({
-                        "role": "user",
-                        "content": (
-                            "<next_step>Continue scan. If objective is met, "
-                            "call complete_scan now.</next_step>"
-                        ),
-                    })
+                # No commands — nudge the LLM to act
+                history.append({
+                    "role": "user",
+                    "content": (
+                        "<next_step>No commands were dispatched. "
+                        "Output commands to continue the scan, or set phase_action "
+                        "to 'complete' with a scan_summary.</next_step>"
+                    ),
+                })
 
             # Trim history to avoid unbounded growth
             history = self._trim_history(history, max_turns=40)
@@ -416,7 +293,7 @@ class ManagerAgent:
         iteration: int,
         scan_id: str,
     ) -> Optional[GeminiResponse]:
-        """Single LLM call: system prompt + scan state + history → tool calls."""
+        """Single LLM call: system prompt + history → structured KodiakResponse JSON."""
 
         system_prompt = self._build_system_prompt()
         messages = [{"role": "system", "content": system_prompt}]
@@ -449,24 +326,28 @@ class ManagerAgent:
                 api_key=api_key,
                 system_prompt=system_prompt,
                 messages=messages,
-                tools=self._tools_for_llm or None,
                 temperature=settings.llm_temperature,
                 max_tokens=settings.llm_max_tokens,
                 thinking_level=thinking_level,
+                response_schema=KodiakResponse,
             )
             return response if response else None
         except Exception as exc:
             logger.error(f"Manager think() failed: {exc}")
             return None
 
+    # ------------------------------------------------------------------
+    # System prompt
+    # ------------------------------------------------------------------
+
     def _build_system_prompt(self) -> str:
         """
-        Construct the Manager's system prompt following Gemini 3 agentic best practices:
-        - Role + knowledge cutoff at top
-        - Plan/Select/Validate/Advance reasoning framework
-        - Explicit constraints with risk tiers
-        - Large context (scan state) placed before the task
-        - Task/question anchored at the very end
+        Construct the Manager's system prompt optimized for Gemini 3:
+        - Concise, direct instructions (Gemini 3 over-analyses verbose prompts)
+        - XML-tagged sections for clear structure
+        - Tool catalog described as text (no function declarations)
+        - Context (scan state) placed before the task
+        - Task anchored at the very end
         """
         assert self.scan_state is not None
 
@@ -474,440 +355,420 @@ class ManagerAgent:
 
         phase_objectives = {
             ScanPhase.RECON: (
-                "Discover the full attack surface. Run subdomain enumeration (subfinder), "
-                "port scanning (nmap), and technology fingerprinting (whatweb/httpx) against all targets. "
-                "Dispatch these tools in parallel where possible."
+                "Discover the full attack surface: subdomains, open ports, "
+                "and technology fingerprints. Dispatch multiple recon commands in parallel."
             ),
             ScanPhase.ENUMERATION: (
-                "Map services on live hosts. Probe all HTTP/HTTPS services (httpx), "
-                "crawl for endpoints (katana), and fuzz for directories/files (ffuf). "
-                "Prioritise hosts with the most exposed ports and services. "
-                "Do NOT advance to VULN_SCAN until at least 3 of the most interesting subdomains "
-                "(prelive, staging, dev, gitlab, db, shop — in that priority order) have been "
-                "enumerated with ffuf or katana. "
-                "For GitLab instances: prefer system_execute to probe structured API paths over katana crawl — "
-                "check /api/v4/version (returns version unauthenticated), "
-                "/users/sign_in (open registration?), and /-/health. "
-                "These yield more signal per second than a crawler on a structured platform."
+                "Map services on live hosts: probe HTTP endpoints, crawl for URLs, "
+                "fuzz for hidden directories. Prioritize hosts with exposed web services. "
+                "Focus on subdomains that suggest dev/staging/admin environments."
             ),
             ScanPhase.VULN_SCAN: (
-                "Identify exploitable vulnerabilities. Run nuclei against live hosts, "
-                "sqlmap on discovered forms and parameters, wpscan on WordPress targets, and commix on input fields. "
-                "Target scans to the specific technologies found in ENUMERATION."
+                "Identify exploitable vulnerabilities: run nuclei templates, "
+                "test for injection points, check for known CVEs matching discovered versions."
             ),
             ScanPhase.EXPLOITATION: (
-                "Confirm and deepen vulnerability findings. Run targeted sqlmap/wpscan/commix with "
-                "full exploitation flags on confirmed injection points. Gather proof-of-concept "
-                "evidence: payloads, responses, extracted data."
+                "Confirm and exploit vulnerabilities: run sqlmap/commix on injection points, "
+                "gather proof-of-concept evidence, extract data where possible."
             ),
             ScanPhase.REPORTING: (
-                "Compile the full engagement report. Review every finding in the scan state. "
-                "Call complete_scan with a comprehensive summary: severity, evidence, "
-                "CVSS context, and remediation guidance for each finding."
+                "Compile all findings. Set phase_action='complete' with a comprehensive "
+                "scan_summary covering all discovered vulnerabilities."
             ),
         }
 
         sections = [
             "<role>",
-            "You are KODIAK, an expert autonomous penetration testing AI.",
-            f"Current date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}. Your knowledge cutoff is January 2025.",
-            "You are the sole decision-maker for this security engagement.",
+            "You are KODIAK, an expert autonomous penetration tester.",
+            f"Current date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}. Knowledge cutoff: January 2025.",
             "</role>",
             "",
             "<instructions>",
-            "Before dispatching any tools, reason through these steps:",
-            "1. PLAN: Review the scan state. Identify what phase objectives remain incomplete.",
-            "2. SELECT: Choose the highest-value tools to run. Prefer parallel dispatch over sequential.",
-            "3. VALIDATE: After results arrive, extract findings. Confirm whether the phase objective is satisfied.",
-            "4. ADVANCE: If the phase is complete, say \"ADVANCE_PHASE\" in your reasoning to transition.",
-            "5. PRIOR KNOWLEDGE: If <prior_knowledge> is present, treat attack_hint targets as the HIGHEST",
-            "   priority. Investigate them in the current phase before moving to fresh discovery targets.",
-            "   Known hosts with attack_hints often have sibling vulnerabilities — do not skip them.",
+            "For each iteration, reason through these steps:",
+            "1. ANALYZE: Review scan state and previous command results. What is known? What is unknown?",
+            "2. CORRELATE: Connect findings across commands — a version string suggests specific CVEs,",
+            "   an exposed .git means source code review, an error message leaks internal paths.",
+            "3. PRIORITIZE: Rank targets by attack surface. Focus on what's most likely exploitable.",
+            "4. ACT: Output shell commands to run in the Docker sandbox (they execute in parallel).",
+            "   For every command, explain your rationale.",
+            "5. ADAPT: If a command fails or a WAF blocks you, change approach.",
+            "   Try different encoding, flags, alternative tools, or creative workarounds.",
+            "   Do not repeat the same failed command.",
+            "",
+            "If <prior_knowledge> is present, treat attack_hint targets as highest priority.",
+            "Known hosts with attack_hints often have sibling vulnerabilities.",
             "</instructions>",
             "",
             "<constraints>",
-            "- Dispatch MULTIPLE tools in a single response — they execute concurrently.",
-            "- Never repeat a tool on the same target with identical parameters.",
-            "- Risk tiers (low → high): subdomain/port discovery → web probing/crawling → vulnerability scanning → sqlmap/wpscan/commix/exploitation.",
-            "  Only escalate to the next risk tier after confirming findings at the current tier.",
-            "- Timed-out tools: retry once with reduced scope (fewer ports, smaller wordlist). If it times out again, skip it.",
-            "- Reasoning: 3–4 lines maximum. State which tools you are dispatching and why.",
-            "- Do NOT call complete_scan until you are in the REPORTING phase.",
-            "- CRITICAL: Tool invocations MUST use the function-calling interface ONLY.",
-            "  NEVER write tool calls as text (e.g. \"[tool_call] ffuf args=...\"). Text patterns are NOT executed.",
-            "  If you find yourself writing tool names in your reasoning, STOP and use function calls instead.",
+            "- Output MULTIPLE commands per iteration — they run concurrently.",
+            "- Never repeat a command with identical arguments.",
+            "- Risk tiers (escalate only after findings at current tier):",
+            "  low: subdomain/port discovery → medium: web probing/crawling/vuln scanning → high: exploitation.",
+            "- Timed-out commands: retry once with reduced scope. If it times out again, record a dead_end note.",
+            "- Phase order: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING.",
+            "  Set phase_action='advance' when the current phase objective is met.",
+            "  Set phase_action='complete' with scan_summary when all testing is done.",
             "</constraints>",
             "",
-            "<phase_rules>",
-            f"Current phase: {phase.value.upper()}",
-            f"Objective: {phase_objectives.get(phase, '')}",
+            "<tool_catalog>",
+            "All tools are pre-installed in a Kali-based Docker sandbox. Use any bash command.",
             "",
-            "Phase order (strictly enforced): RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING",
-            "To advance to the next phase: include \"ADVANCE_PHASE\" in your reasoning text.",
-            "Phase transitions are manual — the system does NOT advance automatically.",
+            "## Reconnaissance",
+            "- `subfinder -d <domain> -silent` — Passive subdomain enumeration",
+            "- `nmap -sV -sC -p <ports> <target>` — Port scan + service detection. Use -p- for all ports, -T4 for speed.",
+            "- `httpx -l <file> -sc -title -tech-detect` — HTTP probe with status codes and tech detection",
+            "- `whatweb <url>` — Web technology fingerprinting (CMS, frameworks, server)",
+            "- `dig <domain> ANY`, `host <domain>`, `whois <domain>` — DNS and WHOIS recon",
             "",
-            "Hard phase guards (system-enforced — do NOT attempt before the required phase):",
-            "  nuclei, nikto, wpscan → require VULN_SCAN phase",
-            "  sqlmap, commix, searchsploit → require EXPLOITATION phase",
-            "Calling these tools in an earlier phase returns a rejection message. Complete phase objectives first.",
-            "If you want to run nuclei/wpscan/nikto but are NOT yet in VULN_SCAN:",
-            "  Do NOT write them as text or attempt function calls. Instead:",
-            "  - Complete remaining enumeration (ffuf unprobed subdomains, system_execute API checks on GitLab)",
-            "  - Then say ADVANCE_PHASE when enumeration objectives are met.",
+            "## Web Crawling & Fuzzing",
+            "- `katana -u <url> -d <depth> -silent` — Crawl websites for endpoints. Use -jc for JS, -rl <n> for rate limit.",
+            "- `ffuf -u <url>/FUZZ -w <wordlist> -mc 200,301,302 -t <threads>` — Directory/file fuzzing",
+            "  Wordlists: /usr/share/seclists/Discovery/Web-Content/common.txt (fast), big.txt (thorough)",
             "",
-            "EXPLOITATION phase requirement: Do NOT say ADVANCE_PHASE until at least one of sqlmap, commix,",
-            "or wpscan has returned a result against a confirmed injection point. If the target is not",
-            "susceptible to exploitation, call save_note(category='dead_end') documenting why, then advance.",
-            "</phase_rules>",
+            "## Vulnerability Scanning",
+            "- `nuclei -u <url> -rl <rate> -silent` — Template-based vuln scanner. Tags: -tags cve,sqli,xss,lfi,rce. Severity: -s critical,high,medium",
+            "- `nikto -h <url>` — Web server misconfiguration scanner",
+            "- `wpscan --url <url> -e vp,vt,u --api-token $WPSCAN_API_TOKEN` — WordPress vuln scanner",
             "",
-            "<scan_state>",
-            self.scan_state.to_prompt_context(),
-            "</scan_state>",
+            "## Exploitation",
+            "- `sqlmap -u <url> --data=<post> --batch --level=3 --risk=2` — SQL injection. Use --dump, --os-shell, --technique=BEUSTQ",
+            "- `commix --url=<url> --data=<post> --batch` — OS command injection",
+            "- `searchsploit <query>` — Offline Exploit-DB search. Use after identifying service versions.",
+            "",
+            "## General Purpose",
+            "- `curl -s -I <url>` — HTTP requests with full header control. Use for WAF bypass, path traversal, custom headers.",
+            "- Any standard Linux command: grep, awk, sed, wget, python3, etc.",
+            "</tool_catalog>",
             "",
         ]
 
-        # WAF/CDN context block — injected when a WAF is detected in scan state
+        # WAF/CDN context
         if self.scan_state.waf_detected:
             sections.extend([
                 "<waf_context>",
-                "WAF/CDN DETECTED. The adjustments below apply to HTTP-based tools ONLY (ffuf, katana, nuclei).",
-                "nmap is TCP-level and is NOT affected by WAFs — scan with your normal full port range.",
-                "",
-                "HTTP tool adjustments:",
-                "- ffuf: Do NOT run broad directory fuzzing against the primary CDN-fronted domain.",
-                "  Cloudflare returns 503 for all requests and the result is instant/empty (wasted tool slot).",
-                "  Only fuzz subdomains that bypass the CDN (staging, prelive, dev, test, db).",
-                "  Use threads=5 and -mc 200,201,204,301,302 to match only success/redirect codes.",
-                "- katana: use rate_limit=10. Use depth=1 on large platforms (GitLab, PrestaShop)",
-                "  to avoid timeouts — these have deep link trees that exhaust the crawl budget.",
-                "- nuclei: use rate_limit=20.",
+                "WAF/CDN detected. Adapt your approach — do not abandon testing.",
+                "- Discover origin IPs: check DNS history, try direct IP access, check non-HTTP ports.",
+                "- Target bypass subdomains: staging/dev/prelive servers often skip WAF.",
+                "- Rate-limit HTTP tools: ffuf -t 5, katana -rl 10, nuclei -rl 20.",
+                "- nmap is TCP-level — NOT affected by WAFs. Scan full port range.",
+                "- Use curl for manual probing with encoding tricks, path normalization, custom headers.",
+                "- Try HTTP/1.0, unusual methods (HEAD, OPTIONS), or chunk transfer encoding.",
+                "- Do NOT waste commands on broad fuzzing against CDN-fronted domains (returns 503).",
                 "</waf_context>",
                 "",
             ])
 
-        # Prior engagement knowledge (from previous scans of this project)
+        # Skills injection
+        skills_text = self._load_skills()
+        if skills_text:
+            sections.append(skills_text)
+            sections.append("")
+
+        # Prior engagement knowledge
         if self._prior_knowledge:
             sections.append(self._prior_knowledge)
             sections.append("")
 
+        # Recording guidance
         sections.extend([
-            "<recording_tools>",
-            "You have two tools for persisting knowledge across scans:",
+            "<recording>",
+            "Use the `findings` array to record confirmed vulnerabilities with evidence and remediation.",
+            "Use the `notes` array to record observations for future scans:",
+            "  - recon_intel: infrastructure details (staging servers, CDNs, internal hostnames)",
+            "  - behavioral: WAF behavior, rate limits, server quirks",
+            "  - attack_hint: promising attack surface for deeper testing",
+            "  - dead_end: paths that wasted time — skip these next time",
+            "Severity anchors:",
+            "  critical — RCE, auth bypass, full DB dump, direct code execution",
+            "  high — Exposed credentials, LFI, confirmed SQLi, open admin panel",
+            "  medium — phpinfo(), .git exposed, SSRF potential",
+            "  low — Version disclosure, minor info leak",
+            "</recording>",
             "",
-            "save_note — Record observations that help in future scans:",
-            "  - recon_intel: discovered infrastructure (staging servers, CDNs, internal hostnames)",
-            "  - behavioral: WAF/rate-limit behavior, server quirks, timing patterns",
-            "  - attack_hint: promising attack surface worth deeper investigation next time",
-            "  - dead_end: paths that wasted time (skip these in future scans)",
-            "  - general: any other observation worth remembering",
+        ])
+
+        # Scan state (context before task — Gemini 3 best practice)
+        sections.extend([
+            "<scan_state>",
+            self.scan_state.to_prompt_context(),
+            "</scan_state>",
             "",
-            "save_finding — Record confirmed vulnerabilities with full detail:",
-            "  - Call as SOON as a vulnerability is confirmed — do not wait for REPORTING",
-            "  - Include: exploitation_steps, impact, poc (proof-of-concept), remediation",
-            "  - Duplicate findings (same title + target) are automatically skipped",
-            "  Severity anchors:",
-            "    critical — RCE, authentication bypass, full DB dump, direct code execution evidence",
-            "    high     — Exposed credentials (ANY password, even 'password'), LFI, confirmed SQLi, open admin panel",
-            "    medium   — phpinfo() exposure, .git exposed, SSRF potential, partial information disclosure",
-            "    low      — Version disclosure only, minor info leak with no direct attack path",
-            "",
-            "Use these tools proactively throughout the scan, not just at the end.",
-            "</recording_tools>",
-            "",
+        ])
+
+        # Task at the very end (context-before-task pattern)
+        sections.extend([
             "<task>",
-            f"Based on the scan state above, dispatch the most impactful tools for the {phase.value.upper()} phase.",
-            "Prioritise breadth in RECON and ENUMERATION. Prioritise precision and depth in VULN_SCAN and EXPLOITATION.",
+            f"Current phase: {phase.value.upper()}. Objective: {phase_objectives.get(phase, '')}",
+            "Based on the scan state above, output the most impactful commands for this phase.",
+            "Prioritise breadth in RECON/ENUMERATION. Prioritise depth in VULN_SCAN/EXPLOITATION.",
+            "For each command, explain your rationale.",
             "</task>",
         ])
 
         return "\n".join(sections)
 
     # ------------------------------------------------------------------
-    # Tool preparation
+    # Skills injection
     # ------------------------------------------------------------------
 
-    def _prepare_tools(self, allowed_tools: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Build OpenAI-format tool definitions for the LLM."""
-        all_tools = self.tool_inventory.get_all_tools()
-        tools_for_llm: List[Dict[str, Any]] = []
+    def _load_skills(self) -> str:
+        """Load relevant skills based on detected technologies in scan state."""
+        try:
+            from kodiak.skills.skill_loader import skill_loader
 
-        for name, tool in all_tools.items():
-            # Skip blackboard and orchestration tools — Manager doesn't need them
-            if name.startswith("blackboard_") or name.startswith("orchestrate_"):
-                continue
-            if allowed_tools and name not in allowed_tools:
-                continue
-            tools_for_llm.append({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": tool.description,
-                    "parameters": tool.parameters_schema,
-                },
-            })
+            target_info: Dict[str, Any] = {
+                "technologies": [],
+                "services": [],
+                "ports": [],
+            }
 
-        return tools_for_llm
+            if self.scan_state:
+                for ts in self.scan_state.targets.values():
+                    target_info["technologies"].extend(ts.technologies)
+                    target_info["ports"].extend(ts.ports)
+                    target_info["services"].extend(list(ts.services.values()))
+
+            suggested = skill_loader.suggest_skills_for_target(target_info)
+            if suggested:
+                # Limit to 3 skills to keep prompt concise (Gemini 3 best practice)
+                return skill_loader.load_skills_for_agent(suggested, max_skills=3)
+            return ""
+        except Exception as exc:
+            logger.debug(f"Skills loading skipped: {exc}")
+            return ""
 
     # ------------------------------------------------------------------
-    # Observation — update scan state from worker results
+    # Response parsing
     # ------------------------------------------------------------------
 
-    def _observe(self, result: WorkerResult) -> None:
-        """Ingest a WorkerResult into the ScanState."""
-        status = "success" if result.success else ("timeout" if "timed out" in (result.error or "") else "error")
+    def _parse_kodiak_response(self, content: str) -> Optional[KodiakResponse]:
+        """Parse the LLM's JSON response into a KodiakResponse."""
+        if not content:
+            return None
 
-        self.scan_state.record_tool_result(
-            tool=result.tool_name,
-            target=result.target,
-            status=status,
-            summary=result.summary,
-        )
+        try:
+            data = json.loads(content)
+            return KodiakResponse.model_validate(data)
+        except (json.JSONDecodeError, Exception) as exc:
+            logger.warning(f"Failed to parse KodiakResponse: {exc}")
+            # Try to extract JSON from markdown code block
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group(1))
+                    return KodiakResponse.model_validate(data)
+                except Exception:
+                    pass
+            return None
 
-        # Extract structured intel from tool output
-        self._extract_intel(result)
+    # ------------------------------------------------------------------
+    # Discovery processing
+    # ------------------------------------------------------------------
 
-        # Check for phase advancement signal in accumulated data
-        # (Phase is advanced when Manager says ADVANCE_PHASE in its reasoning)
-
-    def _extract_intel(self, result: WorkerResult) -> None:
-        """Parse tool output to enrich ScanState targets and findings."""
-        if not result.success:
+    def _apply_discoveries(self, resp: KodiakResponse) -> None:
+        """Update ScanState from the LLM's structured discoveries."""
+        disc = resp.discoveries
+        if not disc:
             return
 
-        output = result.output
-        data = result.data or {}
+        for host in disc.hosts:
+            if host and "." in host:
+                self.scan_state.ensure_target(host)
 
-        # -- Port / service discovery (nmap) --
-        if result.tool_name == "nmap":
-            ts = self.scan_state.ensure_target(result.target)
-            for line in output.splitlines():
-                port_match = re.match(r"(\d+)/tcp\s+open\s+(.*)", line)
-                if port_match:
-                    port = int(port_match.group(1))
-                    service = port_match.group(2).strip()
-                    if port not in ts.ports:
-                        ts.ports.append(port)
-                    ts.services[port] = service
+        for host, ports in disc.ports.items():
+            ts = self.scan_state.ensure_target(host)
+            for port in ports:
+                if port not in ts.ports:
+                    ts.ports.append(port)
 
-        # -- Subdomain discovery (subfinder) --
-        elif result.tool_name == "subfinder":
-            for line in output.splitlines():
-                host = line.strip()
-                if host and "." in host:
-                    self.scan_state.ensure_target(host)
-
-        # -- HTTP probing (httpx) --
-        elif result.tool_name == "httpx":
-            for line in output.splitlines():
-                url = line.strip()
-                if url.startswith("http"):
-                    # Extract hostname
-                    from urllib.parse import urlparse
-                    parsed = urlparse(url)
-                    if parsed.hostname:
-                        ts = self.scan_state.ensure_target(parsed.hostname)
-                        if url not in ts.urls:
-                            ts.urls.append(url)
-
-        # -- Technology fingerprinting (whatweb) --
-        elif result.tool_name == "whatweb":
-            ts = self.scan_state.ensure_target(result.target)
-            tech_pattern = re.compile(r"\[([^\]]+)\]")
-            for match in tech_pattern.finditer(output[:2000]):
-                tech = match.group(1).strip()
+        for host, techs in disc.technologies.items():
+            ts = self.scan_state.ensure_target(host)
+            for tech in techs:
                 if tech and tech not in ts.technologies and len(tech) < 60:
                     ts.technologies.append(tech)
             # Detect WAF/CDN presence
-            if not self.scan_state.waf_detected and re.search(
-                r'\bcloudflare\b|\bcloud ?flare\b|\bwaf\b|\bakamai\b|\bfastly\b|\bimperva\b',
-                output, re.IGNORECASE
-            ):
-                self.scan_state.waf_detected = True
+            if not self.scan_state.waf_detected:
+                for tech in techs:
+                    if re.search(
+                        r'\bcloudflare\b|\bwaf\b|\bakamai\b|\bfastly\b|\bimperva\b',
+                        tech, re.IGNORECASE
+                    ):
+                        self.scan_state.waf_detected = True
+                        break
 
-        # -- Vulnerability findings (nuclei, sqlmap, wpscan, commix) --
-        elif result.tool_name in ("nuclei", "sqlmap", "wpscan", "commix"):
-            self._extract_findings(result)
-
-    def _extract_findings(self, result: WorkerResult) -> None:
-        """Extract security findings from scanner output."""
-        output = result.output
-        data = result.data or {}
-
-        if result.tool_name == "nuclei":
-            for line in output.splitlines():
-                if any(sev in line.lower() for sev in ("critical", "high", "medium", "low", "info")):
-                    severity = "info"
-                    for s in ("critical", "high", "medium", "low"):
-                        if s in line.lower():
-                            severity = s
-                            break
-                    self.scan_state.add_finding(
-                        title=line.strip()[:200],
-                        severity=severity,
-                        target=result.target,
-                        evidence=line.strip()[:300],
-                        tool="nuclei",
-                    )
-
-        elif result.tool_name == "sqlmap":
-            if data.get("vulnerable") or "injectable" in output.lower() or "parameter" in output.lower():
-                self.scan_state.add_finding(
-                    title=f"SQL Injection on {result.target}",
-                    severity="high",
-                    target=result.target,
-                    evidence=output[:300],
-                    tool="sqlmap",
-                )
-
-        elif result.tool_name == "wpscan":
-            vulnerabilities = data.get("vulnerabilities") or []
-            if vulnerabilities:
-                for vuln in vulnerabilities[:8]:
-                    location = vuln.get("location", "WordPress component")
-                    title = vuln.get("title", "WordPress vulnerability")
-                    self.scan_state.add_finding(
-                        title=f"{title} ({location})",
-                        severity="high",
-                        target=result.target,
-                        evidence=str(vuln.get("evidence", ""))[:300],
-                        tool="wpscan",
-                    )
-
-        elif result.tool_name == "commix":
-            if "injectable" in output.lower() or "command injection" in output.lower():
-                self.scan_state.add_finding(
-                    title=f"Command Injection on {result.target}",
-                    severity="critical",
-                    target=result.target,
-                    evidence=output[:300],
-                    tool="commix",
-                )
+        for url in disc.urls:
+            if url.startswith("http"):
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                if parsed.hostname:
+                    ts = self.scan_state.ensure_target(parsed.hostname)
+                    if url not in ts.urls:
+                        ts.urls.append(url)
 
     # ------------------------------------------------------------------
-    # In-process tool handlers (save_note, save_finding)
+    # Command results formatting
     # ------------------------------------------------------------------
 
-    async def _handle_in_process_tool(
+    def _format_command_results(self, results: List[CommandResult]) -> str:
+        """Format command results as context for the next LLM iteration."""
+        parts = ["<command_results>"]
+        for cr in results:
+            parts.append(cr.to_prompt_text())
+            parts.append("")  # blank line separator
+        parts.append("</command_results>")
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Persistence — findings and notes
+    # ------------------------------------------------------------------
+
+    async def _persist_finding(
         self,
-        tool_name: str,
-        args: Dict[str, Any],
+        finding,
         session: Any,
         project_id: UUID,
         scan_id: UUID,
-    ) -> str:
-        """Handle save_note / save_finding: persist to DB, return confirmation text."""
+    ) -> None:
+        """Persist a structured finding from KodiakResponse to the database."""
         try:
-            if tool_name == "save_note":
-                return await self._handle_save_note(args, session, project_id, scan_id)
-            elif tool_name == "save_finding":
-                return await self._handle_save_finding(args, session, project_id, scan_id)
-            return f"Unknown in-process tool: {tool_name}"
+            title = finding.title
+            target = finding.target
+
+            # Dedup check
+            existing = await crud.finding.find_by_title_and_target(
+                session, project_id, title, target,
+            )
+            if existing:
+                logger.info(f"🔄 Finding already exists, skipping: {title}")
+                return
+
+            try:
+                sev = FindingSeverity(finding.severity.value)
+            except (ValueError, AttributeError):
+                sev = FindingSeverity.INFO
+
+            db_finding = Finding(
+                project_id=project_id,
+                scan_id=scan_id,
+                target=target,
+                title=title,
+                description=finding.description[:4000],
+                severity=sev,
+                remediation=finding.remediation[:2000] if finding.remediation else None,
+                raw_evidence=finding.evidence[:2000] if finding.evidence else None,
+            )
+            await crud.finding.create(session, db_finding)
+
+            # Also record in scan state for prompt context
+            self.scan_state.add_finding(
+                title=title,
+                severity=finding.severity.value,
+                target=target,
+                evidence=finding.evidence[:300] if finding.evidence else "",
+            )
+
+            logger.info(f"🎯 Finding saved [{finding.severity.value}]: {title}")
+
+            if self.event_manager:
+                try:
+                    await self.event_manager.emit_finding_saved(
+                        title=title,
+                        severity=finding.severity.value,
+                        target=target,
+                        scan_id=str(scan_id),
+                    )
+                except Exception:
+                    pass
+
         except Exception as exc:
-            logger.warning(f"Failed to handle {tool_name}: {exc}")
-            return f"Error saving {tool_name}: {exc}"
+            logger.warning(f"Failed to persist finding '{finding.title}': {exc}")
 
-    async def _handle_save_note(
+    async def _persist_note(
         self,
-        args: Dict[str, Any],
+        note,
         session: Any,
         project_id: UUID,
         scan_id: UUID,
-    ) -> str:
-        target = str(args.get("target", "*")).strip()
-        raw_category = str(args.get("category", "general")).strip().lower()
-        content = str(args.get("content", "")).strip()
-
+    ) -> None:
+        """Persist a structured note from KodiakResponse to the database."""
         try:
-            category = NoteCategory(raw_category)
-        except ValueError:
-            category = NoteCategory.GENERAL
-
-        note = EngagementNote(
-            project_id=project_id,
-            scan_id=scan_id,
-            category=category,
-            target=target,
-            content=content[:2000],
-        )
-        await crud.note.create(session, note)
-        logger.info(f"📝 Note saved [{category.value}]: {content[:80]}")
-
-        if self.event_manager:
             try:
-                await self.event_manager.emit_note_saved(
-                    category=category.value,
-                    target=target,
-                    preview=content[:100],
-                    scan_id=str(scan_id),
-                )
-            except Exception:
-                pass
+                category = NoteCategory(note.category.value)
+            except (ValueError, AttributeError):
+                category = NoteCategory.GENERAL
 
-        return f"Note saved: [{category.value}] {content[:120]}"
+            db_note = EngagementNote(
+                project_id=project_id,
+                scan_id=scan_id,
+                category=category,
+                target=note.target,
+                content=note.content[:2000],
+            )
+            await crud.note.create(session, db_note)
+            logger.info(f"📝 Note saved [{category.value}]: {note.content[:80]}")
 
-    async def _handle_save_finding(
+            if self.event_manager:
+                try:
+                    await self.event_manager.emit_note_saved(
+                        category=category.value,
+                        target=note.target,
+                        preview=note.content[:100],
+                        scan_id=str(scan_id),
+                    )
+                except Exception:
+                    pass
+
+        except Exception as exc:
+            logger.warning(f"Failed to persist note: {exc}")
+
+    async def _persist_command_attempt(
         self,
-        args: Dict[str, Any],
         session: Any,
         project_id: UUID,
         scan_id: UUID,
-    ) -> str:
-        target = str(args.get("target", "")).strip()
-        title = str(args.get("title", "Untitled")).strip()
-        raw_severity = str(args.get("severity", "info")).strip().lower()
-
+        result: CommandResult,
+    ) -> None:
+        """Write a command execution record to the database."""
         try:
-            severity = FindingSeverity(raw_severity)
-        except ValueError:
-            severity = FindingSeverity.INFO
+            if result.timed_out:
+                status = "timeout"
+            elif result.exit_code == 0:
+                status = "success"
+            else:
+                status = "failed"
 
-        # Dedup: check if this finding already exists for this project
-        existing = await crud.finding.find_by_title_and_target(
-            session, project_id, title, target,
-        )
-        if existing:
-            logger.info(f"🔄 Finding already exists, skipping: {title}")
-            return f"Finding already recorded: {title} (skipped duplicate)"
+            # Extract tool name from command (first word)
+            tool_name = result.command.split()[0] if result.command.strip() else "cmd"
 
-        finding = Finding(
-            project_id=project_id,
-            scan_id=scan_id,
-            target=target,
-            title=title,
-            description=str(args.get("description", "")).strip()[:4000],
-            severity=severity,
-            tool=str(args.get("tool", "")).strip() or None,
-            vulnerability_type=str(args.get("vulnerability_type", "")).strip() or None,
-            exploitation_steps=str(args.get("exploitation_steps", "")).strip()[:4000] or None,
-            impact=str(args.get("impact", "")).strip()[:2000] or None,
-            poc=str(args.get("poc", "")).strip()[:4000] or None,
-            remediation=str(args.get("remediation", "")).strip()[:2000] or None,
-        )
-        await crud.finding.create(session, finding)
+            # Extract target from command if possible
+            target = "unknown"
+            url_match = re.search(r'https?://[^\s\'"]+', result.command)
+            domain_match = re.search(r'-[duh]\s+([^\s]+)', result.command) if not url_match else None
+            if url_match:
+                target = url_match.group(0)
+            elif domain_match:
+                target = domain_match.group(1)
 
-        # Also record in scan state for prompt context
-        self.scan_state.add_finding(
-            title=title,
-            severity=raw_severity,
-            target=target,
-            evidence=str(args.get("poc", ""))[:300],
-            tool=str(args.get("tool", "")),
-        )
-
-        logger.info(f"🎯 Finding saved [{severity.value}]: {title}")
-
-        if self.event_manager:
-            try:
-                await self.event_manager.emit_finding_saved(
-                    title=title,
-                    severity=severity.value,
+            await crud.attempt.create(
+                session=session,
+                attempt=Attempt(
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool=tool_name,
                     target=target,
-                    scan_id=str(scan_id),
-                )
-            except Exception:
-                pass
-
-        return f"Finding saved: [{severity.value.upper()}] {title}"
+                    status=status,
+                    reason=result.stderr[:300] if result.stderr else None,
+                    properties={
+                        "agent_id": "manager",
+                        "duration_seconds": result.duration_seconds,
+                        "command": result.command[:500],
+                        "rationale": result.rationale[:300],
+                        "exit_code": result.exit_code,
+                    },
+                ),
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to persist attempt: {exc}")
 
     # ------------------------------------------------------------------
     # Prior knowledge loading
@@ -935,14 +796,14 @@ class ManagerAgent:
         lines: List[str] = ["<prior_knowledge>"]
 
         if notes:
-            lines.append(f"<prior_notes count=\"{len(notes)}\">")
+            lines.append(f'<prior_notes count="{len(notes)}">')
             for n in reversed(notes):  # oldest first
                 date = n.created_at.strftime("%Y-%m-%d") if n.created_at else "?"
                 lines.append(f"  [{date} {n.category.value}] ({n.target}) {n.content[:200]}")
             lines.append("</prior_notes>")
 
         if findings:
-            lines.append(f"<prior_findings count=\"{len(findings)}\">")
+            lines.append(f'<prior_findings count="{len(findings)}">')
             for f in reversed(findings):  # oldest first
                 sev = f.severity.value.upper() if f.severity else "INFO"
                 target = f.target or "?"
@@ -967,84 +828,6 @@ class ManagerAgent:
     # History management
     # ------------------------------------------------------------------
 
-    def _build_tool_history(self, result: WorkerResult) -> str:
-        """Compact tool output for conversation history."""
-        parts: List[str] = []
-
-        # Truncated raw output
-        output = result.output
-        if len(output) > 3500:
-            output = output[:3497] + "..."
-        if output:
-            parts.append(output)
-
-        # Key evidence lines
-        evidence = self._extract_key_evidence(output)
-        if evidence:
-            evidence_block = "\n".join(f"- {line}" for line in evidence[:6])
-            parts.append(f"[tool_evidence]\n{evidence_block}\n[/tool_evidence]")
-
-        # Compact data
-        data = result.data
-        if data:
-            preferred_keys = ("exit_code", "vulnerable", "total_found", "summary", "url", "status", "command")
-            compact = {k: data[k] for k in preferred_keys if k in data}
-            if not compact:
-                compact = {k: v for k, v in list(data.items())[:3] if isinstance(v, (str, int, float, bool))}
-            if compact:
-                cj = json.dumps(compact, sort_keys=True, default=str, separators=(",", ":"))
-                if len(cj) > 700:
-                    cj = cj[:697] + "..."
-                parts.append(f"[tool_data]{cj}[/tool_data]")
-
-        # Status / error
-        if result.error:
-            parts.append(f"[error]{result.error[:200]}[/error]")
-
-        parts.append(f"[duration]{result.duration_seconds:.1f}s[/duration]")
-
-        return "\n\n".join(parts).strip()
-
-    @staticmethod
-    def _extract_key_evidence(output: str) -> List[str]:
-        """Pull the most informative lines from raw tool output."""
-        if not output:
-            return []
-
-        important = re.compile(
-            r"\b(vulnerab|cve-|open|found|severity|critical|high|timeout|error|failed|"
-            r"status|database|privilege|payload|login|rce|sqli|xss|200|301|302|403)\b",
-            re.IGNORECASE,
-        )
-        seen: set[str] = set()
-        evidence: List[str] = []
-
-        for raw in output.splitlines():
-            line = " ".join(raw.split()).strip()
-            if not line:
-                continue
-            if len(line) > 180:
-                line = line[:177] + "..."
-            if important.search(line) and line.lower() not in seen:
-                evidence.append(line)
-                seen.add(line.lower())
-            if len(evidence) >= 6:
-                break
-
-        if not evidence:
-            for raw in output.splitlines():
-                line = " ".join(raw.split()).strip()
-                if not line or line.lower() in seen:
-                    continue
-                if len(line) > 180:
-                    line = line[:177] + "..."
-                evidence.append(line)
-                seen.add(line.lower())
-                if len(evidence) >= 3:
-                    break
-
-        return evidence
-
     def _trim_history(self, history: List[Dict[str, Any]], max_turns: int = 40) -> List[Dict[str, Any]]:
         """Keep the first user message and the most recent turns."""
         if len(history) <= max_turns:
@@ -1055,66 +838,8 @@ class ManagerAgent:
         return head + tail
 
     # ------------------------------------------------------------------
-    # Phase advancement
+    # Final findings persistence
     # ------------------------------------------------------------------
-
-    async def _check_phase_advance(self, assistant_text: str, scan_id: str) -> bool:
-        """Check if the Manager explicitly requested a phase advance."""
-        if not assistant_text:
-            return False
-        if "ADVANCE_PHASE" in assistant_text.upper():
-            old_phase = self.scan_state.phase.value
-            advanced = self.scan_state.advance_phase()
-            if advanced:
-                new_phase = self.scan_state.phase.value
-                logger.info(f"📍 Phase advanced to: {new_phase}")
-                if self.event_manager:
-                    try:
-                        await self.event_manager.emit_phase_advanced(
-                            old_phase=old_phase,
-                            new_phase=new_phase,
-                            scan_id=scan_id,
-                        )
-                    except Exception:
-                        pass
-            return advanced
-        return False
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    async def _persist_attempt(
-        self,
-        session: Any,
-        project_id: UUID,
-        scan_id: UUID,
-        result: WorkerResult,
-    ) -> None:
-        """Write an attempt record to the database."""
-        try:
-            status = "success" if result.success else "failed"
-            if result.error and "timed out" in result.error.lower():
-                status = "timeout"
-
-            await crud.attempt.create(
-                session=session,
-                attempt=Attempt(
-                    project_id=project_id,
-                    scan_id=scan_id,
-                    tool=result.tool_name,
-                    target=result.target,
-                    status=status,
-                    reason=result.error,
-                    properties={
-                        "agent_id": "manager",
-                        "duration_seconds": result.duration_seconds,
-                        "task_id": result.task_id,
-                    },
-                ),
-            )
-        except Exception as exc:
-            logger.warning(f"Failed to persist attempt for {result.tool_name}: {exc}")
 
     async def _persist_final_findings(
         self,
@@ -1166,25 +891,8 @@ class ManagerAgent:
                 logger.warning(f"Failed to persist auto-extracted finding '{finding.title}': {exc}")
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Legacy helpers (kept for test compatibility)
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _tool_call_to_dict(tool_call: Any) -> Dict[str, Any]:
-        """Normalise a GeminiToolCall into a plain dict."""
-        if isinstance(tool_call, dict):
-            return tool_call
-        if hasattr(tool_call, "model_dump"):
-            return tool_call.model_dump()
-        function = getattr(tool_call, "function", None)
-        return {
-            "id": str(getattr(tool_call, "id", f"call_{uuid4().hex[:12]}")),
-            "type": "function",
-            "function": {
-                "name": str(getattr(function, "name", "")),
-                "arguments": str(getattr(function, "arguments", "{}")),
-            },
-        }
 
     @staticmethod
     def _parse_args(raw: Any) -> Dict[str, Any]:
@@ -1198,3 +906,19 @@ class ManagerAgent:
             except (json.JSONDecodeError, TypeError):
                 return {}
         return {}
+
+    def _check_phase_advance(self, assistant_text: str, scan_id: str = "") -> bool:
+        """Check if the Manager explicitly requested a phase advance.
+        
+        Kept for backward compatibility with tests, but phase advancement
+        is now driven by the structured phase_action field.
+        """
+        if not assistant_text:
+            return False
+        if "ADVANCE_PHASE" in assistant_text.upper():
+            old_phase = self.scan_state.phase.value
+            advanced = self.scan_state.advance_phase()
+            if advanced:
+                logger.info(f"📍 Phase advanced to: {self.scan_state.phase.value}")
+            return advanced
+        return False

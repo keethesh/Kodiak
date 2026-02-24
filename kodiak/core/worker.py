@@ -1,24 +1,20 @@
 """
-Worker — lightweight async tool executor for the Manager-Worker architecture.
+Worker — lightweight async command executor for the structured output architecture.
 
-Workers make ZERO LLM calls.  They receive a tool name + arguments, execute
-the tool via the existing ``ToolInventory`` / ``DockerExecutor`` stack, and
-return a structured ``WorkerResult``.
+Workers make ZERO LLM calls.  They receive shell commands from the Manager's
+structured output, execute them via DockerExecutor, and return stdout/stderr.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 from uuid import uuid4
 
 from loguru import logger
 
-from kodiak.core.tools.base import ToolResult
-from kodiak.core.tools.inventory import ToolInventory
 from kodiak.api.events import TUIEventManager
 
 
@@ -27,112 +23,106 @@ from kodiak.api.events import TUIEventManager
 # ---------------------------------------------------------------------------
 
 @dataclass
-class WorkerTask:
-    """A single unit of work dispatched by the Manager."""
-    tool_name: str
-    args: Dict[str, Any]
+class CommandTask:
+    """A single shell command to execute in the Docker sandbox."""
+    command: str
+    rationale: str
+    timeout: int = 300
     task_id: str = field(default_factory=lambda: uuid4().hex[:12])
 
 
 @dataclass
-class WorkerResult:
-    """Structured result returned to the Manager."""
+class CommandResult:
+    """Result of executing a shell command."""
     task_id: str
-    tool_name: str
-    target: str
-    success: bool
-    output: str
-    data: Dict[str, Any]
-    error: Optional[str]
+    command: str
+    rationale: str
+    stdout: str
+    stderr: str
+    exit_code: int
     duration_seconds: float
+    timed_out: bool = False
 
-    @property
-    def summary(self) -> str:
-        """One-line human-readable summary for the Manager's scan state."""
-        if self.error:
-            return f"error: {self.error[:120]}"
-        if not self.success:
-            return f"failed ({len(self.output)} chars output)"
-        # Compact summary: first meaningful line
-        for line in self.output.splitlines():
-            stripped = line.strip()
-            if stripped and len(stripped) > 5:
-                return stripped[:150]
-        return "completed (no output)"
+    def to_prompt_text(self) -> str:
+        """Format for inclusion in the next LLM iteration as context."""
+        status = "TIMED OUT" if self.timed_out else f"exit={self.exit_code}"
+        header = f"[cmd] {self.command} ({status}, {self.duration_seconds:.1f}s)"
+
+        # Combine stdout + stderr, truncate to keep history bounded
+        output = self.stdout.strip()
+        if self.stderr.strip():
+            output += f"\n[stderr] {self.stderr.strip()}"
+
+        # Truncate very long outputs to avoid blowing up the context window
+        MAX_OUTPUT = 4000
+        if len(output) > MAX_OUTPUT:
+            output = output[:MAX_OUTPUT] + f"\n... (truncated, {len(output)} chars total)"
+
+        return f"{header}\n{output}" if output else header
 
 
 # ---------------------------------------------------------------------------
-# Single-task executor
+# Single-command executor
 # ---------------------------------------------------------------------------
 
-async def execute_worker_task(
-    task: WorkerTask,
-    tool_inventory: ToolInventory,
+async def execute_command(
+    task: CommandTask,
     semaphore: asyncio.Semaphore,
-) -> WorkerResult:
+) -> CommandResult:
     """
-    Execute a single tool call.  Respects concurrency via *semaphore*.
+    Execute a single shell command inside the Docker sandbox.
 
-    This is the core worker function — no LLM, no DB writes, no coordination.
+    Uses the existing DockerExecutor infrastructure.
     """
-    target = task.args.get("target", task.args.get("url", task.args.get("domain", "unknown")))
-    # Fallback for system_execute: extract the first URL from the command string
-    if target == "unknown" and task.tool_name == "system_execute":
-        cmd = task.args.get("command", "")
-        url_match = re.search(r'https?://[^\s\'"]+', cmd)
-        if url_match:
-            target = url_match.group(0)
+    # Lazy import to avoid circular dependency at module load time
+    from kodiak.core.tools.executor import get_docker_executor
+
     t0 = time.monotonic()
 
-    tool = tool_inventory.get(task.tool_name)
-    if tool is None:
-        return WorkerResult(
-            task_id=task.task_id,
-            tool_name=task.tool_name,
-            target=str(target),
-            success=False,
-            output="",
-            data={},
-            error=f"Tool '{task.tool_name}' not found in inventory",
-            duration_seconds=0.0,
-        )
-
     try:
-        async with semaphore:
-            result: ToolResult = await tool.execute(**task.args)
+        executor = await get_docker_executor()
+
+        try:
+            result = await asyncio.wait_for(
+                executor.run_command(["bash", "-c", task.command]),
+                timeout=task.timeout,
+            )
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - t0
+            logger.warning(
+                f"⏱️  Command timed out after {elapsed:.1f}s: {task.command[:80]}"
+            )
+            return CommandResult(
+                task_id=task.task_id,
+                command=task.command,
+                rationale=task.rationale,
+                stdout="",
+                stderr="Command timed out",
+                exit_code=-1,
+                duration_seconds=round(elapsed, 2),
+                timed_out=True,
+            )
 
         elapsed = time.monotonic() - t0
-        return WorkerResult(
+        return CommandResult(
             task_id=task.task_id,
-            tool_name=task.tool_name,
-            target=str(target),
-            success=result.success,
-            output=result.output or "",
-            data=result.data or {},
-            error=result.error,
+            command=task.command,
+            rationale=task.rationale,
+            stdout=getattr(result, "stdout", "") or "",
+            stderr=getattr(result, "stderr", "") or "",
+            exit_code=getattr(result, "exit_code", -1),
             duration_seconds=round(elapsed, 2),
         )
-    except asyncio.TimeoutError:
-        return WorkerResult(
-            task_id=task.task_id,
-            tool_name=task.tool_name,
-            target=str(target),
-            success=False,
-            output="",
-            data={},
-            error="Worker task timed out",
-            duration_seconds=round(time.monotonic() - t0, 2),
-        )
+
     except Exception as exc:
-        logger.warning(f"Worker task {task.tool_name}({target}) failed: {exc}")
-        return WorkerResult(
+        logger.warning(f"Command execution failed: {exc} — {task.command[:80]}")
+        return CommandResult(
             task_id=task.task_id,
-            tool_name=task.tool_name,
-            target=str(target),
-            success=False,
-            output="",
-            data={},
-            error=str(exc)[:300],
+            command=task.command,
+            rationale=task.rationale,
+            stdout="",
+            stderr=str(exc)[:500],
+            exit_code=-1,
             duration_seconds=round(time.monotonic() - t0, 2),
         )
 
@@ -141,72 +131,45 @@ async def execute_worker_task(
 # Batch dispatcher
 # ---------------------------------------------------------------------------
 
-# Default per-tool concurrency limits
-DEFAULT_CONCURRENCY: Dict[str, int] = {
-    "nmap": 1,
-    "sqlmap": 1,
-    "wpscan": 1,
-    "commix": 1,
-    "searchsploit": 1,
-    "nuclei": 2,
-    "ffuf": 2,
-    "katana": 2,
-    "whatweb": 3,
-    "httpx": 3,
-    "subfinder": 3,
-}
-
-
-async def dispatch_batch(
-    tasks: List[WorkerTask],
-    tool_inventory: ToolInventory,
+async def dispatch_commands(
+    commands: List[CommandTask],
     event_manager: Optional[TUIEventManager] = None,
     scan_id: Optional[str] = None,
     global_concurrency: int = 4,
-) -> List[WorkerResult]:
+) -> List[CommandResult]:
     """
-    Run all *tasks* concurrently, respecting per-tool concurrency limits.
+    Run all commands concurrently, bounded by global_concurrency.
 
-    Emits ``tool_start`` / ``tool_complete`` TUI events so the UI stays
-    responsive during batch execution.
+    Emits ``tool_start`` / ``tool_complete`` TUI events so the UI
+    stays responsive during execution.
     """
-    if not tasks:
+    if not commands:
         return []
 
-    # Build per-tool semaphores
-    semaphores: Dict[str, asyncio.Semaphore] = {}
-    global_sem = asyncio.Semaphore(global_concurrency)
+    sem = asyncio.Semaphore(global_concurrency)
 
-    for task in tasks:
-        if task.tool_name not in semaphores:
-            limit = DEFAULT_CONCURRENCY.get(task.tool_name, global_concurrency)
-            semaphores[task.tool_name] = asyncio.Semaphore(limit)
+    async def _run_one(task: CommandTask) -> CommandResult:
+        # Extract a short label for TUI display
+        label = task.command.split()[0] if task.command.strip() else "cmd"
 
-    async def _run_one(task: WorkerTask) -> WorkerResult:
-        tool_sem = semaphores.get(task.tool_name, global_sem)
-        target = task.args.get("target", task.args.get("url", task.args.get("domain", "unknown")))
-
-        # Emit tool_start
         if event_manager:
             try:
                 await event_manager.emit_tool_start(
-                    tool_name=task.tool_name,
-                    target=str(target),
+                    tool_name=label,
+                    target=task.command[:80],
                     agent_id="manager",
                     scan_id=scan_id,
                 )
             except Exception:
                 pass
 
-        # Enforce both global and per-tool concurrency limits.
-        async with global_sem:
-            result = await execute_worker_task(task, tool_inventory, tool_sem)
+        async with sem:
+            result = await execute_command(task, sem)
 
-        # Emit tool_complete
         if event_manager:
             try:
                 await event_manager.emit_tool_complete(
-                    tool_name=task.tool_name,
+                    tool_name=label,
                     result=result,
                     scan_id=scan_id,
                 )
@@ -215,25 +178,21 @@ async def dispatch_batch(
 
         return result
 
-    # Dispatch all workers concurrently
-    coros = [_run_one(t) for t in tasks]
+    coros = [_run_one(t) for t in commands]
     results = await asyncio.gather(*coros, return_exceptions=True)
 
-    # Convert exceptions to WorkerResults
-    final: List[WorkerResult] = []
+    final: List[CommandResult] = []
     for i, res in enumerate(results):
         if isinstance(res, Exception):
-            task = tasks[i]
-            target = task.args.get("target", "unknown")
-            logger.error(f"Worker exception for {task.tool_name}: {res}")
-            final.append(WorkerResult(
+            task = commands[i]
+            logger.error(f"Command dispatch exception: {res}")
+            final.append(CommandResult(
                 task_id=task.task_id,
-                tool_name=task.tool_name,
-                target=str(target),
-                success=False,
-                output="",
-                data={},
-                error=str(res)[:300],
+                command=task.command,
+                rationale=task.rationale,
+                stdout="",
+                stderr=str(res)[:500],
+                exit_code=-1,
                 duration_seconds=0.0,
             ))
         else:

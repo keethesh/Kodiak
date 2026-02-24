@@ -64,6 +64,7 @@ class GeminiClient:
         max_tokens: int = 4096,
         thinking_level: str = "high",
         response_mime_type: Optional[str] = None,
+        response_schema: Optional[Any] = None,
     ) -> GeminiResponse:
         normalized_model = llm.normalize_model_name(model)
         model_id = normalized_model.split("/", 1)[1]
@@ -76,6 +77,7 @@ class GeminiClient:
             max_tokens=max_tokens,
             thinking_level=thinking_level,
             response_mime_type=response_mime_type,
+            response_schema=response_schema,
         )
 
         response = await asyncio.to_thread(
@@ -110,9 +112,9 @@ class GeminiClient:
         max_tokens: int,
         thinking_level: str,
         response_mime_type: Optional[str],
+        response_schema: Optional[Any] = None,
     ) -> types.GenerateContentConfig:
         self._ensure_library_available()
-        function_declarations = self._convert_tools(tools)
         # Gemini 3 docs: keep temperature at the default (1.0); explicitly tuning it
         # degrades reasoning quality. Do not pass temperature to the SDK — let the
         # model use its built-in default.
@@ -123,10 +125,20 @@ class GeminiClient:
                 thinking_level=llm.normalize_gemini_thinking_level(thinking_level)
             ),
         )
-        if function_declarations:
-            config.tools = [types.Tool(function_declarations=function_declarations)]
-        if response_mime_type:
+
+        # Structured output mode (preferred) — pass a Pydantic model or JSON schema
+        if response_schema is not None:
+            config.response_mime_type = "application/json"
+            config.response_schema = response_schema
+        elif response_mime_type:
             config.response_mime_type = response_mime_type
+
+        # Legacy function calling — still supported for backward compatibility
+        if not response_schema:
+            function_declarations = self._convert_tools(tools)
+            if function_declarations:
+                config.tools = [types.Tool(function_declarations=function_declarations)]
+
         return config
 
     def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[types.FunctionDeclaration]:
