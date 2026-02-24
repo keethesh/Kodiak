@@ -75,12 +75,13 @@ async def execute_command(
     Uses the existing DockerExecutor infrastructure.
     """
     # Lazy import to avoid circular dependency at module load time
+    from kodiak.core.config import settings
     from kodiak.services.executor import get_docker_executor
 
     t0 = time.monotonic()
 
     try:
-        executor = await get_docker_executor()
+        executor = await get_docker_executor(preferred_image=settings.toolbox_image)
 
         try:
             result = await asyncio.wait_for(
