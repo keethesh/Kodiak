@@ -27,6 +27,7 @@ from kodiak.core.scan_state import ScanPhase, ScanState
 from kodiak.core.tools.inventory import ToolInventory
 from kodiak.core.worker import WorkerResult, WorkerTask, dispatch_batch
 from kodiak.database import crud
+from kodiak.database.models import Attempt
 from kodiak.services import llm
 from kodiak.services.gemini_client import GeminiClient, GeminiResponse
 
@@ -648,19 +649,21 @@ class ManagerAgent:
             if result.error and "timed out" in result.error.lower():
                 status = "timeout"
 
-            await crud.attempt.create_attempt(
+            await crud.attempt.create(
                 session=session,
-                project_id=project_id,
-                scan_id=scan_id,
-                tool=result.tool_name,
-                target=result.target,
-                status=status,
-                reason=result.error,
-                properties={
-                    "agent_id": "manager",
-                    "duration_seconds": result.duration_seconds,
-                    "task_id": result.task_id,
-                },
+                attempt=Attempt(
+                    project_id=project_id,
+                    scan_id=scan_id,
+                    tool=result.tool_name,
+                    target=result.target,
+                    status=status,
+                    reason=result.error,
+                    properties={
+                        "agent_id": "manager",
+                        "duration_seconds": result.duration_seconds,
+                        "task_id": result.task_id,
+                    },
+                ),
             )
         except Exception as exc:
             logger.warning(f"Failed to persist attempt for {result.tool_name}: {exc}")
