@@ -158,6 +158,9 @@ class ManagerAgent:
                 continue
 
             # 2. PARSE STRUCTURED RESPONSE ------------------------------------
+            if response.content:
+                logger.debug(f"LLM Raw Response:\n{response.content}")
+
             kodiak_resp = self._parse_kodiak_response(response.content)
 
             # Emit thought for TUI (pass the actual reasoning, not raw JSON)
