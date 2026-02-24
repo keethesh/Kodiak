@@ -120,8 +120,8 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.argument("target")
 @click.option("--instructions", "-i", help="Custom scan instructions", default="Conduct a security assessment")
 @click.option("--model", "-m", help="LLM model to use")
-@click.option("--max-iterations", "-n", default=100, help="Total iteration budget shared across agents")
-@click.option("--agents", "-a", type=int, default=None, help="Number of concurrent agents")
+@click.option("--max-iterations", "-n", default=100, help="Total manager iteration budget")
+@click.option("--agents", "-a", type=int, default=None, hidden=True)
 @click.option("--force-agents", is_flag=True, help="Allow agent count above KODIAK_MAX_AGENTS")
 @click.option(
     "--report-format",
@@ -134,7 +134,7 @@ def main(ctx, version: bool, target: Optional[str]):
     "--role-strategy",
     type=click.Choice(["role-hinted", "generic"], case_sensitive=False),
     default="role-hinted",
-    help="How to assign agent roles",
+    hidden=True,
 )
 @click.option("--verbose", "-v", is_flag=True, help="Show verbose real-time logging output")
 def scan(
@@ -191,6 +191,10 @@ def scan(
         console.print(f"🧠 [bold]Model:[/bold] {settings.llm_model}")
         console.print(f"📋 [bold]Instructions:[/bold] {instructions}\n")
         console.print(f"👤 [bold]Architecture:[/bold] Manager-Worker (single brain, parallel tools)")
+        if agents is not None:
+            console.print("[yellow]Note: --agents is ignored in Manager-Worker mode.[/yellow]")
+        if role_strategy != "role-hinted":
+            console.print("[yellow]Note: --role-strategy is ignored in Manager-Worker mode.[/yellow]")
         console.print(f"📝 [bold]Report:[/bold] format={report_format} path={report_path or settings.report_output_path}")
         console.print("")
         

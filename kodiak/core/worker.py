@@ -190,7 +190,9 @@ async def dispatch_batch(
             except Exception:
                 pass
 
-        result = await execute_worker_task(task, tool_inventory, tool_sem)
+        # Enforce both global and per-tool concurrency limits.
+        async with global_sem:
+            result = await execute_worker_task(task, tool_inventory, tool_sem)
 
         # Emit tool_complete
         if event_manager:

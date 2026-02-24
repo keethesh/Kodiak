@@ -135,7 +135,7 @@ class ManagerAgent:
                 })
 
             # 1. THINK -------------------------------------------------------
-            response = await self._think(history, iteration)
+            response = await self._think(history, iteration, scan_id_str)
 
             if response is None:
                 history.append({"role": "assistant", "content": "Error: LLM returned empty response"})
@@ -274,6 +274,7 @@ class ManagerAgent:
         self,
         history: List[Dict[str, Any]],
         iteration: int,
+        scan_id: str,
     ) -> Optional[GeminiResponse]:
         """Single LLM call: system prompt + scan state + history → tool calls."""
 
@@ -298,7 +299,7 @@ class ManagerAgent:
                     await self.event_manager.emit_agent_thinking(
                         agent_id="manager",
                         message=f"Iteration {iteration}",
-                        scan_id=None,
+                        scan_id=scan_id,
                     )
                 except Exception:
                     pass
