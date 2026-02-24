@@ -68,7 +68,7 @@ class KodiakSettings(BaseSettings):
     heavy_tool_parallel_limit: int = Field(default=2, alias="KODIAK_HEAVY_TOOL_PARALLEL_LIMIT")
     tool_scheduler: str = Field(default="queue", alias="KODIAK_TOOL_SCHEDULER")
     tool_queue_limit: int = Field(default=50, alias="KODIAK_TOOL_QUEUE_LIMIT")
-    event_scheduler_enabled: bool = Field(default=False, alias="KODIAK_EVENT_SCHEDULER")
+    event_scheduler_enabled: bool = Field(default=True, alias="KODIAK_EVENT_SCHEDULER")
     event_scheduler_heartbeat_seconds: int = Field(default=30, alias="KODIAK_EVENT_HEARTBEAT_SECONDS")
     event_scheduler_replan_cooldown_seconds: int = Field(default=8, alias="KODIAK_EVENT_REPLAN_COOLDOWN")
     event_scheduler_max_queue: int = Field(default=50, alias="KODIAK_EVENT_MAX_QUEUE")
