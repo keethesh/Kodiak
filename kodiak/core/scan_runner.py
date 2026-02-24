@@ -75,6 +75,7 @@ class ScanRunner:
         force_agents: bool = False,
         report_format: str = "json+md",
         report_path: Optional[str] = None,
+        event_scheduler: Optional[bool] = None,
     ) -> ScanResult:
         """
         Execute a complete scan using the Manager-Worker architecture.
@@ -144,7 +145,11 @@ class ScanRunner:
                     tool_inventory=tool_inventory,
                 )
 
-                logger.info(f"Starting Manager with {max_iterations} max iterations")
+                scheduler_mode = settings.event_scheduler_enabled if event_scheduler is None else bool(event_scheduler)
+                logger.info(
+                    f"Starting Manager with {max_iterations} max iterations "
+                    f"(event_scheduler={'on' if scheduler_mode else 'off'})"
+                )
 
                 manager_result = await manager.run(
                     target=target,
@@ -154,6 +159,7 @@ class ScanRunner:
                     scan_id=scan_job.id,
                     max_iterations=max_iterations,
                     allowed_tools=allowed_tools,
+                    event_scheduler=event_scheduler,
                 )
                 
                 # 4. Finalize

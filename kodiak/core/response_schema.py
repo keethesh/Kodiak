@@ -3,7 +3,7 @@ Structured output schema for the Kodiak agent.
 
 Instead of function calling, the LLM returns a single JSON object
 matching `KodiakResponse`.  The orchestrator then:
-  1. Executes commands[] in parallel via Docker
+  1. Executes actions[]/commands[] in parallel via Docker
   2. Persists findings[] and notes[] to the database
   3. Updates ScanState from discoveries
   4. Handles phase_action (advance / complete)
@@ -27,6 +27,14 @@ from pydantic import BaseModel, Field
 
 class PhaseAction(str, Enum):
     CONTINUE = "continue"
+    ADVANCE = "advance"
+    COMPLETE = "complete"
+
+
+class ActionType(str, Enum):
+    LAUNCH = "launch"
+    CANCEL = "cancel"
+    WAIT = "wait"
     ADVANCE = "advance"
     COMPLETE = "complete"
 
@@ -68,6 +76,34 @@ class Command(BaseModel):
     timeout: int = Field(
         default=300,
         description="Max seconds before the command is killed (default 300)",
+    )
+
+
+class Action(BaseModel):
+    """Explicit manager action for event-driven orchestration."""
+
+    type: ActionType = Field(
+        description="Action type: launch, cancel, wait, advance, complete"
+    )
+    command: str = Field(
+        default="",
+        description="Required for launch. Shell command to execute in the sandbox.",
+    )
+    rationale: str = Field(
+        default="",
+        description="Reason for this action (especially important for launch/cancel).",
+    )
+    timeout: int = Field(
+        default=300,
+        description="Timeout seconds for launch actions.",
+    )
+    task_id: str = Field(
+        default="",
+        description="Task ID to cancel (for cancel action).",
+    )
+    reason: str = Field(
+        default="",
+        description="Optional cancellation/wait/phase reason.",
     )
 
 
@@ -155,6 +191,13 @@ class KodiakResponse(BaseModel):
     commands: List[Command] = Field(
         default_factory=list,
         description="Shell commands to execute in parallel in the Docker sandbox",
+    )
+    actions: List[Action] = Field(
+        default_factory=list,
+        description=(
+            "Event-driven manager actions. Preferred over commands[] when provided. "
+            "Supported: launch, cancel, wait, advance, complete."
+        ),
     )
     discoveries: Discovery = Field(
         default_factory=Discovery,

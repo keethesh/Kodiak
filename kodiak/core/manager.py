@@ -13,20 +13,22 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from loguru import logger
 
 from kodiak.api.events import TUIEventManager
 from kodiak.core.config import settings
 from kodiak.core.response_schema import (
-    Command,
+    ActionType,
     KodiakResponse,
     PhaseAction,
 )
+from kodiak.core.scheduler import EventDrivenScheduler, SchedulerEvent
 from kodiak.core.scan_state import ScanPhase, ScanState
 from kodiak.core.tools.inventory import ToolInventory
 from kodiak.core.worker import CommandResult, CommandTask, dispatch_commands
@@ -89,6 +91,7 @@ class ManagerAgent:
         scan_id: UUID,
         max_iterations: int = 30,
         allowed_tools: Optional[List[str]] = None,
+        event_scheduler: Optional[bool] = None,
     ) -> ManagerResult:
         """Execute the full scan lifecycle."""
 
@@ -124,56 +127,61 @@ class ManagerAgent:
             }
         ]
 
+        event_mode = settings.event_scheduler_enabled if event_scheduler is None else bool(event_scheduler)
+
+        if event_mode:
+            return await self._run_event_mode(
+                history=history,
+                session=session,
+                project_id=project_id,
+                scan_id=scan_id,
+                scan_id_str=scan_id_str,
+                max_iterations=max_iterations,
+                allowed_tools=allowed_tools,
+            )
+
+        return await self._run_batch_mode(
+            history=history,
+            session=session,
+            project_id=project_id,
+            scan_id=scan_id,
+            scan_id_str=scan_id_str,
+            max_iterations=max_iterations,
+            allowed_tools=allowed_tools,
+        )
+
+    async def _run_batch_mode(
+        self,
+        *,
+        history: List[Dict[str, Any]],
+        session: Any,
+        project_id: UUID,
+        scan_id: UUID,
+        scan_id_str: str,
+        max_iterations: int,
+        allowed_tools: Optional[List[str]],
+    ) -> ManagerResult:
+        min_iterations = min(max_iterations, max(3, int(max_iterations * 0.15)))
+
         for iteration in range(1, max_iterations + 1):
             logger.debug(f"🔄 Manager iteration {iteration}/{max_iterations}")
+            self._append_iteration_warnings(history, iteration, max_iterations)
 
-            # --- Iteration warnings ---
-            if max_iterations > 10 and iteration == int(max_iterations * 0.85):
-                remaining = max_iterations - iteration
-                history.append({
-                    "role": "user",
-                    "content": (
-                        f"<iteration_warning>Iteration {iteration}/{max_iterations}. "
-                        f"{remaining} remaining. Prioritise completion.</iteration_warning>"
-                    ),
-                })
-            elif iteration == max_iterations - 2:
-                history.append({
-                    "role": "user",
-                    "content": (
-                        "<final_warning>Only 2 iterations remain. "
-                        "Set phase_action to 'complete' with a scan_summary NOW.</final_warning>"
-                    ),
-                })
-
-            # 1. THINK -------------------------------------------------------
             response = await self._think(history, iteration, scan_id_str)
 
             if response is None:
-                history.append({"role": "assistant", "content": '{"analysis":"Error: empty response","commands":[],"phase_action":"continue"}'})
+                history.append({"role": "assistant", "content": '{"analysis":"Error: empty response","commands":[],"actions":[],"phase_action":"continue"}'})
                 history.append({
                     "role": "user",
-                    "content": "<retry>Previous call failed. Output valid JSON with commands.</retry>",
+                    "content": "<retry>Previous call failed. Output valid JSON with commands/actions.</retry>",
                 })
                 continue
 
-            # 2. PARSE STRUCTURED RESPONSE ------------------------------------
             if response.content:
                 logger.debug(f"LLM Raw Response:\n{response.content}")
 
             kodiak_resp = self._parse_kodiak_response(response.content)
-
-            # Emit thought for TUI (pass the actual reasoning, not raw JSON)
-            if self.event_manager and response.content:
-                thought_text = kodiak_resp.analysis if kodiak_resp else response.content
-                try:
-                    await self.event_manager.emit_agent_thought(
-                        agent_id="manager",
-                        thought=thought_text,
-                        scan_id=scan_id_str,
-                    )
-                except Exception:
-                    pass
+            await self._emit_thought(kodiak_resp.analysis if kodiak_resp else response.content, scan_id_str)
 
             if kodiak_resp is None:
                 history.append({"role": "assistant", "content": response.content or ""})
@@ -181,56 +189,38 @@ class ManagerAgent:
                     "role": "user",
                     "content": (
                         "<retry>Your response was not valid JSON matching the schema. "
-                        "Output a JSON object with: analysis, commands[], discoveries, "
+                        "Output JSON with: analysis, commands[], actions[], discoveries, "
                         "findings[], notes[], phase_action.</retry>"
                     ),
                 })
                 continue
 
-            # Record assistant response in history
             history.append({"role": "assistant", "content": response.content})
-
-            # 3. PROCESS DISCOVERIES ------------------------------------------
             self._apply_discoveries(kodiak_resp)
+            await self._persist_response_findings_notes(kodiak_resp, session, project_id, scan_id)
 
-            # 4. PERSIST FINDINGS & NOTES -------------------------------------
-            for finding in kodiak_resp.findings:
-                await self._persist_finding(finding, session, project_id, scan_id)
+            launch_tasks, _, resolved_phase_action = self._extract_runtime_actions(
+                kodiak_resp=kodiak_resp,
+                allowed_tools=allowed_tools,
+            )
 
-            for note in kodiak_resp.notes:
-                await self._persist_note(note, session, project_id, scan_id)
-
-            # 5. HANDLE PHASE ACTION ------------------------------------------
-            if kodiak_resp.phase_action == PhaseAction.COMPLETE:
-                # Guard: block premature completion before minimum iteration threshold
-                min_iterations = max(8, int(max_iterations * 0.15))
+            completion_attempted = resolved_phase_action == PhaseAction.COMPLETE
+            if completion_attempted:
                 if iteration < min_iterations:
-                    logger.info(
-                        f"⚡ Premature completion blocked at iteration {iteration} "
-                        f"(minimum: {min_iterations}). Nudging LLM to continue."
-                    )
                     history.append({
                         "role": "user",
                         "content": (
-                            f"<completion_rejected>You attempted to complete the scan at iteration {iteration}, "
-                            f"but the minimum is {min_iterations}. You have NOT exhausted all techniques. "
-                            "Continue scanning — run nikto, check security headers (curl -sI), "
-                            "test SSL/TLS (nmap --script ssl-enum-ciphers), check robots.txt/sitemap.xml, "
-                            "and test more injection payloads before completing. "
-                            "Record any security observations you have already made as findings NOW.</completion_rejected>"
+                            f"<completion_rejected>You attempted to complete at iteration {iteration} "
+                            f"but minimum is {min_iterations}. Continue scanning.</completion_rejected>"
                         ),
                     })
                     continue
 
                 summary = kodiak_resp.scan_summary or "Scan completed"
                 if self.scan_state.phase != ScanPhase.REPORTING:
-                    # Force advance through remaining phases
                     while self.scan_state.phase != ScanPhase.REPORTING:
                         self.scan_state.advance_phase()
-
                 await self._persist_final_findings(session, project_id, scan_id)
-
-                logger.info(f"✅ Manager scan complete: {summary}")
                 return ManagerResult(
                     status="completed",
                     summary=summary,
@@ -238,67 +228,31 @@ class ManagerAgent:
                     iterations=iteration,
                 )
 
-            if kodiak_resp.phase_action == PhaseAction.ADVANCE:
-                old_phase = self.scan_state.phase.value
-                advanced = self.scan_state.advance_phase()
-                if advanced:
-                    new_phase = self.scan_state.phase.value
-                    logger.info(f"📍 Phase advanced: {old_phase} → {new_phase}")
-                    if self.event_manager:
-                        try:
-                            await self.event_manager.emit_phase_advanced(
-                                old_phase=old_phase,
-                                new_phase=new_phase,
-                                scan_id=scan_id_str,
-                            )
-                        except Exception:
-                            pass
+            if resolved_phase_action == PhaseAction.ADVANCE:
+                await self._advance_phase(scan_id_str)
 
-            # 6. EXECUTE COMMANDS ---------------------------------------------
-            if kodiak_resp.commands:
-                tasks = [
-                    CommandTask(
-                        command=cmd.command,
-                        rationale=cmd.rationale,
-                        timeout=cmd.timeout,
-                    )
-                    for cmd in kodiak_resp.commands
-                ]
-
+            if launch_tasks:
                 results = await dispatch_commands(
-                    commands=tasks,
+                    commands=launch_tasks,
                     event_manager=self.event_manager,
                     scan_id=scan_id_str,
                     global_concurrency=settings.global_tool_concurrency,
                 )
-
-                # Persist attempts to DB
                 for cr in results:
-                    await self._persist_command_attempt(
-                        session, project_id, scan_id, cr
-                    )
-
-                # Build command results message for next iteration
-                results_text = self._format_command_results(results)
-                history.append({
-                    "role": "user",
-                    "content": results_text,
-                })
+                    await self._persist_command_attempt(session, project_id, scan_id, cr)
+                    self._record_command_result_to_scan_state(cr)
+                history.append({"role": "user", "content": self._format_command_results(results)})
             else:
-                # No commands — nudge the LLM to act
                 history.append({
                     "role": "user",
                     "content": (
-                        "<next_step>No commands were dispatched. "
-                        "Output commands to continue the scan, or set phase_action "
-                        "to 'complete' with a scan_summary.</next_step>"
+                        "<next_step>No commands were dispatched. Output commands/actions to continue "
+                        "the scan, or set phase_action to 'complete' with scan_summary.</next_step>"
                     ),
                 })
 
-            # Trim history to avoid unbounded growth
-            history = self._trim_history(history, max_turns=40)
+            history = self._trim_history(history, max_turns=80)
 
-        # Budget exhausted
         await self._persist_final_findings(session, project_id, scan_id)
         return ManagerResult(
             status="max_iterations",
@@ -306,6 +260,210 @@ class ManagerAgent:
             findings_count=self.scan_state.findings_count,
             iterations=max_iterations,
         )
+
+    async def _run_event_mode(
+        self,
+        *,
+        history: List[Dict[str, Any]],
+        session: Any,
+        project_id: UUID,
+        scan_id: UUID,
+        scan_id_str: str,
+        max_iterations: int,
+        allowed_tools: Optional[List[str]],
+    ) -> ManagerResult:
+        scheduler = EventDrivenScheduler(
+            global_concurrency=settings.global_tool_concurrency,
+            event_manager=self.event_manager,
+            scan_id=scan_id_str,
+        )
+        llm_calls = 0
+        need_replan = True
+        heartbeat_seconds = max(5, int(settings.event_scheduler_heartbeat_seconds))
+        cooldown_seconds = max(1, int(settings.event_scheduler_replan_cooldown_seconds))
+        last_replan_mono = 0.0
+        min_iterations = min(max_iterations, max(3, int(max_iterations * 0.15)))
+
+        try:
+            while llm_calls < max_iterations:
+                if need_replan:
+                    iteration = llm_calls + 1
+                    logger.debug(f"🧠 Event replan {iteration}/{max_iterations}")
+                    self._append_iteration_warnings(history, iteration, max_iterations)
+
+                    response = await self._think(history, iteration, scan_id_str)
+                    llm_calls += 1
+                    self.scan_state.mark_replan()
+                    last_replan_mono = time.monotonic()
+
+                    if response is None:
+                        history.append({"role": "assistant", "content": '{"analysis":"Error: empty response","commands":[],"actions":[],"phase_action":"continue"}'})
+                        history.append({
+                            "role": "user",
+                            "content": "<retry>Previous call failed. Output valid JSON with commands/actions.</retry>",
+                        })
+                        need_replan = True
+                        continue
+
+                    if response.content:
+                        logger.debug(f"LLM Raw Response:\n{response.content}")
+
+                    kodiak_resp = self._parse_kodiak_response(response.content)
+                    await self._emit_thought(kodiak_resp.analysis if kodiak_resp else response.content, scan_id_str)
+
+                    if kodiak_resp is None:
+                        history.append({"role": "assistant", "content": response.content or ""})
+                        history.append({
+                            "role": "user",
+                            "content": (
+                                "<retry>Your response was not valid JSON matching the schema. "
+                                "Output JSON with: analysis, commands[], actions[], discoveries, "
+                                "findings[], notes[], phase_action.</retry>"
+                            ),
+                        })
+                        need_replan = True
+                        continue
+
+                    history.append({"role": "assistant", "content": response.content})
+                    self._apply_discoveries(kodiak_resp)
+                    await self._persist_response_findings_notes(kodiak_resp, session, project_id, scan_id)
+
+                    launch_tasks, cancel_task_ids, resolved_phase_action = self._extract_runtime_actions(
+                        kodiak_resp=kodiak_resp,
+                        allowed_tools=allowed_tools,
+                    )
+
+                    for cancel_id in cancel_task_ids:
+                        await scheduler.cancel(cancel_id)
+
+                    max_queue = max(1, int(settings.event_scheduler_max_queue))
+                    dropped_for_queue = 0
+                    for task in launch_tasks:
+                        if scheduler.pending_count + scheduler.running_count >= max_queue:
+                            dropped_for_queue += 1
+                            continue
+                        accepted = await scheduler.submit(task)
+                        if accepted:
+                            self.scan_state.queue_task(
+                                task_id=task.task_id,
+                                tool=self._tool_from_command(task.command),
+                                command=task.command,
+                            )
+
+                    if dropped_for_queue:
+                        history.append({
+                            "role": "user",
+                            "content": (
+                                f"<queue_guard>Dropped {dropped_for_queue} launch action(s) "
+                                f"because scheduler queue cap is {max_queue}.</queue_guard>"
+                            ),
+                        })
+
+                    if resolved_phase_action == PhaseAction.ADVANCE:
+                        await self._advance_phase(scan_id_str)
+
+                    if resolved_phase_action == PhaseAction.COMPLETE:
+                        if iteration < min_iterations:
+                            history.append({
+                                "role": "user",
+                                "content": (
+                                    f"<completion_rejected>You attempted to complete at iteration {iteration} "
+                                    f"but minimum is {min_iterations}. Continue scanning.</completion_rejected>"
+                                ),
+                            })
+                            need_replan = True
+                            continue
+
+                        if scheduler.has_inflight():
+                            history.append({
+                                "role": "user",
+                                "content": (
+                                    "<completion_deferred>Completion requested while tasks are still running. "
+                                    "Wait for in-flight command results, then reassess completion.</completion_deferred>"
+                                ),
+                            })
+                            need_replan = False
+                            continue
+
+                        summary = kodiak_resp.scan_summary or "Scan completed"
+                        if self.scan_state.phase != ScanPhase.REPORTING:
+                            while self.scan_state.phase != ScanPhase.REPORTING:
+                                self.scan_state.advance_phase()
+                        await self._persist_final_findings(session, project_id, scan_id)
+                        return ManagerResult(
+                            status="completed",
+                            summary=summary,
+                            findings_count=self.scan_state.findings_count,
+                            iterations=llm_calls,
+                        )
+
+                    if not scheduler.has_inflight():
+                        history.append({
+                            "role": "user",
+                            "content": (
+                                "<next_step>No in-flight commands. Output launch/cancel/wait actions "
+                                "or commands to continue scanning.</next_step>"
+                            ),
+                        })
+                        need_replan = True
+                    else:
+                        need_replan = False
+
+                    history = self._trim_history(history, max_turns=80)
+                    continue
+
+                event = await scheduler.next_event(timeout_seconds=heartbeat_seconds)
+                if event is None:
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            f"<heartbeat>{heartbeat_seconds}s elapsed without decisive scheduler signal. "
+                            "Replan using current active task state.</heartbeat>"
+                        ),
+                    })
+                    need_replan = True
+                    history = self._trim_history(history, max_turns=80)
+                    continue
+
+                self._apply_scheduler_event_to_scan_state(event)
+
+                if event.result:
+                    await self._persist_command_attempt(session, project_id, scan_id, event.result)
+                    self._record_command_result_to_scan_state(event.result)
+                    history.append({"role": "user", "content": self._format_command_results([event.result])})
+                else:
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            f"<scheduler_event type=\"{event.event_type}\" task_id=\"{event.task_id}\" "
+                            f"status=\"{event.status}\">{event.command[:220]}</scheduler_event>"
+                        ),
+                    })
+
+                now_mono = time.monotonic()
+                if self._should_replan_on_scheduler_event(
+                    event=event,
+                    scheduler=scheduler,
+                    now_mono=now_mono,
+                    last_replan_mono=last_replan_mono,
+                    cooldown_seconds=cooldown_seconds,
+                ):
+                    need_replan = True
+                else:
+                    need_replan = False
+
+                history = self._trim_history(history, max_turns=80)
+
+            await scheduler.cancel_all()
+            await self._persist_final_findings(session, project_id, scan_id)
+            return ManagerResult(
+                status="max_iterations",
+                summary=f"Reached iteration budget ({max_iterations})",
+                findings_count=self.scan_state.findings_count,
+                iterations=llm_calls,
+            )
+        finally:
+            await scheduler.cancel_all()
 
     # ------------------------------------------------------------------
     # LLM interaction
@@ -359,6 +517,243 @@ class ManagerAgent:
         except Exception as exc:
             logger.error(f"Manager think() failed: {exc}")
             return None
+
+    def _append_iteration_warnings(
+        self,
+        history: List[Dict[str, Any]],
+        iteration: int,
+        max_iterations: int,
+    ) -> None:
+        if max_iterations > 10 and iteration == int(max_iterations * 0.85):
+            remaining = max_iterations - iteration
+            history.append({
+                "role": "user",
+                "content": (
+                    f"<iteration_warning>Iteration {iteration}/{max_iterations}. "
+                    f"{remaining} remaining. Prioritise completion.</iteration_warning>"
+                ),
+            })
+        elif iteration == max_iterations - 2:
+            history.append({
+                "role": "user",
+                "content": (
+                    "<final_warning>Only 2 iterations remain. "
+                    "Set phase_action to 'complete' with a scan_summary NOW.</final_warning>"
+                ),
+            })
+
+    async def _emit_thought(self, thought_text: str, scan_id: str) -> None:
+        if not self.event_manager or not thought_text:
+            return
+        try:
+            await self.event_manager.emit_agent_thought(
+                agent_id="manager",
+                thought=thought_text,
+                scan_id=scan_id,
+            )
+        except Exception:
+            pass
+
+    async def _persist_response_findings_notes(
+        self,
+        resp: KodiakResponse,
+        session: Any,
+        project_id: UUID,
+        scan_id: UUID,
+    ) -> None:
+        for finding in resp.findings:
+            await self._persist_finding(finding, session, project_id, scan_id)
+        for note in resp.notes:
+            await self._persist_note(note, session, project_id, scan_id)
+
+    def _extract_runtime_actions(
+        self,
+        *,
+        kodiak_resp: KodiakResponse,
+        allowed_tools: Optional[List[str]],
+    ) -> tuple[List[CommandTask], List[str], PhaseAction]:
+        launch_tasks: List[CommandTask] = []
+        cancel_task_ids: List[str] = []
+        phase_action = kodiak_resp.phase_action
+
+        for action in kodiak_resp.actions:
+            if action.type == ActionType.LAUNCH and action.command.strip():
+                launch_tasks.append(
+                    CommandTask(
+                        command=action.command.strip(),
+                        rationale=action.rationale or "Action-driven launch",
+                        timeout=max(1, int(action.timeout or 300)),
+                    )
+                )
+            elif action.type == ActionType.CANCEL and action.task_id.strip():
+                cancel_task_ids.append(action.task_id.strip())
+            elif action.type == ActionType.ADVANCE:
+                phase_action = PhaseAction.ADVANCE
+            elif action.type == ActionType.COMPLETE:
+                phase_action = PhaseAction.COMPLETE
+
+        for cmd in kodiak_resp.commands:
+            launch_tasks.append(
+                CommandTask(
+                    command=cmd.command,
+                    rationale=cmd.rationale,
+                    timeout=cmd.timeout,
+                )
+            )
+
+        allowed = set(allowed_tools or [])
+        gated_tool_names = {
+            "nmap",
+            "nuclei",
+            "subfinder",
+            "httpx",
+            "katana",
+            "ffuf",
+            "whatweb",
+            "sqlmap",
+            "wpscan",
+            "commix",
+            "searchsploit",
+        }
+        filtered: List[CommandTask] = []
+        seen_commands: set[str] = set()
+        for task in launch_tasks:
+            normalized = task.command.strip()
+            if not normalized or normalized in seen_commands:
+                continue
+            tool = self._tool_from_command(normalized)
+            if allowed_tools and tool in gated_tool_names and tool not in allowed:
+                logger.debug(f"Skipping disallowed tool command: {tool} -> {normalized[:120]}")
+                continue
+            seen_commands.add(normalized)
+            filtered.append(task)
+
+        unique_cancel_ids = list(dict.fromkeys(cancel_task_ids))
+        return filtered, unique_cancel_ids, phase_action
+
+    async def _advance_phase(self, scan_id_str: str) -> None:
+        old_phase = self.scan_state.phase.value
+        advanced = self.scan_state.advance_phase()
+        if not advanced:
+            return
+        new_phase = self.scan_state.phase.value
+        logger.info(f"📍 Phase advanced: {old_phase} → {new_phase}")
+        if self.event_manager:
+            try:
+                await self.event_manager.emit_phase_advanced(
+                    old_phase=old_phase,
+                    new_phase=new_phase,
+                    scan_id=scan_id_str,
+                )
+            except Exception:
+                pass
+
+    @staticmethod
+    def _tool_from_command(command: str) -> str:
+        return command.split()[0] if command.strip() else "cmd"
+
+    def _record_command_result_to_scan_state(self, result: CommandResult) -> None:
+        tool = self._tool_from_command(result.command)
+        target = self._extract_target_from_command(result.command)
+        if result.timed_out:
+            status = "timeout"
+        elif result.exit_code == 0:
+            status = "success"
+        else:
+            status = "error"
+
+        signal = (result.stdout or result.stderr or "").strip()
+        summary = signal[:240] if signal else f"exit_code={result.exit_code}"
+        self.scan_state.record_tool_result(
+            tool=tool,
+            target=target,
+            status=status,
+            summary=summary,
+        )
+
+    @staticmethod
+    def _extract_target_from_command(command: str) -> str:
+        url_match = re.search(r'https?://[^\s\'"]+', command)
+        if url_match:
+            return url_match.group(0)
+        host_match = re.search(r'-[duh]\s+([^\s]+)', command)
+        if host_match:
+            return host_match.group(1)
+        return "unknown"
+
+    def _apply_scheduler_event_to_scan_state(self, event: SchedulerEvent) -> None:
+        if event.event_type == "task_started":
+            self.scan_state.start_task(event.task_id)
+            return
+        if event.event_type == "task_queued":
+            if event.task_id not in self.scan_state.active_tasks:
+                self.scan_state.queue_task(
+                    task_id=event.task_id,
+                    tool=event.tool,
+                    command=event.command,
+                )
+            return
+        if event.event_type == "task_completed":
+            self.scan_state.finish_task(event.task_id, "success")
+            return
+        if event.event_type == "task_timeout":
+            self.scan_state.finish_task(event.task_id, "timeout")
+            return
+        if event.event_type == "task_failed":
+            self.scan_state.finish_task(event.task_id, "failed")
+            return
+        if event.event_type == "task_cancelled":
+            self.scan_state.finish_task(event.task_id, "cancelled")
+
+    def _should_replan_on_scheduler_event(
+        self,
+        *,
+        event: SchedulerEvent,
+        scheduler: EventDrivenScheduler,
+        now_mono: float,
+        last_replan_mono: float,
+        cooldown_seconds: int,
+    ) -> bool:
+        if not scheduler.has_inflight():
+            return True
+
+        in_cooldown = (now_mono - last_replan_mono) < cooldown_seconds
+
+        if event.event_type in {"task_timeout", "task_failed", "task_cancelled"}:
+            return True
+
+        if event.event_type == "task_completed":
+            if self._is_high_signal_result(event.result):
+                return True
+            if in_cooldown:
+                return False
+            # If we have spare capacity and no queue, replan for fresh launches.
+            if scheduler.pending_count == 0 and scheduler.running_count < settings.global_tool_concurrency:
+                return True
+
+        return False
+
+    @staticmethod
+    def _is_high_signal_result(result: Optional[CommandResult]) -> bool:
+        if not result:
+            return False
+        corpus = f"{result.stdout}\n{result.stderr}".lower()
+        indicators = [
+            "vulnerable",
+            "sql injection",
+            "xss",
+            "rce",
+            "command injection",
+            "authentication bypass",
+            "admin panel",
+            "directory listing",
+            "credential",
+            "password",
+            "token",
+            "lfi",
+            "ssrf",
+        ]
+        return any(indicator in corpus for indicator in indicators)
 
     # ------------------------------------------------------------------
     # System prompt
@@ -417,8 +812,10 @@ class ManagerAgent:
             "   Think in ATTACK CHAINS: if X is exposed AND Y is also exposed, what does that mean together?",
             "   Example: Umbraco + IIS + exposed installer = potential RCE chain. phpMyAdmin + cPanel = credential reuse.",
             "3. PRIORITIZE: Rank targets by attack surface. Focus on what's most likely exploitable.",
-            "4. ACT: Output shell commands to run in the Docker sandbox (they execute in parallel).",
-            "   For every command, explain your rationale.",
+            "4. ACT: Output runtime actions using `actions[]` (preferred) and/or `commands[]` (legacy).",
+            "   Use `launch` to run commands, `cancel` to stop low-value running tasks,",
+            "   `wait` to defer, `advance` to move phase, `complete` when done.",
+            "   For every launch/cancel action, explain your rationale.",
             "   Be CREATIVE over repetitive: try one well-crafted payload per technique class",
             "   (reflected, stored, DOM-based, attribute breakout, event handler) rather than brute-forcing the same vector.",
             "5. ADAPT: If a command fails or a WAF blocks you, change approach entirely.",
@@ -435,6 +832,8 @@ class ManagerAgent:
             "<constraints>",
             "- Output MULTIPLE commands per iteration — they run concurrently.",
             "- Never repeat a command with identical arguments.",
+            "- Prefer `actions[]` over `commands[]` for event-driven orchestration.",
+            "- If a task is clearly low-value and better leads exist, emit a `cancel` action.",
             "- Timed-out commands: retry once with reduced scope. If it times out again, record a dead_end note.",
             "- Failed commands (non-zero exit, NOT timeout): diagnose the error message, fix the syntax/flags, and retry.",
             "  Do NOT ignore failed commands — they often indicate a misconfigured flag or quoting issue.",
@@ -543,9 +942,9 @@ class ManagerAgent:
         sections.extend([
             "<task>",
             f"Current phase: {phase.value.upper()}. Objective: {phase_objectives.get(phase, '')}",
-            "Based on the scan state above, output the most impactful commands for this phase.",
+            "Based on the scan state above, output the most impactful actions/commands for this phase.",
             "Prioritise breadth in RECON/ENUMERATION. Prioritise depth in VULN_SCAN/EXPLOITATION.",
-            "For each command, explain your rationale.",
+            "For each launch/cancel action, explain your rationale.",
             "Remember: you are relentless. Do not stop until you have exhausted every applicable technique.",
             "</task>",
         ])

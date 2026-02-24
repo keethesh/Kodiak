@@ -77,6 +77,24 @@ class ToolRecord:
 
 
 # ---------------------------------------------------------------------------
+# Task record (event-driven scheduler)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TaskRecord:
+    """State for one scheduled command task."""
+    task_id: str
+    tool: str
+    command: str
+    status: str  # queued | running | success | failed | timeout | cancelled
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_compact(self) -> str:
+        return f"{self.task_id}:{self.tool}:{self.status}:{self.command[:80]}"
+
+
+# ---------------------------------------------------------------------------
 # Finding record
 # ---------------------------------------------------------------------------
 
@@ -117,6 +135,9 @@ class ScanState:
     completed_tools: List[ToolRecord] = field(default_factory=list)
     phase_history: List[str] = field(default_factory=list)  # short decision log
     waf_detected: bool = False  # True when a WAF/CDN (e.g. Cloudflare) is confirmed
+    active_tasks: Dict[str, TaskRecord] = field(default_factory=dict)
+    pending_tasks: Dict[str, TaskRecord] = field(default_factory=dict)
+    last_replan_at: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -157,6 +178,39 @@ class ScanState:
                 tool=tool,
             )
         )
+
+    def queue_task(self, task_id: str, tool: str, command: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        record = TaskRecord(
+            task_id=task_id,
+            tool=tool,
+            command=command,
+            status="queued",
+            created_at=now,
+            updated_at=now,
+        )
+        self.pending_tasks[task_id] = record
+        self.active_tasks[task_id] = record
+
+    def start_task(self, task_id: str) -> None:
+        record = self.active_tasks.get(task_id)
+        if not record:
+            return
+        record.status = "running"
+        record.updated_at = datetime.now(timezone.utc).isoformat()
+        self.pending_tasks.pop(task_id, None)
+
+    def finish_task(self, task_id: str, status: str) -> None:
+        record = self.active_tasks.pop(task_id, None)
+        if not record:
+            self.pending_tasks.pop(task_id, None)
+            return
+        record.status = status
+        record.updated_at = datetime.now(timezone.utc).isoformat()
+        self.pending_tasks.pop(task_id, None)
+
+    def mark_replan(self) -> None:
+        self.last_replan_at = datetime.now(timezone.utc).isoformat()
 
     def advance_phase(self) -> bool:
         """Move to the next phase.  Returns False if already at REPORTING."""
@@ -217,11 +271,30 @@ class ScanState:
         else:
             sections.append("completed_tools: none yet")
 
+        if self.active_tasks:
+            active_lines = [task.to_compact() for task in list(self.active_tasks.values())[:10]]
+            sections.append(
+                f"active_tasks ({len(self.active_tasks)}):\n" + "\n".join(active_lines)
+            )
+        else:
+            sections.append("active_tasks: none")
+
+        if self.pending_tasks:
+            pending_lines = [task.to_compact() for task in list(self.pending_tasks.values())[:10]]
+            sections.append(
+                f"pending_tasks ({len(self.pending_tasks)}):\n" + "\n".join(pending_lines)
+            )
+        else:
+            sections.append("pending_tasks: none")
+
         # Phase transitions
         if self.phase_history:
             sections.append(
                 "phase_transitions:\n" + "\n".join(self.phase_history)
             )
+
+        if self.last_replan_at:
+            sections.append(f"last_replan_at: {self.last_replan_at}")
 
         # WAF/CDN flag — visible to manager so it can tune tool parameters
         if self.waf_detected:

@@ -136,6 +136,11 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.option("--agents", "-a", type=int, default=None, hidden=True)
 @click.option("--force-agents", is_flag=True, help="Allow agent count above KODIAK_MAX_AGENTS")
 @click.option(
+    "--event-scheduler/--no-event-scheduler",
+    default=None,
+    help="Enable non-blocking event-driven scheduling (default: config/env setting).",
+)
+@click.option(
     "--report-format",
     type=click.Choice(["json", "json+md"], case_sensitive=False),
     default="json+md",
@@ -157,6 +162,7 @@ def scan(
     project: Optional[str],
     agents: Optional[int],
     force_agents: bool,
+    event_scheduler: Optional[bool],
     report_format: str,
     report_path: Optional[str],
     role_strategy: str,
@@ -206,6 +212,8 @@ def scan(
         if project:
             console.print(f"📁 [bold]Project:[/bold] {project} [dim](prior knowledge will be loaded if project exists)[/dim]")
         console.print(f"👤 [bold]Architecture:[/bold] Manager-Worker (single brain, parallel tools)")
+        scheduler_mode = settings.event_scheduler_enabled if event_scheduler is None else bool(event_scheduler)
+        console.print(f"📡 [bold]Event Scheduler:[/bold] {'enabled' if scheduler_mode else 'disabled'}")
         if agents is not None:
             console.print("[yellow]Note: --agents is ignored in Manager-Worker mode.[/yellow]")
         if role_strategy != "role-hinted":
@@ -222,6 +230,7 @@ def scan(
             agent_count=1,
             role_strategy="role_hinted",
             force_agents=force_agents,
+            event_scheduler=event_scheduler,
             report_format=report_format.lower(),
             report_path=report_path,
             project_name=project,

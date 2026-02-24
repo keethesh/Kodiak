@@ -68,6 +68,10 @@ class KodiakSettings(BaseSettings):
     heavy_tool_parallel_limit: int = Field(default=2, alias="KODIAK_HEAVY_TOOL_PARALLEL_LIMIT")
     tool_scheduler: str = Field(default="queue", alias="KODIAK_TOOL_SCHEDULER")
     tool_queue_limit: int = Field(default=50, alias="KODIAK_TOOL_QUEUE_LIMIT")
+    event_scheduler_enabled: bool = Field(default=False, alias="KODIAK_EVENT_SCHEDULER")
+    event_scheduler_heartbeat_seconds: int = Field(default=30, alias="KODIAK_EVENT_HEARTBEAT_SECONDS")
+    event_scheduler_replan_cooldown_seconds: int = Field(default=8, alias="KODIAK_EVENT_REPLAN_COOLDOWN")
+    event_scheduler_max_queue: int = Field(default=50, alias="KODIAK_EVENT_MAX_QUEUE")
     enable_hive_mind: bool = Field(default=True, alias="KODIAK_ENABLE_HIVE_MIND")
     memory_enabled: bool = Field(default=True, alias="KODIAK_MEMORY_ENABLED")
     memory_central_enabled: bool = Field(default=True, alias="KODIAK_MEMORY_CENTRAL_ENABLED")
@@ -213,5 +217,10 @@ def validate_startup_config() -> None:
     logger.info(f"🛡️  Safety Checks: {settings.enable_safety_checks}")
     logger.info(f"🐝 Hive Mind: {settings.enable_hive_mind}")
     logger.info(f"⚙️  Tool Timeout: {settings.tool_timeout}s")
+    logger.info(
+        f"📡 Event Scheduler: {'enabled' if settings.event_scheduler_enabled else 'disabled'} "
+        f"(heartbeat={settings.event_scheduler_heartbeat_seconds}s, "
+        f"cooldown={settings.event_scheduler_replan_cooldown_seconds}s)"
+    )
     logger.info(f"🧠 Insight Memory: {'enabled' if settings.memory_enabled else 'disabled'}")
     logger.info(f"👥 Max Agents: {settings.max_concurrent_agents}")

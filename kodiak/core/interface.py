@@ -25,6 +25,7 @@ class _RunState:
     agent_count: int
     role_strategy: str
     force_agents: bool
+    event_scheduler: Optional[bool]
     report_format: str
     report_path: Optional[str]
     project_name: Optional[str] = None
@@ -72,6 +73,7 @@ class CoreInterface:
         agent_count: Optional[int] = None,
         role_strategy: str = "role_hinted",
         force_agents: bool = False,
+        event_scheduler: Optional[bool] = None,
         report_format: str = "json+md",
         report_path: Optional[str] = None,
         project_name: Optional[str] = None,
@@ -90,6 +92,7 @@ class CoreInterface:
             agent_count=requested_agents,
             role_strategy=role_strategy,
             force_agents=force_agents,
+            event_scheduler=event_scheduler,
             report_format=report_format,
             report_path=report_path,
             project_name=project_name,
@@ -163,6 +166,7 @@ class CoreInterface:
                     agent_count=state.agent_count,
                     role_strategy=state.role_strategy,
                     force_agents=state.force_agents,
+                    event_scheduler=state.event_scheduler,
                     report_format=state.report_format,
                     report_path=state.report_path,
                     project_name=state.project_name,
