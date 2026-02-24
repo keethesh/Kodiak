@@ -29,7 +29,7 @@ The current `LLMProvider` enum will be removed entirely. Provider information wi
 ```python
 class KodiakSettings(BaseSettings):
     # LLM Configuration - Simplified
-    llm_model: str = Field(default="gemini/gemini-3-pro-preview", env="KODIAK_LLM_MODEL")
+    llm_model: str = Field(default="gemini/gemini-3.1-pro-preview", env="KODIAK_LLM_MODEL")
     llm_provider: Optional[str] = Field(default=None, env="KODIAK_LLM_PROVIDER")  # Optional override
     llm_temperature: float = Field(default=0.1, env="KODIAK_LLM_TEMPERATURE")
     llm_max_tokens: int = Field(default=4096, env="KODIAK_LLM_MAX_TOKENS")
@@ -127,7 +127,7 @@ Update `kodiak config` command to:
 #### Environment Variable Updates
 ```bash
 # New simplified configuration
-KODIAK_LLM_MODEL=gemini/gemini-3-pro-preview
+KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 GOOGLE_API_KEY=your_api_key
 
 # Optional provider override for edge cases
@@ -234,7 +234,7 @@ def get_model_info(self) -> Dict[str, Any]:
 ### Error Message Templates
 ```python
 ERROR_MESSAGES = {
-    "missing_model": "KODIAK_LLM_MODEL is required. Example: gemini/gemini-3-pro-preview",
+    "missing_model": "KODIAK_LLM_MODEL is required. Example: gemini/gemini-3.1-pro-preview",
     "missing_api_key": "API key required for provider '{provider}': set {env_var}",
     "inference_failed": "Cannot infer provider from '{model}'. Set KODIAK_LLM_PROVIDER explicitly or use format 'provider/model'",
     "invalid_format": "Invalid model format '{model}'. Check LiteLLM documentation for supported formats: https://docs.litellm.ai/docs/providers"

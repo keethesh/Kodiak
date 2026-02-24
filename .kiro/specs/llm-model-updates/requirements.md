@@ -9,7 +9,7 @@ Kodiak's LLM configuration should be simplified to allow users to directly input
 - **LLM**: Large Language Model - AI models used for natural language processing and generation
 - **Kodiak**: The AI-powered penetration testing suite
 - **LiteLLM**: The multi-provider LLM integration library used by Kodiak that handles provider routing
-- **Model_String**: LiteLLM format model identifier (e.g., `gemini/gemini-3-pro-preview`)
+- **Model_String**: LiteLLM format model identifier (e.g., `gemini/gemini-3.1-pro-preview`)
 - **API_Key**: Authentication credential for the LLM provider
 
 ## Requirements
@@ -42,7 +42,7 @@ Kodiak's LLM configuration should be simplified to allow users to directly input
 
 #### Acceptance Criteria
 
-1. THE System documentation SHALL include examples for Gemini 3 models (gemini/gemini-3-pro-preview, gemini/gemini-3-flash-preview)
+1. THE System documentation SHALL include examples for Gemini 3 models (gemini/gemini-3.1-pro-preview, gemini/gemini-3-flash-preview)
 2. THE System documentation SHALL include examples for latest OpenAI models
 3. THE System documentation SHALL include examples for Claude 4.5 models
 4. THE System documentation SHALL link to LiteLLM's model documentation for the full list of supported models

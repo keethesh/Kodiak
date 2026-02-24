@@ -61,7 +61,7 @@ Kodiak uses [LiteLLM](https://docs.litellm.ai/) for unified access to multiple L
 Use the LiteLLM format: `provider/model-name`
 ```bash
 # Examples
-KODIAK_LLM_MODEL=gemini/gemini-3-pro-preview
+KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 KODIAK_LLM_MODEL=openai/gpt-5
 KODIAK_LLM_MODEL=anthropic/claude-4.5-sonnet
 KODIAK_LLM_MODEL=ollama/llama3.1:70b
@@ -96,7 +96,7 @@ kodiak tui --debug
 ### LLM Configuration Examples
 ```bash
 # Gemini 3 Pro Preview (Recommended - Latest model with best security analysis)
-export KODIAK_LLM_MODEL=gemini/gemini-3-pro-preview
+export KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
 export GOOGLE_API_KEY=your_google_api_key
 
 # Gemini 1.5 Pro (Stable - Excellent for complex reasoning)
@@ -159,7 +159,7 @@ print('Available skills:', list(registry.skills.keys()))
 ## Environment Variables
 
 ### LLM Configuration
-- `KODIAK_LLM_MODEL`: LiteLLM model string (e.g., gemini/gemini-3-pro-preview, openai/gpt-5)
+- `KODIAK_LLM_MODEL`: LiteLLM model string (e.g., gemini/gemini-3.1-pro-preview, openai/gpt-5)
 - `GOOGLE_API_KEY`: Google API key for Gemini models
 - `OPENAI_API_KEY`: OpenAI API key for GPT models
 - `ANTHROPIC_API_KEY`: Anthropic API key for Claude models
