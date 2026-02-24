@@ -197,10 +197,7 @@ async def dispatch_batch(
             try:
                 await event_manager.emit_tool_complete(
                     tool_name=task.tool_name,
-                    target=str(target),
-                    success=result.success,
-                    output=result.output[:500] if result.output else "",
-                    agent_id="manager",
+                    result=result,
                     scan_id=scan_id,
                 )
             except Exception:

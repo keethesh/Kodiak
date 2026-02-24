@@ -28,18 +28,6 @@ class ScanStatus(StrEnum):
     FAILED = "failed"
 
 
-class ConfidenceLevel(StrEnum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
-class VerificationStatus(StrEnum):
-    UNVERIFIED = "unverified"
-    VERIFIED = "verified"
-    CONFLICTED = "conflicted"
-
-
 class VerificationQueueStatus(StrEnum):
     PENDING = "pending"
     RESOLVED = "resolved"
@@ -63,9 +51,6 @@ class Project(SQLModel, table=True):
     tasks: List["Task"] = Relationship(back_populates="project")
     attempts: List["Attempt"] = Relationship(back_populates="project")
     insights: List["InsightMemory"] = Relationship(back_populates="project")
-    blackboard_events: List["BlackboardEvent"] = Relationship(back_populates="project")
-    blackboard_facts: List["BlackboardFact"] = Relationship(back_populates="project")
-    blackboard_edges: List["BlackboardEdge"] = Relationship(back_populates="project")
     verification_items: List["VerificationQueue"] = Relationship(back_populates="project")
 
 
@@ -138,75 +123,6 @@ class InsightMemory(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
     project: Project = Relationship(back_populates="insights")
-
-
-class BlackboardEvent(SQLModel, table=True):
-    id: UUID = Field(default_factory=uuid4, primary_key=True)
-    project_id: UUID = Field(foreign_key="project.id")
-    scan_id: Optional[UUID] = Field(default=None, foreign_key="scanjob.id")
-
-    agent_id: str = Field(index=True)
-    event_type: str = Field(index=True)
-    entity_type: str = Field(index=True)
-    entity_key: str = Field(index=True)
-    payload: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
-    confidence: ConfidenceLevel = Field(default=ConfidenceLevel.MEDIUM)
-    status: str = Field(default="observed", index=True)
-
-    created_at: datetime = Field(default_factory=utc_now, index=True)
-
-    project: Project = Relationship(back_populates="blackboard_events")
-
-
-class BlackboardFact(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint("scan_id", "entity_type", "entity_key", name="uq_blackboard_fact_scan_entity"),
-    )
-
-    id: UUID = Field(default_factory=uuid4, primary_key=True)
-    project_id: UUID = Field(foreign_key="project.id")
-    scan_id: Optional[UUID] = Field(default=None, foreign_key="scanjob.id")
-
-    entity_type: str = Field(index=True)
-    entity_key: str = Field(index=True)
-    canonical: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
-    confidence: ConfidenceLevel = Field(default=ConfidenceLevel.MEDIUM)
-    verification_status: VerificationStatus = Field(default=VerificationStatus.UNVERIFIED, index=True)
-    last_event_id: Optional[UUID] = Field(default=None, foreign_key="blackboardevent.id")
-
-    updated_at: datetime = Field(default_factory=utc_now, index=True)
-
-    project: Project = Relationship(back_populates="blackboard_facts")
-
-
-class BlackboardEdge(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint(
-            "scan_id",
-            "src_type",
-            "src_key",
-            "relation",
-            "dst_type",
-            "dst_key",
-            name="uq_blackboard_edge_scan_rel",
-        ),
-    )
-
-    id: UUID = Field(default_factory=uuid4, primary_key=True)
-    project_id: UUID = Field(foreign_key="project.id")
-    scan_id: Optional[UUID] = Field(default=None, foreign_key="scanjob.id")
-
-    src_type: str = Field(index=True)
-    src_key: str = Field(index=True)
-    relation: str = Field(index=True)
-    dst_type: str = Field(index=True)
-    dst_key: str = Field(index=True)
-    confidence: ConfidenceLevel = Field(default=ConfidenceLevel.MEDIUM)
-    last_event_id: Optional[UUID] = Field(default=None, foreign_key="blackboardevent.id")
-
-    updated_at: datetime = Field(default_factory=utc_now, index=True)
-
-    project: Project = Relationship(back_populates="blackboard_edges")
 
 
 class VerificationQueue(SQLModel, table=True):

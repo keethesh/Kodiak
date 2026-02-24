@@ -81,11 +81,11 @@ All security tools run in isolated Docker containers:
 - **File System Isolation**: Temporary file systems
 - **Safety Controls**: Built-in approval workflows
 
-### Multi-Agent Coordination
-- **Role Specialization**: Agents have specific security focuses
-- **Knowledge Sharing**: Shared discovery and findings
-- **Conflict Prevention**: Hive Mind prevents duplicate work
-- **Persistent Memory**: Database-backed execution state
+### Manager-Worker Execution
+- **Single LLM Brain**: One ManagerAgent drives the entire engagement
+- **Batch Dispatch**: Manager dispatches parallel worker batches per iteration
+- **Phased Pipeline**: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING
+- **Structured State**: ScanState replaces blackboard — bounded context per LLM call
 
 ### Skills System
 Dynamic skill loading provides specialized knowledge:

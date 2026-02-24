@@ -53,9 +53,9 @@ kodiak --target ./my-application
 - **Real-time Updates**: Live monitoring of agent activities and findings
 - **Multi-view Dashboard**: Dedicated screens for projects, agents, and reporting
 
-### 🤖 AI Agent Coordination
-- **Multi-Agent System**: Specialized AI agents working together
-- **Hive Mind Architecture**: Shared knowledge and coordinated execution
+### 🤖 AI-Powered Execution
+- **Phased Manager-Worker**: Single LLM brain drives parallel tool workers
+- **Structured Scanning**: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING
 - **Persistent State**: SQLite-backed sessions with pause/resume capability
 - **Intelligent Reasoning**: LLM-powered decision making and adaptation
 
@@ -147,16 +147,15 @@ kodiak api --port 8000
 
 ## 🏗️ Architecture
 
-### Multi-Agent System
-- **Reconnaissance Agent**: Network discovery and enumeration
-- **Web Agent**: Application testing and browser automation
-- **Exploitation Agent**: Vulnerability validation and PoC generation
-- **Analysis Agent**: Finding correlation and reporting
+### Manager-Worker Architecture
+- **Single LLM Brain**: One Manager makes all decisions across the engagement
+- **Parallel Workers**: Stateless tool executors run concurrently per batch
+- **Phased Execution**: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING
+- **Per-Tool Concurrency**: Limits prevent WAF tripping and resource exhaustion
 
-### Hive Mind Coordination
-- **Shared Knowledge**: Agents share discoveries in real-time
-- **Command Deduplication**: Prevents redundant tool execution
-- **Intelligent Routing**: Tasks assigned to most suitable agents
+### Execution State
+- **Structured Scan State**: Bounded context replaces unbounded conversation history
+- **Token Efficient**: ~100-150K tokens per scan (vs 400K+ with multi-agent)
 - **Persistent Memory**: Complete audit trail and session state
 
 ### Database Schema

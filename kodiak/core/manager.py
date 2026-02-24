@@ -173,6 +173,22 @@ class ManagerAgent:
                 for tc in tool_calls:
                     fn = tc.get("function", {})
                     if fn.get("name") == "complete_scan":
+                        if self.scan_state.phase != ScanPhase.REPORTING:
+                            logger.warning(
+                                f"complete_scan rejected in phase '{self.scan_state.phase.value}' — "
+                                "manager must advance through all phases first"
+                            )
+                            history.append({
+                                "role": "user",
+                                "content": (
+                                    f"<rejection>complete_scan rejected: current phase is "
+                                    f"'{self.scan_state.phase.value}'. You must advance through all "
+                                    "phases (recon → enumeration → vuln_scan → exploitation → reporting) "
+                                    "by saying 'ADVANCE_PHASE' in each phase before calling complete_scan.</rejection>"
+                                ),
+                            })
+                            break  # reject, fall through to dispatch remaining tool calls
+
                         args = self._parse_args(fn.get("arguments"))
                         summary = args.get("summary", "Scan completed")
 
@@ -280,7 +296,7 @@ class ManagerAgent:
                 try:
                     await self.event_manager.emit_agent_thinking(
                         agent_id="manager",
-                        iteration=iteration,
+                        message=f"Iteration {iteration}",
                         scan_id=None,
                     )
                 except Exception:
