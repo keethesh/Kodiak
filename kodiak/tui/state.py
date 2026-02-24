@@ -189,10 +189,15 @@ class AppState:
             id=str(project.id),
             name=project.name,
             description=project.description or "",
-            target=project.target or "",
+            target=getattr(project, "target", ""),
             created_at=project.created_at,
-            updated_at=project.updated_at
+            updated_at=getattr(project, "updated_at", project.created_at)
         )
+        self.projects[project_state.id] = project_state
+        self.emit("project_added", project_state)
+
+    def add_project_state(self, project_state: "ProjectState"):
+        """Add a ProjectState directly (e.g., from modal before DB commit)."""
         self.projects[project_state.id] = project_state
         self.emit("project_added", project_state)
     
@@ -202,8 +207,8 @@ class AppState:
             project_state = self.projects[str(project.id)]
             project_state.name = project.name
             project_state.description = project.description or ""
-            project_state.target = project.target or ""
-            project_state.updated_at = project.updated_at
+            project_state.target = getattr(project, "target", project_state.target)
+            project_state.updated_at = getattr(project, "updated_at", project.created_at)
             self.emit("project_updated", project_state)
     
     def remove_project(self, project_id: str):

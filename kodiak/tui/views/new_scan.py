@@ -270,7 +270,7 @@ class NewScanModal(ModalScreen):
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
             )
-            app_state.add_project(new_proj)
+            app_state.add_project_state(project_state)
 
         # Kick off scan via core_bridge
         cb = self.app.core_bridge

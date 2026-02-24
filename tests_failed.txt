@@ -1,0 +1,336 @@
+...............F..FFFFFFF.F.FF.................F.F...............F...... [ 67%]
+........F.F.F........FFFFFFFFFFFFFF                                      [100%]
+================================== FAILURES ===================================
+_ TestDatabaseModelConsistencyProperties.test_database_model_consistency_error_handling _
+tests\test_database_model_consistency.py:314: in execute
+    raise SQLAlchemyError("Query execution failed")
+E   sqlalchemy.exc.SQLAlchemyError: Query execution failed
+
+During handling of the above exception, another exception occurred:
+tests\test_database_model_consistency.py:328: in test_database_model_consistency_error_handling
+    await node.get(error_session, test_nodes[0].id)
+kodiak\core\error_handling.py:301: in async_wrapper
+    return await func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+kodiak\database\crud.py:160: in get
+    raise ErrorHandler.handle_database_error("get_node", e, {
+E   kodiak.core.error_handling.DatabaseError: Database error during get_node: Query execution failed
+---------------------------- Captured stderr call -----------------------------
+2026-02-24 22:23:45.816 | ERROR    | kodiak.core.error_handling:log_error:175 - HIGH SEVERITY: Database connection failed during create_node
+2026-02-24 22:23:45.818 | WARNING  | kodiak.core.error_handling:log_error:177 - MEDIUM SEVERITY: Database error during get_node: Query execution failed
+_ TestErrorHandlingProperties.test_error_handling_consistency_network_errors __
+tests\test_error_handling.py:108: in test_error_handling_consistency_network_errors
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_error_handling.py:95: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+_ TestErrorHandlingProperties.test_error_handling_consistency_validation_errors _
+tests\test_error_handling.py:147: in test_error_handling_consistency_validation_errors
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_error_handling.py:95: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+_ TestErrorHandlingProperties.test_error_handling_consistency_permission_errors _
+tests\test_error_handling.py:178: in test_error_handling_consistency_permission_errors
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_error_handling.py:95: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+_ TestErrorHandlingProperties.test_error_handling_consistency_without_event_manager _
+tests\test_error_handling.py:210: in test_error_handling_consistency_without_event_manager
+    tool = GenericErrorTool(event_manager=None, error_message="No event manager error")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_error_handling.py:67: in __init__
+    super().__init__(event_manager)
+E   TypeError: BaseTool.__init__() takes 1 positional argument but 2 were given
+_ TestErrorHandlingProperties.test_error_handling_consistency_multiple_error_types _
+tests\test_error_handling.py:237: in test_error_handling_consistency_multiple_error_types
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_error_handling.py:95: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+______ TestErrorHandlingProperties.test_error_handling_preserves_context ______
+tests\test_error_handling.py:273: in test_error_handling_preserves_context
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_error_handling.py:95: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+_____ TestErrorHandlingProperties.test_error_handling_concurrent_failures _____
+tests\test_error_handling.py:312: in test_error_handling_concurrent_failures
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_error_handling.py:95: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+____ TestEventBroadcastingProperties.test_event_broadcasting_with_failures ____
+tests\test_event_broadcasting.py:131: in test_event_broadcasting_with_failures
+    assert mock_tui_bridge.send_tool_update.call_count == 2
+E   AssertionError: assert 0 == 2
+E    +  where 0 = <AsyncMock name='mock.send_tool_update' id='2586000831440'>.call_count
+E    +    where <AsyncMock name='mock.send_tool_update' id='2586000831440'> = <MagicMock id='2586000832144'>.send_tool_update
+---------------------------- Captured stderr call -----------------------------
+2026-02-24 22:23:47.571 | INFO     | kodiak.api.events:__init__:46 - TUIEventManager initialized
+2026-02-24 22:23:47.586 | INFO     | kodiak.api.events:emit_tool_start:104 - Tool sqlmap started by agent agent_002 on target http://example.com
+2026-02-24 22:23:47.587 | ERROR    | kodiak.api.events:emit_tool_complete:160 - Tool sqlmap failed: Connection timeout
+______ TestEventBroadcastingProperties.test_discovery_event_broadcasting ______
+tests\test_event_broadcasting.py:190: in test_discovery_event_broadcasting
+    await event_manager.emit_discovery(discovery_data, scan_id)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'TUIEventManager' object has no attribute 'emit_discovery'
+---------------------------- Captured stderr call -----------------------------
+2026-02-24 22:23:47.672 | INFO     | kodiak.api.events:__init__:46 - TUIEventManager initialized
+___ TestEventBroadcastingProperties.test_event_broadcasting_multiple_tools ____
+tests\test_event_broadcasting.py:223: in test_event_broadcasting_multiple_tools
+    assert mock_tui_bridge.send_tool_update.call_count == 6
+E   AssertionError: assert 0 == 6
+E    +  where 0 = <AsyncMock name='mock.send_tool_update' id='2586000635664'>.call_count
+E    +    where <AsyncMock name='mock.send_tool_update' id='2586000635664'> = <MagicMock id='2586000632976'>.send_tool_update
+---------------------------- Captured stderr call -----------------------------
+2026-02-24 22:23:47.723 | INFO     | kodiak.api.events:__init__:46 - TUIEventManager initialized
+2026-02-24 22:23:47.735 | INFO     | kodiak.api.events:emit_tool_start:104 - Tool nmap started by agent agent_001 on target 192.168.1.1
+2026-02-24 22:23:47.736 | INFO     | kodiak.api.events:emit_tool_complete:162 - Tool nmap completed
+2026-02-24 22:23:47.736 | INFO     | kodiak.api.events:emit_tool_start:104 - Tool nuclei started by agent agent_002 on target example.com
+2026-02-24 22:23:47.736 | INFO     | kodiak.api.events:emit_tool_complete:162 - Tool nuclei completed
+2026-02-24 22:23:47.736 | INFO     | kodiak.api.events:emit_tool_start:104 - Tool sqlmap started by agent agent_003 on target http://test.com
+2026-02-24 22:23:47.737 | INFO     | kodiak.api.events:emit_tool_complete:162 - Tool sqlmap completed
+________________ TestResponseSchema.test_kodiak_response_full _________________
+tests\test_multi_agent_runtime.py:126: in test_kodiak_response_full
+    discoveries=Discovery(
+E   pydantic_core._pydantic_core.ValidationError: 2 validation errors for Discovery
+E   ports
+E     Input should be a valid list [type=list_type, input_value={'target.com': [80, 443]}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.12/v/list_type
+E   technologies
+E     Input should be a valid list [type=list_type, input_value={'target.com': ['Apache 2.4']}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.12/v/list_type
+______________ TestResponseSchema.test_kodiak_response_from_json ______________
+tests\test_multi_agent_runtime.py:184: in test_kodiak_response_from_json
+    resp = KodiakResponse.model_validate(data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic_core._pydantic_core.ValidationError: 2 validation errors for KodiakResponse
+E   discoveries.ports
+E     Input should be a valid list [type=list_type, input_value={}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.12/v/list_type
+E   discoveries.technologies
+E     Input should be a valid list [type=list_type, input_value={}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.12/v/list_type
+____ TestManagerAgent.test_system_prompt_omits_prior_knowledge_when_empty _____
+tests\test_multi_agent_runtime.py:349: in test_system_prompt_omits_prior_knowledge_when_empty
+    assert "<prior_knowledge>" not in prompt
+E   AssertionError: assert '<prior_knowledge>' not in '<role>\nYou...ue.\n</task>'
+E     
+E     '<prior_knowledge>' is contained here:
+E       rity.
+E       
+E       If <prior_knowledge> is present, treat attack_hint targets as highest priority.
+E     ?    +++++++++++++++++
+E       Known hosts with attack_hints often have sibling vulnerabilities....
+E     
+E     ...Full output truncated (98 lines hidden), use '-vv' to show
+---------------------------- Captured stderr call -----------------------------
+2026-02-24 22:23:48.288 | INFO     | kodiak.api.events:__init__:46 - TUIEventManager initialized
+_ TestManagerPriorKnowledge.test_system_prompt_omits_prior_knowledge_when_empty _
+tests\test_multi_agent_runtime.py:614: in test_system_prompt_omits_prior_knowledge_when_empty
+    assert "<prior_knowledge>" not in prompt
+E   AssertionError: assert '<prior_knowledge>' not in '<role>\nYou...ue.\n</task>'
+E     
+E     '<prior_knowledge>' is contained here:
+E       rity.
+E       
+E       If <prior_knowledge> is present, treat attack_hint targets as highest priority.
+E     ?    +++++++++++++++++
+E       Known hosts with attack_hints often have sibling vulnerabilities....
+E     
+E     ...Full output truncated (98 lines hidden), use '-vv' to show
+---------------------------- Captured stderr call -----------------------------
+2026-02-24 22:23:48.391 | INFO     | kodiak.api.events:__init__:46 - TUIEventManager initialized
+________ test_terminal_execute_does_not_treat_equals_as_env_assignment ________
+tests\test_mvp_runtime_regressions.py:60: in test_terminal_execute_does_not_treat_equals_as_env_assignment
+    assert result.success is True
+E   assert False is True
+E    +  where False = ToolResult(success=False, output="Command execution failed: FakeExecutor.run_command() got an unexpected keyword argument 'cap_add'", data={}, error="FakeExecutor.run_command() got an unexpected keyword argument 'cap_add'").success
+__________ test_terminal_execute_chained_export_is_executed_normally __________
+tests\test_mvp_runtime_regressions.py:110: in test_terminal_execute_chained_export_is_executed_normally
+    assert result.success is True
+E   assert False is True
+E    +  where False = ToolResult(success=False, output="Command execution failed: FakeExecutor.run_command() got an unexpected keyword argument 'cap_add'", data={}, error="FakeExecutor.run_command() got an unexpected keyword argument 'cap_add'").success
+_ TestToolExecutionProperties.test_tool_execution_returns_structured_results __
+tests\test_tool_execution.py:94: in test_tool_execution_returns_structured_results
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_execution.py:81: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+____ TestToolExecutionProperties.test_tool_execution_without_event_manager ____
+tests\test_tool_execution.py:135: in test_tool_execution_without_event_manager
+    tool = MockTool(event_manager=None)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: BaseTool.__init__() got an unexpected keyword argument 'event_manager'
+______ TestToolExecutionProperties.test_tool_execution_with_dict_return _______
+tests\test_tool_execution.py:161: in test_tool_execution_with_dict_return
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_execution.py:81: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+_______ TestToolExecutionProperties.test_tool_execution_error_handling ________
+tests\test_tool_execution.py:192: in test_tool_execution_error_handling
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_execution.py:81: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+_______ TestToolExecutionProperties.test_tool_execution_multiple_calls ________
+tests\test_tool_execution.py:224: in test_tool_execution_multiple_calls
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_execution.py:81: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+____ TestToolExecutionProperties.test_tool_execution_parameter_validation _____
+tests\test_tool_execution.py:260: in test_tool_execution_parameter_validation
+    event_manager, mock_tui_bridge = self.create_test_fixtures()
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_execution.py:81: in create_test_fixtures
+    event_manager = EventManager(mock_tui_bridge)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TUIEventManager.__init__() takes 1 positional argument but 2 were given
+_ TestToolRegistrationProperties.test_tool_registration_validation_complete_tools _
+tests\test_tool_registration.py:127: in test_tool_registration_validation_complete_tools
+    inventory = self.create_test_inventory()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_registration.py:110: in create_test_inventory
+    self.original_tools = ToolInventory._tools.copy()
+                          ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'ToolInventory' has no attribute '_tools'
+_ TestToolRegistrationProperties.test_tool_registration_validation_incomplete_tools _
+tests\test_tool_registration.py:165: in test_tool_registration_validation_incomplete_tools
+    inventory = self.create_test_inventory()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_registration.py:110: in create_test_inventory
+    self.original_tools = ToolInventory._tools.copy()
+                          ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'ToolInventory' has no attribute '_tools'
+_ TestToolRegistrationProperties.test_tool_registration_validation_abstract_tools _
+tests\test_tool_registration.py:199: in test_tool_registration_validation_abstract_tools
+    inventory = self.create_test_inventory()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_registration.py:110: in create_test_inventory
+    self.original_tools = ToolInventory._tools.copy()
+                          ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'ToolInventory' has no attribute '_tools'
+_ TestToolRegistrationProperties.test_tool_registration_validation_broken_tools _
+tests\test_tool_registration.py:229: in test_tool_registration_validation_broken_tools
+    inventory = self.create_test_inventory()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_registration.py:110: in create_test_inventory
+    self.original_tools = ToolInventory._tools.copy()
+                          ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'ToolInventory' has no attribute '_tools'
+_ TestToolRegistrationProperties.test_tool_registration_validation_multiple_tools _
+tests\test_tool_registration.py:259: in test_tool_registration_validation_multiple_tools
+    inventory = self.create_test_inventory()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_registration.py:110: in create_test_inventory
+    self.original_tools = ToolInventory._tools.copy()
+                          ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'ToolInventory' has no attribute '_tools'
+_ TestToolRegistrationProperties.test_tool_registration_validation_interface_compliance _
+tests\test_tool_registration.py:303: in test_tool_registration_validation_interface_compliance
+    inventory = self.create_test_inventory()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_registration.py:110: in create_test_inventory
+    self.original_tools = ToolInventory._tools.copy()
+                          ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'ToolInventory' has no attribute '_tools'
+_ TestToolRegistrationProperties.test_tool_registration_validation_duplicate_names _
+tests\test_tool_registration.py:344: in test_tool_registration_validation_duplicate_names
+    inventory = self.create_test_inventory()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_registration.py:110: in create_test_inventory
+    self.original_tools = ToolInventory._tools.copy()
+                          ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'ToolInventory' has no attribute '_tools'
+_ TestToolRegistrationProperties.test_tool_registration_validation_execution_context _
+tests\test_tool_registration.py:383: in test_tool_registration_validation_execution_context
+    inventory = self.create_test_inventory()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_tool_registration.py:110: in create_test_inventory
+    self.original_tools = ToolInventory._tools.copy()
+                          ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'ToolInventory' has no attribute '_tools'
+============================== warnings summary ===============================
+tests/test_asset_discovery_persistence.py: 9 warnings
+tests/test_database_model_consistency.py: 9 warnings
+tests/test_error_handling.py: 7 warnings
+tests/test_event_broadcasting.py: 5 warnings
+tests/test_event_scheduler.py: 2 warnings
+tests/test_multi_agent_runtime.py: 5 warnings
+tests/test_mvp_runtime_regressions.py: 11 warnings
+tests/test_tool_execution.py: 6 warnings
+tests/test_tool_registration.py: 8 warnings
+  C:\Users\keeth\PycharmProjects\Kodiak\.venv\Lib\site-packages\pytest_asyncio\plugin.py:761: DeprecationWarning: The event_loop fixture provided by pytest-asyncio has been redefined in
+  C:\Users\keeth\PycharmProjects\Kodiak\tests\conftest.py:30
+  Replacing the event_loop fixture with a custom implementation is deprecated
+  and will lead to errors in the future.
+  If you want to request an asyncio event loop with a scope other than function
+  scope, use the "scope" argument to the asyncio mark when marking the tests.
+  If you want to return different types of event loops, use the event_loop_policy
+  fixture.
+  
+    warnings.warn(
+
+tests/test_multi_agent_runtime.py: 2 warnings
+tests/test_mvp_runtime_regressions.py: 15 warnings
+  C:\Users\keeth\PycharmProjects\Kodiak\kodiak\core\tools\base.py:71: PydanticDeprecatedSince20: The `dict` method is deprecated; use `model_dump` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    kwargs.update(validated_args.dict())
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_database_model_consistency.py::TestDatabaseModelConsistencyProperties::test_database_model_consistency_error_handling
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_network_errors
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_validation_errors
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_permission_errors
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_without_event_manager
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_consistency_multiple_error_types
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_preserves_context
+FAILED tests/test_error_handling.py::TestErrorHandlingProperties::test_error_handling_concurrent_failures
+FAILED tests/test_event_broadcasting.py::TestEventBroadcastingProperties::test_event_broadcasting_with_failures
+FAILED tests/test_event_broadcasting.py::TestEventBroadcastingProperties::test_discovery_event_broadcasting
+FAILED tests/test_event_broadcasting.py::TestEventBroadcastingProperties::test_event_broadcasting_multiple_tools
+FAILED tests/test_multi_agent_runtime.py::TestResponseSchema::test_kodiak_response_full
+FAILED tests/test_multi_agent_runtime.py::TestResponseSchema::test_kodiak_response_from_json
+FAILED tests/test_multi_agent_runtime.py::TestManagerAgent::test_system_prompt_omits_prior_knowledge_when_empty
+FAILED tests/test_multi_agent_runtime.py::TestManagerPriorKnowledge::test_system_prompt_omits_prior_knowledge_when_empty
+FAILED tests/test_mvp_runtime_regressions.py::test_terminal_execute_does_not_treat_equals_as_env_assignment
+FAILED tests/test_mvp_runtime_regressions.py::test_terminal_execute_chained_export_is_executed_normally
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_returns_structured_results
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_without_event_manager
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_with_dict_return
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_error_handling
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_multiple_calls
+FAILED tests/test_tool_execution.py::TestToolExecutionProperties::test_tool_execution_parameter_validation
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_complete_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_incomplete_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_abstract_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_broken_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_multiple_tools
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_interface_compliance
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_duplicate_names
+FAILED tests/test_tool_registration.py::TestToolRegistrationProperties::test_tool_registration_validation_execution_context
+31 failed, 76 passed, 79 warnings in 5.70s
