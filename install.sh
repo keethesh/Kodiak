@@ -558,6 +558,7 @@ verify_toolbox_tools() {
         ffuf
         whatweb
         sqlmap
+        wpscan
         commix
         searchsploit
     )
@@ -643,7 +644,7 @@ setup_docker() {
 
             # Validate critical tools expected by the agent loop.
             if ! verify_toolbox_tools "ghcr.io/keethesh/kodiak-toolbox:latest"; then
-                print_error "Toolbox image is missing required tools (nmap/nuclei/subfinder/httpx/katana/ffuf/whatweb/sqlmap/commix/searchsploit)."
+                print_error "Toolbox image is missing required tools (nmap/nuclei/subfinder/httpx/katana/ffuf/whatweb/sqlmap/wpscan/commix/searchsploit)."
                 print_status "Rebuild with: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
                 return 1
             fi

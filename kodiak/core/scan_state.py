@@ -116,6 +116,7 @@ class ScanState:
     findings: List[FindingRecord] = field(default_factory=list)
     completed_tools: List[ToolRecord] = field(default_factory=list)
     phase_history: List[str] = field(default_factory=list)  # short decision log
+    waf_detected: bool = False  # True when a WAF/CDN (e.g. Cloudflare) is confirmed
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -221,6 +222,10 @@ class ScanState:
             sections.append(
                 "phase_transitions:\n" + "\n".join(self.phase_history)
             )
+
+        # WAF/CDN flag — visible to manager so it can tune tool parameters
+        if self.waf_detected:
+            sections.append("waf_detected: true")
 
         return "\n\n".join(sections)
 

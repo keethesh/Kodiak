@@ -20,6 +20,7 @@ class NucleiTool(KodiakTool):
     name = "nuclei"
     description = "Fast and customizable vulnerability scanner based on simple YAML templates. Detects CVEs, misconfigurations, and security issues."
     args_schema = NucleiArgs
+    execution_timeout = 900  # full template run against a target can take 15+ min
 
     @property
     def parameters_schema(self) -> Dict[str, Any]:

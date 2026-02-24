@@ -9,6 +9,7 @@ return a structured ``WorkerResult``.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -75,6 +76,12 @@ async def execute_worker_task(
     This is the core worker function — no LLM, no DB writes, no coordination.
     """
     target = task.args.get("target", task.args.get("url", task.args.get("domain", "unknown")))
+    # Fallback for system_execute: extract the first URL from the command string
+    if target == "unknown" and task.tool_name == "system_execute":
+        cmd = task.args.get("command", "")
+        url_match = re.search(r'https?://[^\s\'"]+', cmd)
+        if url_match:
+            target = url_match.group(0)
     t0 = time.monotonic()
 
     tool = tool_inventory.get(task.tool_name)
@@ -138,6 +145,7 @@ async def execute_worker_task(
 DEFAULT_CONCURRENCY: Dict[str, int] = {
     "nmap": 1,
     "sqlmap": 1,
+    "wpscan": 1,
     "commix": 1,
     "searchsploit": 1,
     "nuclei": 2,

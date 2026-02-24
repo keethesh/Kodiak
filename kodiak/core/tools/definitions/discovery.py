@@ -456,6 +456,7 @@ class KatanaTool(KodiakTool):
     name = "katana"
     description = "Fast, configurable web crawler for discovering URLs, endpoints, JavaScript files, and API routes. Ideal for mapping the full attack surface of a web application."
     args_schema = KatanaArgs
+    execution_timeout = 600  # depth-2 crawls on large sites can take 10+ min
 
     @property
     def parameters_schema(self) -> Dict[str, Any]:
@@ -648,6 +649,7 @@ class FfufTool(KodiakTool):
     name = "ffuf"
     description = "Fast web fuzzer for discovering hidden directories, files, virtual hosts, and parameters. Use the FUZZ keyword in the URL to specify the injection point."
     args_schema = FfufArgs
+    execution_timeout = 600  # common.txt fuzzing through CDN/WAF can take 10+ min
 
     @property
     def parameters_schema(self) -> Dict[str, Any]:

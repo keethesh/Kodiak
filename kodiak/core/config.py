@@ -64,6 +64,7 @@ class KodiakSettings(BaseSettings):
     max_concurrent_agents: int = Field(default=5, alias="KODIAK_MAX_AGENTS")
     default_agent_count: int = Field(default=3, alias="KODIAK_DEFAULT_AGENTS")
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")
+    global_tool_concurrency: int = Field(default=6, alias="KODIAK_GLOBAL_CONCURRENCY")
     heavy_tool_parallel_limit: int = Field(default=2, alias="KODIAK_HEAVY_TOOL_PARALLEL_LIMIT")
     tool_scheduler: str = Field(default="queue", alias="KODIAK_TOOL_SCHEDULER")
     tool_queue_limit: int = Field(default=50, alias="KODIAK_TOOL_QUEUE_LIMIT")

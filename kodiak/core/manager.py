@@ -167,6 +167,10 @@ class ManagerAgent:
             }
         ]
 
+        # Loop-detection state: track tool names mentioned in consecutive text-only responses
+        _loop_last_text_tools: set[str] = set()
+        _loop_consecutive_count: int = 0
+
         for iteration in range(1, max_iterations + 1):
             logger.debug(f"🔄 Manager iteration {iteration}/{max_iterations}")
 
@@ -317,7 +321,12 @@ class ManagerAgent:
                         tool_inventory=self.tool_inventory,
                         event_manager=self.event_manager,
                         scan_id=scan_id_str,
+                        global_concurrency=settings.global_tool_concurrency,
                     )
+
+                    # Reset loop-detection counter on any successful dispatch
+                    _loop_last_text_tools = set()
+                    _loop_consecutive_count = 0
 
                     # 3. OBSERVE — update state and build tool-result messages
                     for wr in results:
@@ -341,15 +350,49 @@ class ManagerAgent:
                             "content": self._build_tool_history(wr),
                         })
             else:
-                # No tool calls — text-only response
-                history.append({"role": "assistant", "content": response.content})
-                history.append({
-                    "role": "user",
-                    "content": (
-                        "<next_step>Continue scan. If objective is met, "
-                        "call complete_scan now.</next_step>"
-                    ),
-                })
+                # No tool calls — text-only response.
+                # Detect if the LLM is looping (writing tool calls as text instead of function calls).
+                content = response.content or ""
+                mentioned_tools = {
+                    name for name in self.tool_inventory.get_all_tools()
+                    if re.search(rf'\b{re.escape(name)}\b', content)
+                }
+                if mentioned_tools:
+                    if mentioned_tools == _loop_last_text_tools:
+                        _loop_consecutive_count += 1
+                    else:
+                        _loop_last_text_tools = mentioned_tools
+                        _loop_consecutive_count = 1
+
+                history.append({"role": "assistant", "content": content})
+
+                if _loop_consecutive_count >= 2:
+                    # LLM is stuck — inject a targeted loop-break nudge
+                    stuck_tools = ", ".join(sorted(_loop_last_text_tools))
+                    logger.warning(
+                        f"⚠️  Loop detected: same tool set mentioned {_loop_consecutive_count}x "
+                        f"without dispatch — {stuck_tools}"
+                    )
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            f"<loop_detected>You have mentioned [{stuck_tools}] {_loop_consecutive_count} times "
+                            "without dispatching them. Text tool references are NEVER executed. "
+                            "You MUST invoke tools via the function-calling interface right now — "
+                            "not as text in your response. Dispatch the tools as function calls immediately, "
+                            "or call save_note(category='dead_end') and move on.</loop_detected>"
+                        ),
+                    })
+                    # Reset so we don't spam the nudge every iteration
+                    _loop_consecutive_count = 0
+                else:
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            "<next_step>Continue scan. If objective is met, "
+                            "call complete_scan now.</next_step>"
+                        ),
+                    })
 
             # Trim history to avoid unbounded growth
             history = self._trim_history(history, max_turns=40)
@@ -480,6 +523,9 @@ class ManagerAgent:
             "- Timed-out tools: retry once with reduced scope (fewer ports, smaller wordlist). If it times out again, skip it.",
             "- Reasoning: 3–4 lines maximum. State which tools you are dispatching and why.",
             "- Do NOT call complete_scan until you are in the REPORTING phase.",
+            "- CRITICAL: Tool invocations MUST use the function-calling interface ONLY.",
+            "  NEVER write tool calls as text (e.g. \"[tool_call] ffuf args=...\"). Text patterns are NOT executed.",
+            "  If you find yourself writing tool names in your reasoning, STOP and use function calls instead.",
             "</constraints>",
             "",
             "<phase_rules>",
@@ -494,6 +540,10 @@ class ManagerAgent:
             "  nuclei, nikto, wpscan → require VULN_SCAN phase",
             "  sqlmap, commix, searchsploit → require EXPLOITATION phase",
             "Calling these tools in an earlier phase returns a rejection message. Complete phase objectives first.",
+            "",
+            "EXPLOITATION phase requirement: Do NOT say ADVANCE_PHASE until at least one of sqlmap, commix,",
+            "or wpscan has returned a result against a confirmed injection point. If the target is not",
+            "susceptible to exploitation, call save_note(category='dead_end') documenting why, then advance.",
             "</phase_rules>",
             "",
             "<scan_state>",
@@ -501,6 +551,20 @@ class ManagerAgent:
             "</scan_state>",
             "",
         ]
+
+        # WAF/CDN context block — injected when a WAF is detected in scan state
+        if self.scan_state.waf_detected:
+            sections.extend([
+                "<waf_context>",
+                "WAF/CDN DETECTED on this target. Adjust tool parameters to avoid blocks and false timeouts:",
+                "- ffuf: use threads=5 (NOT the default 40). Add a short per-request delay if supported.",
+                "- katana: use rate_limit=10 (NOT the default 150).",
+                "- nuclei: use rate_limit=20.",
+                "- Skip broad directory fuzzing on WAF-fronted assets — low yield, high block risk.",
+                "  Target specific known paths (e.g., /admin, /phpmyadmin) instead.",
+                "</waf_context>",
+                "",
+            ])
 
         # Prior engagement knowledge (from previous scans of this project)
         if self._prior_knowledge:
@@ -522,6 +586,11 @@ class ManagerAgent:
             "  - Call as SOON as a vulnerability is confirmed — do not wait for REPORTING",
             "  - Include: exploitation_steps, impact, poc (proof-of-concept), remediation",
             "  - Duplicate findings (same title + target) are automatically skipped",
+            "  Severity anchors:",
+            "    critical — RCE, authentication bypass, full DB dump, direct code execution evidence",
+            "    high     — Exposed credentials (ANY password, even 'password'), LFI, confirmed SQLi, open admin panel",
+            "    medium   — phpinfo() exposure, .git exposed, SSRF potential, partial information disclosure",
+            "    low      — Version disclosure only, minor info leak with no direct attack path",
             "",
             "Use these tools proactively throughout the scan, not just at the end.",
             "</recording_tools>",
@@ -629,6 +698,12 @@ class ManagerAgent:
                 tech = match.group(1).strip()
                 if tech and tech not in ts.technologies and len(tech) < 60:
                     ts.technologies.append(tech)
+            # Detect WAF/CDN presence
+            if not self.scan_state.waf_detected and re.search(
+                r'\bcloudflare\b|\bcloud ?flare\b|\bwaf\b|\bakamai\b|\bfastly\b|\bimperva\b',
+                output, re.IGNORECASE
+            ):
+                self.scan_state.waf_detected = True
 
         # -- Vulnerability findings (nuclei, sqlmap, wpscan, commix) --
         elif result.tool_name in ("nuclei", "sqlmap", "wpscan", "commix"):

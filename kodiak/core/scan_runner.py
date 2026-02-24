@@ -59,6 +59,7 @@ class ScanRunner:
             "ffuf": "ffuf",
             "whatweb": "whatweb",
             "sqlmap": "sqlmap",
+            "wpscan": "wpscan",
             "commix": "commix",
             "searchsploit": "searchsploit",
         }
