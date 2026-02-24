@@ -67,7 +67,7 @@ class DashboardView(Static):
     #scan-header {
         height: 3;
         background: $surface;
-        border: round $surface1;
+        border: round #45475a;
         padding: 0 2;
         margin-bottom: 1;
     }
@@ -79,7 +79,7 @@ class DashboardView(Static):
 
     .stat-card {
         background: $surface;
-        border: round $surface1;
+        border: round #45475a;
         padding: 1 2;
         width: 1fr;
         height: 7;
@@ -90,7 +90,7 @@ class DashboardView(Static):
     #sev-row {
         height: 5;
         background: $surface;
-        border: round $surface1;
+        border: round #45475a;
         padding: 1 2;
         margin-bottom: 1;
         align: left middle;
@@ -98,7 +98,7 @@ class DashboardView(Static):
 
     #sev-label {
         width: 14;
-        color: $subtext0;
+        color: #a6adc8;
     }
 
     #dash-bottom {
@@ -109,20 +109,20 @@ class DashboardView(Static):
     #activity-panel {
         width: 1fr;
         height: 1fr;
-        border: round $surface1;
+        border: round #45475a;
         margin-right: 1;
     }
 
     #projects-panel {
         width: 1fr;
         height: 1fr;
-        border: round $surface1;
+        border: round #45475a;
     }
 
     .panel-title {
         dock: top;
         height: 1;
-        background: $surface0;
+        background: #313244;
         color: $primary;
         text-align: center;
         text-style: bold;

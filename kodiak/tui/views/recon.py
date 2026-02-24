@@ -33,14 +33,14 @@ class ReconView(Static):
     #surface-tree-panel {
         width: 2fr;
         height: 1fr;
-        border: round $surface1;
+        border: round #45475a;
         margin-right: 1;
     }
 
     #node-detail-panel {
         width: 1fr;
         height: 1fr;
-        border: round $surface1;
+        border: round #45475a;
     }
 
     #node-detail-content {
@@ -50,14 +50,14 @@ class ReconView(Static):
 
     #attempts-panel {
         height: 12;
-        border: round $surface1;
+        border: round #45475a;
         margin-top: 1;
     }
 
     .panel-title {
         dock: top;
         height: 1;
-        background: $surface0;
+        background: #313244;
         color: $primary;
         text-align: center;
         text-style: bold;

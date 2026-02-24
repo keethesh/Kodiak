@@ -41,20 +41,20 @@ class HelpScreen(ModalScreen):
     }
 
     .help-section {
-        color: $lavender;
+        color: #b4befe;
         text-style: bold;
         margin-top: 1;
         margin-bottom: 0;
     }
 
     .help-row {
-        color: $subtext0;
+        color: #a6adc8;
         padding: 0 2;
     }
 
     #close-hint {
         text-align: center;
-        color: $muted;
+        color: #6c7086;
         margin-top: 1;
     }
     """

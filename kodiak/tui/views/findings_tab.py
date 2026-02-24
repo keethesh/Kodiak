@@ -47,7 +47,7 @@ class FindingsView(Static):
     #sev-summary {
         height: 3;
         background: $surface;
-        border-bottom: solid $surface1;
+        border-bottom: solid #45475a;
         padding: 0 2;
         align: left middle;
         margin-bottom: 1;
@@ -60,14 +60,14 @@ class FindingsView(Static):
     #findings-list-panel {
         width: 2fr;
         height: 1fr;
-        border: round $surface1;
+        border: round #45475a;
         margin-right: 1;
     }
 
     #finding-detail-panel {
         width: 3fr;
         height: 1fr;
-        border: round $surface1;
+        border: round #45475a;
     }
 
     #finding-detail-scroll {
@@ -85,7 +85,7 @@ class FindingsView(Static):
     .panel-title {
         dock: top;
         height: 1;
-        background: $surface0;
+        background: #313244;
         color: $primary;
         text-align: center;
         text-style: bold;

@@ -76,7 +76,7 @@ class NewScanModal(ModalScreen):
     }
 
     .field-label {
-        color: $subtext0;
+        color: #a6adc8;
         margin-top: 1;
         margin-bottom: 0;
     }
@@ -87,7 +87,7 @@ class NewScanModal(ModalScreen):
     }
 
     #existing-projects {
-        border: round $surface1;
+        border: round #45475a;
         height: 7;
         padding: 0 1;
         margin-bottom: 1;
@@ -105,11 +105,11 @@ class NewScanModal(ModalScreen):
 
     .agent-btn.-primary {
         background: $accent;
-        color: $base;
+        color: #1e1e2e;
     }
 
     #error-msg {
-        color: $red;
+        color: #f38ba8;
         margin-top: 1;
         height: auto;
     }

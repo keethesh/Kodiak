@@ -39,7 +39,7 @@ class ConfigView(Static):
     }
 
     .config-section {
-        border: round $surface1;
+        border: round #45475a;
         padding: 1 2;
         margin-bottom: 1;
         height: auto;
@@ -56,7 +56,7 @@ class ConfigView(Static):
     }
 
     .config-key {
-        color: $subtext0;
+        color: #a6adc8;
         width: 18;
     }
 
@@ -64,9 +64,9 @@ class ConfigView(Static):
         color: $text;
     }
 
-    .ok { color: $green; }
-    .warn { color: $yellow; }
-    .err { color: $red; }
+    .ok { color: #a6e3a1; }
+    .warn { color: #f9e2af; }
+    .err { color: #f38ba8; }
 
     #action-bar {
         height: auto;

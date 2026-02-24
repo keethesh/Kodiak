@@ -47,25 +47,25 @@ class LogsView(Static):
     #agent-status-bar {
         height: 3;
         background: $surface;
-        border: round $surface1;
+        border: round #45475a;
         padding: 0 2;
         margin-bottom: 1;
         align: left middle;
     }
 
     #agent-status-bar.running {
-        border: round $green;
-        color: $green;
+        border: round #a6e3a1;
+        color: #a6e3a1;
     }
 
     #agent-status-bar.idle {
-        border: round $surface1;
-        color: $subtext0;
+        border: round #45475a;
+        color: #a6adc8;
     }
 
     #agent-status-bar.error {
-        border: round $red;
-        color: $red;
+        border: round #f38ba8;
+        color: #f38ba8;
     }
 
     #logs-main {
@@ -76,25 +76,25 @@ class LogsView(Static):
     #execution-log-panel {
         width: 2fr;
         height: 1fr;
-        border: round $surface1;
+        border: round #45475a;
         margin-right: 1;
     }
 
     #tool-table-panel {
         width: 1fr;
         height: 1fr;
-        border: round $surface1;
+        border: round #45475a;
     }
 
     #notes-panel {
         height: 12;
-        border: round $surface1;
+        border: round #45475a;
     }
 
     .panel-title {
         dock: top;
         height: 1;
-        background: $surface0;
+        background: #313244;
         color: $primary;
         text-align: center;
         text-style: bold;
