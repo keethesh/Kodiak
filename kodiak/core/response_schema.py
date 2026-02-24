@@ -44,6 +44,7 @@ class SeverityEnum(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+    INFO = "info"
 
 
 # ---------------------------------------------------------------------------

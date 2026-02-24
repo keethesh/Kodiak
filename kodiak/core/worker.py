@@ -54,7 +54,7 @@ class CommandResult:
             output += f"\n[stderr] {self.stderr.strip()}"
 
         # Truncate very long outputs to avoid blowing up the context window
-        MAX_OUTPUT = 4000
+        MAX_OUTPUT = 16000
         if len(output) > MAX_OUTPUT:
             output = output[:MAX_OUTPUT] + f"\n... (truncated, {len(output)} chars total)"
 

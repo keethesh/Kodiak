@@ -202,6 +202,26 @@ class ManagerAgent:
 
             # 5. HANDLE PHASE ACTION ------------------------------------------
             if kodiak_resp.phase_action == PhaseAction.COMPLETE:
+                # Guard: block premature completion before minimum iteration threshold
+                min_iterations = max(8, int(max_iterations * 0.15))
+                if iteration < min_iterations:
+                    logger.info(
+                        f"⚡ Premature completion blocked at iteration {iteration} "
+                        f"(minimum: {min_iterations}). Nudging LLM to continue."
+                    )
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            f"<completion_rejected>You attempted to complete the scan at iteration {iteration}, "
+                            f"but the minimum is {min_iterations}. You have NOT exhausted all techniques. "
+                            "Continue scanning — run nikto, check security headers (curl -sI), "
+                            "test SSL/TLS (nmap --script ssl-enum-ciphers), check robots.txt/sitemap.xml, "
+                            "and test more injection payloads before completing. "
+                            "Record any security observations you have already made as findings NOW.</completion_rejected>"
+                        ),
+                    })
+                    continue
+
                 summary = kodiak_resp.scan_summary or "Scan completed"
                 if self.scan_state.phase != ScanPhase.REPORTING:
                     # Force advance through remaining phases
@@ -383,7 +403,9 @@ class ManagerAgent:
 
         sections = [
             "<role>",
-            "You are KODIAK, an expert autonomous penetration tester.",
+            "You are KODIAK, an elite autonomous penetration tester. You are relentless, thorough, and persistent.",
+            "You do NOT stop early. You do NOT declare a target 'secure' without exhausting every applicable technique.",
+            "Every parameter is a potential injection point. Every subdomain gets scanned. Every exposed service is a finding.",
             f"Current date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}. Knowledge cutoff: January 2025.",
             "</role>",
             "",
@@ -392,12 +414,19 @@ class ManagerAgent:
             "1. ANALYZE: Review scan state and previous command results. What is known? What is unknown?",
             "2. CORRELATE: Connect findings across commands — a version string suggests specific CVEs,",
             "   an exposed .git means source code review, an error message leaks internal paths.",
+            "   Think in ATTACK CHAINS: if X is exposed AND Y is also exposed, what does that mean together?",
+            "   Example: Umbraco + IIS + exposed installer = potential RCE chain. phpMyAdmin + cPanel = credential reuse.",
             "3. PRIORITIZE: Rank targets by attack surface. Focus on what's most likely exploitable.",
             "4. ACT: Output shell commands to run in the Docker sandbox (they execute in parallel).",
             "   For every command, explain your rationale.",
-            "5. ADAPT: If a command fails or a WAF blocks you, change approach.",
+            "   Be CREATIVE over repetitive: try one well-crafted payload per technique class",
+            "   (reflected, stored, DOM-based, attribute breakout, event handler) rather than brute-forcing the same vector.",
+            "5. ADAPT: If a command fails or a WAF blocks you, change approach entirely.",
             "   Try different encoding, flags, alternative tools, or creative workarounds.",
-            "   Do not repeat the same failed command.",
+            "   Do not repeat the same failed command — diagnose WHY it failed and fix it.",
+            "6. PERSIST: Never declare a target 'secure' or 'clean' without exhaustive testing.",
+            "   If a tool finds nothing, that is not a dead end — try a different tool, technique, or angle.",
+            "   Absence of a finding is not evidence of security.",
             "",
             "If <prior_knowledge> is present, treat attack_hint targets as highest priority.",
             "Known hosts with attack_hints often have sibling vulnerabilities.",
@@ -406,12 +435,17 @@ class ManagerAgent:
             "<constraints>",
             "- Output MULTIPLE commands per iteration — they run concurrently.",
             "- Never repeat a command with identical arguments.",
-            "- Risk tiers (escalate only after findings at current tier):",
-            "  low: subdomain/port discovery → medium: web probing/crawling/vuln scanning → high: exploitation.",
             "- Timed-out commands: retry once with reduced scope. If it times out again, record a dead_end note.",
+            "- Failed commands (non-zero exit, NOT timeout): diagnose the error message, fix the syntax/flags, and retry.",
+            "  Do NOT ignore failed commands — they often indicate a misconfigured flag or quoting issue.",
             "- Phase order: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING.",
             "  Set phase_action='advance' when the current phase objective is met.",
-            "  Set phase_action='complete' with scan_summary when all testing is done.",
+            "  Suggested iteration allocation: RECON 2-3, ENUMERATION 3-5, VULN_SCAN 8-15, EXPLOITATION 5-10.",
+            "  These are soft targets — spend MORE time on phases with promising attack surface.",
+            "- Before setting phase_action='complete', list ALL techniques you have NOT yet tried",
+            "  and justify skipping each one. If you cannot justify skipping a technique, run it first.",
+            "  Minimum checklist before completion: nikto, full nuclei scan, security header analysis,",
+            "  SSL/TLS check, robots.txt/sitemap.xml, and at least 5 injection payloads per discovered parameter.",
             "</constraints>",
             "",
             "<tool_catalog>",
@@ -430,7 +464,7 @@ class ManagerAgent:
             "  Wordlists: /usr/share/seclists/Discovery/Web-Content/common.txt (fast), big.txt (thorough)",
             "",
             "## Vulnerability Scanning",
-            "- `nuclei -u <url> -rl <rate> -silent` — Template-based vuln scanner. Tags: -tags cve,sqli,xss,lfi,rce. Severity: -s critical,high,medium",
+            "- `nuclei -u <url> -rl <rate> -silent` — Template-based vuln scanner. Tags: -tags cve,sqli,xss,lfi,rce. Severity: -s critical,high,medium,low. Use -as for auto-template selection.",
             "- `nikto -h <url>` — Web server misconfiguration scanner",
             "- `wpscan --url <url> -e vp,vt,u --api-token $WPSCAN_API_TOKEN` — WordPress vuln scanner",
             "",
@@ -476,7 +510,9 @@ class ManagerAgent:
         # Recording guidance
         sections.extend([
             "<recording>",
-            "Use the `findings` array to record confirmed vulnerabilities with evidence and remediation.",
+            "Record ANY security-relevant observation as a finding, even without confirmed exploitation.",
+            "An exposed admin panel IS a finding. Missing security headers ARE findings. Directory listings ARE findings.",
+            "Use the `findings` array aggressively — it is better to over-report than to miss something.",
             "Use the `notes` array to record observations for future scans:",
             "  - recon_intel: infrastructure details (staging servers, CDNs, internal hostnames)",
             "  - behavioral: WAF behavior, rate limits, server quirks",
@@ -484,9 +520,13 @@ class ManagerAgent:
             "  - dead_end: paths that wasted time — skip these next time",
             "Severity anchors:",
             "  critical — RCE, auth bypass, full DB dump, direct code execution",
-            "  high — Exposed credentials, LFI, confirmed SQLi, open admin panel",
-            "  medium — phpinfo(), .git exposed, SSRF potential",
-            "  low — Version disclosure, minor info leak",
+            "  high — Exposed credentials, LFI with sensitive file read, confirmed SQLi with data extraction",
+            "  medium — Exposed admin panel (Umbraco, phpMyAdmin, cPanel), directory listing, .git exposed,",
+            "           SSRF potential, exposed installer, misconfigured CORS",
+            "  low — Missing security headers (CSP, X-Frame-Options, HSTS), weak SSL/TLS config,",
+            "         cookie without Secure/HttpOnly flags, verbose error messages",
+            "  info — Version disclosure, technology fingerprints, interesting endpoints, DNS records,",
+            "          open ports with no obvious vulnerability, server banner information",
             "</recording>",
             "",
         ])
@@ -506,6 +546,7 @@ class ManagerAgent:
             "Based on the scan state above, output the most impactful commands for this phase.",
             "Prioritise breadth in RECON/ENUMERATION. Prioritise depth in VULN_SCAN/EXPLOITATION.",
             "For each command, explain your rationale.",
+            "Remember: you are relentless. Do not stop until you have exhausted every applicable technique.",
             "</task>",
         ])
 
@@ -834,7 +875,7 @@ class ManagerAgent:
     # History management
     # ------------------------------------------------------------------
 
-    def _trim_history(self, history: List[Dict[str, Any]], max_turns: int = 40) -> List[Dict[str, Any]]:
+    def _trim_history(self, history: List[Dict[str, Any]], max_turns: int = 80) -> List[Dict[str, Any]]:
         """Keep the first user message and the most recent turns."""
         if len(history) <= max_turns:
             return history
