@@ -20,9 +20,19 @@ class CommandResult(BaseModel):
 class ServiceExecutor(ABC):
     @abstractmethod
     async def run_command(
-        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None, stdin: str | None = None
+        self,
+        command: list[str],
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        stdin: str | None = None,
+        cap_add: list[str] | None = None,
     ) -> CommandResult:
-        """Run a command to completion."""
+        """Run a command to completion.
+
+        ``cap_add`` — optional list of Linux capabilities to add (Docker only).
+        Use e.g. ``["NET_RAW", "NET_ADMIN"]`` for tools that require raw sockets
+        (nmap -sS/-O, masscan).  Ignored by non-Docker executors.
+        """
         pass
 
     @abstractmethod
@@ -35,7 +45,12 @@ class ServiceExecutor(ABC):
 
 class LocalExecutor(ServiceExecutor):
     async def run_command(
-        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None, stdin: str | None = None
+        self,
+        command: list[str],
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        stdin: str | None = None,
+        cap_add: list[str] | None = None,
     ) -> CommandResult:
         logger.info(f"LocalExec: {' '.join(command)}")
         
@@ -108,11 +123,19 @@ class DockerExecutor(ServiceExecutor):
         logger.info(f"DockerExecutor initialized with image: {self.image}")
 
     async def run_command(
-        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None, stdin: str | None = None
+        self,
+        command: list[str],
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        stdin: str | None = None,
+        cap_add: list[str] | None = None,
     ) -> CommandResult:
         """
         Execute command inside Docker container.
         Maps the working directory into the container and runs the command.
+
+        ``cap_add`` — optional list of Linux capabilities to add (e.g. ``["NET_RAW", "NET_ADMIN"]``
+        for tools that require raw socket access such as nmap -sS/-O).
         """
         # Use absolute path for volume mounting
         work_dir = os.path.abspath(cwd) if cwd else os.getcwd()
@@ -121,8 +144,12 @@ class DockerExecutor(ServiceExecutor):
         docker_cmd = [
             "docker", "run",
             "--rm",  # Remove container after execution
-            "--privileged",  # Grant raw sockets and bypass seccomp for security tools
         ]
+
+        # Add only the capabilities that are actually needed instead of --privileged.
+        if cap_add:
+            for cap in cap_add:
+                docker_cmd.extend(["--cap-add", cap])
         
         if stdin is not None:
             docker_cmd.append("-i")
@@ -238,7 +265,12 @@ class DockerExecutor(ServiceExecutor):
 
 class MockExecutor(ServiceExecutor):
     async def run_command(
-        self, command: list[str], cwd: str | None = None, env: dict[str, str] | None = None, stdin: str | None = None
+        self,
+        command: list[str],
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        stdin: str | None = None,
+        cap_add: list[str] | None = None,
     ) -> CommandResult:
         cmd_str = " ".join(command)
         logger.info(f"MockExec: {cmd_str}")

@@ -33,6 +33,44 @@ from kodiak.services.gemini_client import GeminiClient, GeminiResponse
 
 
 # ---------------------------------------------------------------------------
+# Phase-aware tool blocking
+# ---------------------------------------------------------------------------
+# Some tools should not be dispatched until the scan has advanced to the
+# appropriate phase.  This is a hard guard — the LLM prompt soft-guidance
+# alone is not sufficient to prevent premature heavy scanner invocations.
+#
+# Key:   minimum phase required before the tool may run.
+# Tools not listed here are allowed in any phase.
+_TOOL_MIN_PHASE: dict[str, ScanPhase] = {
+    # Vulnerability scanners — need enumerated targets first
+    "nuclei":       ScanPhase.VULN_SCAN,
+    "nikto":        ScanPhase.VULN_SCAN,
+    "wpscan":       ScanPhase.VULN_SCAN,
+    # Active exploitation — need confirmed vulns first
+    "sqlmap":       ScanPhase.EXPLOITATION,
+    "commix":       ScanPhase.EXPLOITATION,
+    "searchsploit": ScanPhase.EXPLOITATION,
+}
+
+# Ordered list so we can compare phases numerically
+_PHASE_ORDER: list[ScanPhase] = [
+    ScanPhase.RECON,
+    ScanPhase.ENUMERATION,
+    ScanPhase.VULN_SCAN,
+    ScanPhase.EXPLOITATION,
+    ScanPhase.REPORTING,
+]
+
+
+def _phase_allowed(tool_name: str, current_phase: ScanPhase) -> bool:
+    """Return True if *tool_name* may run in *current_phase*."""
+    min_phase = _TOOL_MIN_PHASE.get(tool_name)
+    if min_phase is None:
+        return True
+    return _PHASE_ORDER.index(current_phase) >= _PHASE_ORDER.index(min_phase)
+
+
+# ---------------------------------------------------------------------------
 # Result container (mirrors the old AgentResult)
 # ---------------------------------------------------------------------------
 
@@ -247,6 +285,30 @@ class ManagerAgent:
                     if not name or name in skip_tools:
                         continue
                     args = self._parse_args(fn.get("arguments"))
+
+                    # Hard phase guard — reject heavy scanners run too early
+                    if not _phase_allowed(name, self.scan_state.phase):
+                        min_phase = _TOOL_MIN_PHASE[name]
+                        rejection = (
+                            f"<phase_rejection tool='{name}'>"
+                            f"'{name}' requires phase '{min_phase.value}' but current phase is "
+                            f"'{self.scan_state.phase.value}'. "
+                            f"Complete the current phase objectives and say ADVANCE_PHASE before "
+                            f"dispatching this tool."
+                            f"</phase_rejection>"
+                        )
+                        logger.warning(
+                            f"⛔ Phase guard: '{name}' blocked in phase "
+                            f"'{self.scan_state.phase.value}' (requires '{min_phase.value}')"
+                        )
+                        history.append({
+                            "role": "tool",
+                            "name": name,
+                            "tool_call_id": tc.get("id", f"call_{uuid4().hex[:12]}"),
+                            "content": rejection,
+                        })
+                        continue
+
                     tasks.append(WorkerTask(tool_name=name, args=args))
 
                 if tasks:
@@ -380,11 +442,11 @@ class ManagerAgent:
             ),
             ScanPhase.VULN_SCAN: (
                 "Identify exploitable vulnerabilities. Run nuclei against live hosts, "
-                "sqlmap on discovered forms and parameters, and commix on input fields. "
+                "sqlmap on discovered forms and parameters, wpscan on WordPress targets, and commix on input fields. "
                 "Target scans to the specific technologies found in ENUMERATION."
             ),
             ScanPhase.EXPLOITATION: (
-                "Confirm and deepen vulnerability findings. Run targeted sqlmap/commix with "
+                "Confirm and deepen vulnerability findings. Run targeted sqlmap/wpscan/commix with "
                 "full exploitation flags on confirmed injection points. Gather proof-of-concept "
                 "evidence: payloads, responses, extracted data."
             ),
@@ -413,7 +475,7 @@ class ManagerAgent:
             "<constraints>",
             "- Dispatch MULTIPLE tools in a single response — they execute concurrently.",
             "- Never repeat a tool on the same target with identical parameters.",
-            "- Risk tiers (low → high): subdomain/port discovery → web probing/crawling → vulnerability scanning → sqlmap/commix/exploitation.",
+            "- Risk tiers (low → high): subdomain/port discovery → web probing/crawling → vulnerability scanning → sqlmap/wpscan/commix/exploitation.",
             "  Only escalate to the next risk tier after confirming findings at the current tier.",
             "- Timed-out tools: retry once with reduced scope (fewer ports, smaller wordlist). If it times out again, skip it.",
             "- Reasoning: 3–4 lines maximum. State which tools you are dispatching and why.",
@@ -427,6 +489,11 @@ class ManagerAgent:
             "Phase order (strictly enforced): RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING",
             "To advance to the next phase: include \"ADVANCE_PHASE\" in your reasoning text.",
             "Phase transitions are manual — the system does NOT advance automatically.",
+            "",
+            "Hard phase guards (system-enforced — do NOT attempt before the required phase):",
+            "  nuclei, nikto, wpscan → require VULN_SCAN phase",
+            "  sqlmap, commix, searchsploit → require EXPLOITATION phase",
+            "Calling these tools in an earlier phase returns a rejection message. Complete phase objectives first.",
             "</phase_rules>",
             "",
             "<scan_state>",
@@ -563,8 +630,8 @@ class ManagerAgent:
                 if tech and tech not in ts.technologies and len(tech) < 60:
                     ts.technologies.append(tech)
 
-        # -- Vulnerability findings (nuclei, sqlmap, commix) --
-        elif result.tool_name in ("nuclei", "sqlmap", "commix"):
+        # -- Vulnerability findings (nuclei, sqlmap, wpscan, commix) --
+        elif result.tool_name in ("nuclei", "sqlmap", "wpscan", "commix"):
             self._extract_findings(result)
 
     def _extract_findings(self, result: WorkerResult) -> None:
@@ -597,6 +664,20 @@ class ManagerAgent:
                     evidence=output[:300],
                     tool="sqlmap",
                 )
+
+        elif result.tool_name == "wpscan":
+            vulnerabilities = data.get("vulnerabilities") or []
+            if vulnerabilities:
+                for vuln in vulnerabilities[:8]:
+                    location = vuln.get("location", "WordPress component")
+                    title = vuln.get("title", "WordPress vulnerability")
+                    self.scan_state.add_finding(
+                        title=f"{title} ({location})",
+                        severity="high",
+                        target=result.target,
+                        evidence=str(vuln.get("evidence", ""))[:300],
+                        tool="wpscan",
+                    )
 
         elif result.tool_name == "commix":
             if "injectable" in output.lower() or "command injection" in output.lower():

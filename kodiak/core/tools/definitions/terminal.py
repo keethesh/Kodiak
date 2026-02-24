@@ -416,7 +416,8 @@ class TerminalExecuteTool(KodiakTool):
                 executor.run_command(
                     full_command,
                     cwd=session.working_directory,
-                    env=session.environment
+                    env=session.environment,
+                    cap_add=self._caps_for_command(command),
                 ),
                 timeout=timeout
             )
@@ -583,6 +584,23 @@ class TerminalExecuteTool(KodiakTool):
                 })
         
         return analysis
+
+    _RAW_SOCKET_PATTERNS = [
+        "masscan", "zmap",
+        "nmap -ss", "nmap -su", "nmap -o", "nmap -a",
+        "-ss ", "-su ", " -o ", " -a ",
+    ]
+
+    def _caps_for_command(self, command: str) -> list[str] | None:
+        """Return Docker capabilities required by *command*, or None if none needed.
+
+        Tools that use raw sockets (masscan, nmap SYN/UDP/OS-detection) require
+        NET_RAW and NET_ADMIN.  Everything else runs without extra capabilities.
+        """
+        cmd_lower = command.lower()
+        if any(pat in cmd_lower for pat in self._RAW_SOCKET_PATTERNS):
+            return ["NET_RAW", "NET_ADMIN"]
+        return None
 
     def _classify_command(self, command: str) -> str:
         """Classify the type of command being executed"""

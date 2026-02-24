@@ -122,7 +122,16 @@ class NmapTool(KodiakTool):
                 fallback_image="instrumentisto/nmap",
                 fallback_entrypoint=""
             )
-            result = await executor.run_command(command)
+
+            # Raw-socket scans (SYN stealth, OS detection, UDP, aggressive) need NET_RAW.
+            needs_raw_socket = (
+                args.get("stealth_scan")
+                or args.get("os_detection")
+                or args.get("udp_scan")
+                or args.get("aggressive")
+            )
+            cap_add = ["NET_RAW", "NET_ADMIN"] if needs_raw_socket else None
+            result = await executor.run_command(command, cap_add=cap_add)
             
             if result.exit_code != 0:
                 return ToolResult(

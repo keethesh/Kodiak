@@ -31,7 +31,7 @@ class ToolInventory:
         from kodiak.core.tools.definitions.discovery import SubfinderTool, HttpxTool, KatanaTool, FfufTool, WhatWebTool
         from kodiak.core.tools.definitions.browser import BrowserNavigateTool
         from kodiak.core.tools.definitions.osint import WebSearchTool
-        from kodiak.core.tools.definitions.exploitation import SQLMapTool, CommixTool, SearchsploitTool
+        from kodiak.core.tools.definitions.exploitation import SQLMapTool, CommixTool, SearchsploitTool, WPScanTool
         from kodiak.core.tools.definitions.proxy import (
             ProxyStartTool, ProxyRequestTool, ProxyHistoryTool, ProxyStopTool
         )
@@ -53,6 +53,7 @@ class ToolInventory:
         self.register(BrowserNavigateTool())
         self.register(WebSearchTool())
         self.register(SQLMapTool())
+        self.register(WPScanTool())
         self.register(CommixTool())
         self.register(SearchsploitTool())
 
@@ -116,6 +117,7 @@ AVAILABLE_TOOLS = {
     # Web Application Testing
     "browser_navigate": "Browser automation for web app testing",
     "sqlmap": "Automatic SQL injection detection and exploitation",
+    "wpscan": "WordPress security scanner for core, plugin, theme, and config issues",
     "commix": "Command injection detection and exploitation",
     "searchsploit": "Offline Exploit-DB search and exploit export",
     
