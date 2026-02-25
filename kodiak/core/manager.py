@@ -82,6 +82,7 @@ class ManagerAgent:
         self._gemini = GeminiClient()
         self.scan_state: Optional[ScanState] = None
         self._prior_knowledge: str = ""
+        self._loaded_skills: set[str] = set()
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
         self._total_thinking_tokens: int = 0
@@ -686,6 +687,14 @@ class ManagerAgent:
                         timeout=max(1, int(action.timeout or 30)),
                     )
                 )
+            elif action.type == ActionType.LOAD_SKILLS and action.skills:
+                max_loaded = 5
+                for skill_name in action.skills:
+                    if len(self._loaded_skills) >= max_loaded:
+                        logger.info(f"Skill cap ({max_loaded}) reached, ignoring: {skill_name}")
+                        break
+                    self._loaded_skills.add(skill_name.strip().lower())
+                logger.info(f"Skills loaded: {self._loaded_skills}")
 
         for cmd in kodiak_resp.commands:
             launch_tasks.append(
@@ -939,6 +948,7 @@ class ManagerAgent:
             "4. ACT: Output runtime actions using `actions[]` (preferred) and/or `commands[]` (legacy).",
             "   Use `launch` to run commands, `cancel` to stop low-value running tasks,",
             "   `write_file` to safely write exploit scripts/payloads to the sandbox (avoids bash escaping hell),",
+            "   `load_skills` to load specialized knowledge (see <available_skills> catalog) when you encounter a specific vuln class or tech stack,",
             "   `wait` to defer, `advance` to move phase, `complete` when done.",
             "   For every launch/cancel/write_file action, explain your rationale.",
             "   Be CREATIVE over repetitive: try one well-crafted payload per technique class",
@@ -1064,27 +1074,30 @@ class ManagerAgent:
     # ------------------------------------------------------------------
 
     def _load_skills(self) -> str:
-        """Load relevant skills based on detected technologies in scan state."""
+        """Build skills section: compact catalog + full content of LLM-requested skills."""
         try:
             from kodiak.skills.skill_loader import skill_loader
 
-            target_info: Dict[str, Any] = {
-                "technologies": [],
-                "services": [],
-                "ports": [],
-            }
+            parts: list[str] = []
 
-            if self.scan_state:
-                for ts in self.scan_state.targets.values():
-                    target_info["technologies"].extend(ts.technologies)
-                    target_info["ports"].extend(ts.ports)
-                    target_info["services"].extend(list(ts.services.values()))
+            # Always include the catalog so the LLM knows what's available
+            catalog = skill_loader.get_skills_catalog()
+            if catalog:
+                parts.append("<available_skills>")
+                parts.append("Load specialized knowledge mid-scan with a load_skills action.")
+                parts.append("Choose skills relevant to what you're discovering — don't load everything upfront.")
+                parts.append(catalog)
+                parts.append("</available_skills>")
 
-            suggested = skill_loader.suggest_skills_for_target(target_info)
-            if suggested:
-                # Limit to 3 skills to keep prompt concise (Gemini 3 best practice)
-                return skill_loader.load_skills_for_agent(suggested, max_skills=3)
-            return ""
+            # Include full content of skills the LLM has explicitly requested
+            if self._loaded_skills:
+                loaded_names = [s for s in self._loaded_skills if skill_loader.get_skill(s)]
+                if loaded_names:
+                    skills_text = skill_loader.load_skills_for_agent(loaded_names, max_skills=5)
+                    if skills_text:
+                        parts.append(skills_text)
+
+            return "\n".join(parts) if parts else ""
         except Exception as exc:
             logger.debug(f"Skills loading skipped: {exc}")
             return ""

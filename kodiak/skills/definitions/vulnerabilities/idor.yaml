@@ -1,0 +1,176 @@
+name: idor
+description: Insecure Direct Object Reference detection, exploitation, and access control bypass techniques
+techniques:
+  - "Horizontal privilege escalation via object ID manipulation"
+  - "Vertical privilege escalation through role-boundary object access"
+  - "Cross-tenant data access in multi-tenant architectures"
+  - "ID type analysis and prediction (sequential, UUID, encoded)"
+  - "Bulk/batch endpoint exploitation for mass data access"
+  - "GraphQL alias-based parallel object enumeration"
+tools:
+  - httpx
+  - nuclei
+  - browser_navigate
+  - curl
+knowledge: |
+  IDOR is broken access control at the object level. The application uses a user-supplied identifier
+  to look up a resource but fails to verify the requesting user is authorized to access it.
+  Impact ranges from data disclosure to full account takeover depending on the object.
+
+  ## Object Reference Types and Predictability
+  Sequential integers (id=1, id=2, id=3): trivially enumerable. Always test adjacent values.
+  UUIDv1: contains timestamp and MAC address — generated on the same host within a short window,
+    the varying bits are small. If you obtain one UUID, brute-force nearby timestamps.
+    Structure: time_low-time_mid-1xxx-variant-node. The "1" in third group signals v1.
+  UUIDv4: 122 random bits — effectively unguessable. Look for leakage instead of brute force.
+  Base64-encoded IDs: decode them. Often wrapping sequential ints or JSON like {"user_id":42}.
+  Hashids/Sqids: reversible encoding, not encryption. If you find the salt (common defaults, client-side
+    JS, or error messages), decode any ID.
+  Composite keys: /org/5/user/12 — test changing each component independently.
+  Slugs: /users/john-doe — enumerate via registration forms, public profiles, or search.
+
+  ## Discovery Strategy
+  Two-account approach is the gold standard:
+    1. Create account A and account B with identical privilege levels.
+    2. Perform every action as A. Record all object IDs in requests and responses.
+    3. Replay those requests as B (swap session cookie/token). Any successful cross-access is IDOR.
+  ID harvesting — where to find other users' IDs:
+    - List endpoints: GET /api/users, GET /api/orders — sometimes return all records.
+    - Search endpoints: query with empty or wildcard terms.
+    - Pagination: enumerate pages; some APIs don't scope queries to the current user.
+    - Public profiles, comments, reviews — user IDs embedded in HTML or API responses.
+    - Referrer/Location headers leaking IDs.
+    - WebSocket messages containing broadcast data with other users' identifiers.
+    - Export/download features returning CSVs with cross-user data.
+    - Notification/activity feed endpoints listing actions on shared resources.
+
+  ## Parameter Locations to Test
+  Path parameters: /api/users/123/profile — change 123.
+  Query parameters: /api/invoice?id=456 — change 456.
+  POST/PUT body: {"order_id": 789} — change 789 in JSON body.
+  Headers: X-User-ID, X-Account-ID — some backends trust client-supplied identity headers.
+  Cookies: user_id=42 in a cookie — swap value.
+  GraphQL variables: query { user(id: "123") { email } } — change the variable.
+  File paths: /uploads/user_123/receipt.pdf — change directory component.
+
+  ## HTTP Method Tricks
+  When GET /api/users/123 returns 403, try:
+    PUT /api/users/123 — update endpoints sometimes skip read-authz.
+    DELETE /api/users/123 — destructive actions may lack checks.
+    PATCH /api/users/123 — partial update may have different middleware.
+    OPTIONS /api/users/123 — may leak allowed methods.
+    HEAD /api/users/123 — sometimes bypasses body-level checks.
+  Method override headers when the verb is blocked:
+    X-HTTP-Method-Override: PUT
+    X-Method-Override: DELETE
+
+  ## Encoding and Wrapping Bypasses
+  When direct ID swap returns 403:
+    Base64-encode the ID: /api/resource/MTIz (base64 of "123").
+    URL-encode: /api/resource/%31%32%33
+    Double-encode: /api/resource/%2531%2532%2533
+    Wrap in array: {"id": [123]} instead of {"id": 123}.
+    Wrap in object: {"id": {"$eq": 123}} — NoSQL operator injection.
+    String vs int: "123" vs 123 — type confusion in loosely typed languages.
+    Negative IDs: id=-1 — may bypass unsigned checks and wrap to valid index.
+    Zero ID: id=0 — may return admin/default record.
+    Very large ID: id=999999999 — may hit different code path.
+    Null/none: id=null — may return unfiltered results.
+
+  ## GraphQL-Specific Patterns
+  Aliases for parallel enumeration:
+    query { a: user(id: "1") { email } b: user(id: "2") { email } c: user(id: "3") { email } }
+  Introspection → find ID arguments across all query/mutation fields.
+  Nested queries: access user data through a related object you do have access to:
+    query { project(id: "myProject") { owner { email ssn } } }
+  Batch queries: send array of operations in a single request.
+
+  ## High-Impact IDOR Targets
+  Financial records: invoices, transactions, payment methods — PII + financial data exposure.
+  User profiles: PII, credentials, API keys stored in profile settings.
+  Messages/DMs: read private conversations.
+  Documents/files: download other users' uploads.
+  Admin endpoints: /api/admin/users/123 — if the IDOR is on an admin route, vertical escalation.
+  Password reset tokens: /api/reset?token=TOKEN_FOR_OTHER_USER.
+  API keys/secrets: /api/keys/KEY_ID — access other users' integration credentials.
+
+  ## Multi-Tenant SaaS Testing
+  Tenant isolation failures are high-severity:
+    - Change tenant/org ID in URL, header, or JWT claim.
+    - If JWT contains org_id, test if the API trusts it without server-side validation.
+    - Shared database queries: does adding tenant B's org_id to tenant A's request leak data?
+    - Cross-tenant resource sharing features (shared links, invites) may have weak boundary checks.
+    - Subdomain-based tenancy: try accessing tenant-a.app.com API with tenant-b's session.
+
+  ## Escalation Chains
+  IDOR on user profile → read PII (emails, phones, addresses) → mass data exfiltration.
+  IDOR on password reset endpoint → trigger reset for arbitrary user → account takeover.
+  IDOR on role/permission endpoint → change own role to admin → vertical privilege escalation.
+  IDOR on file upload → overwrite another user's file → stored XSS or data corruption.
+  IDOR on API key → retrieve other user's third-party tokens → lateral service compromise.
+  IDOR on admin user management → create admin account → full application takeover.
+
+  ## Automation and Tooling Patterns
+  Autorize (Burp extension): replay every request with a different session cookie automatically.
+    Highlights requests where response body/status is identical between users → likely IDOR.
+  Custom scripting approach:
+    1. Capture authenticated API traffic for user A (export HAR or Burp XML).
+    2. Script: replace session token with user B's token, replay each request.
+    3. Diff responses: identical 200 responses = IDOR; 403/401 = properly protected.
+  GraphQL introspection → enumerate all queries/mutations with ID arguments → test each.
+  Swagger/OpenAPI spec → extract all parameterized endpoints → systematic testing.
+  For mass enumeration: iterate IDs with small delays to avoid rate limiting; use jitter.
+
+  ## Severity Assessment
+  Read-only access to non-sensitive data: Low.
+  Read access to PII (email, phone, address): Medium-High depending on volume.
+  Write access to another user's data: High.
+  Access to financial records, payment info: High-Critical.
+  Cross-tenant data access in SaaS: Critical.
+  Write access to authentication data (password, MFA, API keys): Critical.
+  Chain with other vulns (XSS, CSRF) to exploit without direct API access: increases exploitability.
+
+  ## Common Pitfalls
+  - Don't stop at one endpoint; if one has IDOR, the entire API likely lacks consistent authz middleware.
+  - Always test both read (GET) and write (PUT/PATCH/DELETE) operations — write IDORs are higher severity.
+  - UUIDs don't prevent IDOR; they prevent enumeration. If UUIDs leak anywhere, the control is void.
+  - Check mobile API endpoints (/api/v1/mobile/) — often have weaker authorization than web equivalents.
+  - Webhooks and callback URLs may contain object IDs that skip normal auth flows.
+  - Rate limiting doesn't fix IDOR — even one successful request is a valid finding.
+  - API versioning: test /v1/, /v2/, /v3/ — older versions may lack authz checks added in newer ones.
+  - Archived/soft-deleted resources may still be accessible via direct ID reference.
+examples:
+  - title: "Horizontal IDOR — User Profile Access"
+    description: "Access another user's profile by swapping the user ID in the path"
+    payload: "GET /api/v1/users/1002/profile (authenticated as user 1001)"
+    validation: "Response returns PII (email, phone, address) belonging to user 1002, confirming missing ownership check"
+  - title: "IDOR via Body Parameter — Order Manipulation"
+    description: "Modify order belonging to another user by changing order_id in request body"
+    payload: "PUT /api/orders {\"order_id\": 5678, \"status\": \"cancelled\"} (authenticated as different user)"
+    validation: "Order 5678 is cancelled despite belonging to a different account; verify via GET /api/orders/5678"
+  - title: "GraphQL Alias Enumeration"
+    description: "Enumerate multiple users in a single request using GraphQL aliases"
+    payload: "query { u1:user(id:\"1\"){email} u2:user(id:\"2\"){email} u3:user(id:\"3\"){email} }"
+    validation: "Response contains email addresses for all queried users regardless of session ownership"
+  - title: "UUID Leakage via List Endpoint"
+    description: "Harvest UUIDs from an improperly scoped list endpoint, then access those resources"
+    payload: "GET /api/documents (returns all documents including other users' UUIDs) → GET /api/documents/{leaked-uuid}"
+    validation: "First request returns documents not owned by current user; second request confirms full read access to those documents"
+  - title: "Vertical IDOR — Admin Panel Access"
+    description: "Access admin-only endpoints by guessing the admin user's ID"
+    payload: "GET /api/admin/users/1 (authenticated as regular user)"
+    validation: "Response returns admin user details or admin dashboard data, confirming missing role-based authorization"
+  - title: "Cross-Tenant Data Access"
+    description: "Access resources belonging to a different tenant in a multi-tenant SaaS application"
+    payload: "GET /api/org/OTHER_ORG_ID/billing (authenticated as user in different org)"
+    validation: "Response contains billing information for a different tenant, confirming tenant isolation failure"
+validation_methods:
+  - "Perform identical API calls with two different authenticated sessions; verify one session can access the other's resources"
+  - "Confirm the response contains data (PII, financial records) belonging to a user other than the authenticated one"
+  - "Demonstrate write access (update, delete) to another user's resource by verifying the state change persists"
+  - "Verify tenant isolation by accessing cross-organization resources and confirming data from a different tenant is returned"
+  - "Show that swapping object IDs in multiple endpoint types (GET, PUT, DELETE) consistently bypasses authorization"
+references:
+  - "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/"
+  - "https://portswigger.net/web-security/access-control/idor"
+  - "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Insecure%20Direct%20Object%20References"

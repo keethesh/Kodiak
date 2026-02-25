@@ -9,6 +9,8 @@ techniques:
   - "Error handling analysis"
   - "Cryptography testing"
   - "Business logic testing"
+  - "HTTP request smuggling"
+  - "Information disclosure hunting"
 tools:
   - browser_navigate
   - nuclei
@@ -18,59 +20,146 @@ tools:
 knowledge: |
   Web application security testing follows a systematic methodology to identify
   vulnerabilities across all layers of the application stack.
-  
-  ## Testing Phases:
-  1. **Information Gathering**: Map application architecture and technologies
-  2. **Authentication Testing**: Test login mechanisms and session handling
-  3. **Authorization Testing**: Verify access controls and privilege escalation
-  4. **Input Validation**: Test all input vectors for injection vulnerabilities
-  5. **Session Management**: Analyze session tokens and lifecycle
-  6. **Error Handling**: Test error conditions and information disclosure
-  7. **Business Logic**: Test application-specific workflows and logic
-  
-  ## Common Vulnerabilities:
-  - **OWASP Top 10**: Focus on most critical web application risks
-  - **Injection Flaws**: SQL, NoSQL, LDAP, OS command injection
-  - **Broken Authentication**: Weak passwords, session fixation, brute force
-  - **Sensitive Data Exposure**: Unencrypted data, weak cryptography
-  - **XML External Entities (XXE)**: XML parser vulnerabilities
-  - **Broken Access Control**: IDOR, privilege escalation, path traversal
-  - **Security Misconfiguration**: Default configs, verbose errors
-  - **Cross-Site Scripting (XSS)**: Reflected, stored, DOM-based
-  - **Insecure Deserialization**: Object injection attacks
-  - **Using Components with Known Vulnerabilities**: Outdated libraries
-  
-  ## Testing Methodology:
-  - **Black Box**: No knowledge of internal structure
-  - **Gray Box**: Limited knowledge of architecture
-  - **White Box**: Full access to source code and documentation
+
+  ## Discovery Arsenal — Technology Fingerprinting
+  **Header signatures**: Server (Apache/Nginx/IIS version), X-Powered-By (PHP/ASP.NET/Express),
+  X-AspNet-Version, X-Generator, X-Drupal-Cache, X-Varnish, Via (proxy chain reveals infra).
+  **Error page fingerprints**: Tomcat default 404 (Apache Tomcat/x.x), Django debug page (yellow),
+  ASP.NET YSOD (yellow screen of death), Laravel Ignition, Spring Boot Whitelabel, Flask debugger.
+  **Default files per framework**: /wp-login.php (WordPress), /administrator (Joomla),
+  /user/login (Drupal), /elmah.axd (ASP.NET), /actuator/health (Spring Boot),
+  /server-status (Apache), /nginx_status, /_cat/indices (Elasticsearch), /solr/admin,
+  /api/swagger.json, /graphql with introspection query, /console (Rails/Werkzeug).
+  **JS framework detection**: check page source for __NEXT_DATA__ (Next.js), ng-version (Angular),
+  __NUXT__ (Nuxt), __GATSBY (Gatsby), window.__remixContext (Remix).
+  **Favicon hash**: mmh3 hash of /favicon.ico matches known frameworks/products in Shodan.
+
+  ## Security Header Analysis — What Misconfiguration Enables
+  **HSTS missing/weak**: enables SSL stripping attacks, session hijack on first HTTP visit;
+  check for max-age too low, missing includeSubDomains, missing preload.
+  **CSP missing**: XSS exploitation becomes trivial — no script execution restrictions.
+  CSP present but weak: unsafe-inline, unsafe-eval, overly broad whitelists (*.googleapis.com),
+  missing frame-ancestors (enables clickjacking), missing base-uri.
+  **X-Frame-Options missing**: clickjacking viable — overlay transparent iframe, trick user actions.
+  **X-Content-Type-Options missing**: MIME sniffing → uploaded files interpreted as HTML/JS.
+  **Permissions-Policy missing**: browser features (camera, microphone, geolocation) accessible
+  to embedded content — relevant for clickjacking and iframe-based attacks.
+  **Referrer-Policy missing/unsafe**: tokens, session IDs in URLs leak via Referer header to
+  third-party resources and analytics.
+  **CORS misconfiguration**: Access-Control-Allow-Origin: * with credentials, or reflecting
+  Origin header without validation → cross-origin data theft. Test with Origin: null,
+  Origin: evil.com, Origin: target.com.evil.com (subdomain match bypass).
+
+  ## Session Management Attack Surface
+  **Fixation**: can you set a session ID before authentication and have it persist post-login?
+  Inject via URL param (?PHPSESSID=known), cookie injection via subdomain, meta tag.
+  **Prediction**: collect multiple session tokens, analyze entropy — look for sequential,
+  timestamp-based, or short tokens. Tools: Burp Sequencer, custom frequency analysis.
+  **Cookie flags**: missing Secure → sent over HTTP (sniffable). Missing HttpOnly → stealable
+  via XSS. Missing SameSite or SameSite=None → CSRF-exploitable. Path scoping too broad.
+  **Concurrent sessions**: can a user have unlimited active sessions? No forced logout on
+  password change? This means stolen sessions persist indefinitely.
+  **Token in URL**: session ID in query string → leaks via Referer, browser history, proxy logs.
+  **Logout**: does logout actually invalidate server-side session or just clear client cookie?
+  Test by replaying the session token after logout.
+  **JWT weaknesses**: alg:none bypass, HS256 with weak secret (hashcat -m 16500), RS256→HS256
+  key confusion (sign with public key), missing exp claim, jku/x5u header injection.
+
+  ## Business Logic Patterns to Probe
+  **State machine skips**: can you jump from step 1 to step 5 in a multi-step workflow?
+  Replay the final step's request without completing intermediaries.
+  **Race conditions**: send concurrent requests to transfer money, apply discount code,
+  claim reward — TOCTOU vulnerabilities. Use Burp Turbo Intruder or async HTTP flooding.
+  **Negative quantities/prices**: order -1 items, set price to -100 — does it credit your account?
+  **Integer overflow**: quantity=99999999999 — does it wrap to zero or negative?
+  **Coupon/promo abuse**: apply same code multiple times, combine incompatible discounts,
+  apply after payment calculation but before charge.
+  **Privilege boundaries**: change user ID in request body/JWT/cookie to access other accounts (IDOR),
+  modify role parameter during registration, access admin API endpoints with user token.
+  **File upload logic**: bypass extension whitelist (shell.php.jpg, shell.pHp, shell.php%00.jpg),
+  content-type mismatch, magic byte header spoofing, polyglot files, path traversal in filename
+  (../../shell.php), overwrite existing files (web.config, .htaccess).
+
+  ## Information Disclosure Vectors
+  **Stack traces**: trigger errors (invalid input types, missing params, division by zero) — traces
+  reveal file paths, library versions, database schemas, internal IPs.
+  **Verbose errors**: SQL error messages → DB type and query structure. Template errors → framework
+  internals. XML parsing errors → XXE potential.
+  **Exposed files**: /.git/HEAD (source code reconstruction), /.env (credentials, API keys),
+  /.DS_Store (directory listing on macOS-developed apps), /robots.txt (hidden paths),
+  /sitemap.xml, /.svn/entries, /WEB-INF/web.xml (Java), /crossdomain.xml, /clientaccesspolicy.xml.
+  **Source maps**: /app.js.map, /main.chunk.js.map — full original source code of frontend.
+  **Backup files**: index.php.bak, config.yml~, .config.swp, #config#, config.old.
+  **Debug endpoints**: /debug, /trace, /metrics, /env, /heapdump (Spring Boot Actuator),
+  /phpinfo.php, /_debug/toolbar (Django debug toolbar).
+  **API documentation**: /swagger.json, /api-docs, /graphql with introspection → full API surface map.
+  **Cloud metadata**: 169.254.169.254 (AWS/GCP/Azure) via SSRF → IAM credentials, instance identity.
+
+  ## HTTP Request Smuggling / Desync Indicators
+  When front-end (load balancer/CDN) and back-end disagree on request boundaries:
+  **CL-TE**: front-end uses Content-Length, back-end uses Transfer-Encoding. Send both headers
+  with conflicting values — if back-end processes a second "smuggled" request, it's vulnerable.
+  **TE-CL**: reverse of above. **TE-TE**: both use Transfer-Encoding but one can be confused
+  with obfuscation: Transfer-Encoding: xchunked, Transfer-Encoding: chunked (extra space),
+  Transfer-Encoding:[tab]chunked, [space]Transfer-Encoding: chunked.
+  **Indicators**: inconsistent 400/errors between direct-to-backend and through-proxy requests,
+  intermittent responses that don't match your request (seeing other users' responses).
+  **Impact**: cache poisoning, credential theft, request hijacking, bypass front-end security controls.
+  When you see Akamai, Cloudflare, AWS ALB, HAProxy, or Nginx as reverse proxy — test for desync.
+
+  ## SSRF Quick Checks
+  Any parameter that accepts URLs or fetches remote resources: webhooks, URL previews,
+  PDF generators, image imports, API integrations. Test with: http://127.0.0.1, http://[::1],
+  http://0, http://localhost, http://169.254.169.254, DNS rebinding, redirects from external domain.
+  Bypass filters: decimal IP (2130706433 = 127.0.0.1), hex (0x7f000001), URL encoding,
+  alternate schemas (gopher://, dict://, file:///), domain with DNS pointing to 127.0.0.1.
+
+  ## Testing Methodology
+  - **Black Box**: No knowledge of internal structure — rely on fingerprinting and fuzzing
+  - **Gray Box**: Limited knowledge — test with provided credentials at multiple privilege levels
+  - **White Box**: Full source access — trace input handling from entry to sink
+  In all modes: map the full attack surface first, then depth-test each vector.
 examples:
   - title: "Application Fingerprinting"
     description: "Identify web technologies and frameworks"
     payload: "Check HTTP headers, error pages, and static files"
     validation: "Analyze Server, X-Powered-By, and other revealing headers"
-  - title: "Directory Enumeration"
-    description: "Discover hidden directories and files"
-    payload: "/admin/, /backup/, /config/, /.git/, /test/"
-    validation: "Check for accessible administrative interfaces"
+  - title: "Git Repository Exposure"
+    description: "Check for exposed .git directory enabling source code recovery"
+    payload: "/.git/HEAD, /.git/config, /.git/logs/HEAD"
+    validation: "If HEAD returns ref: refs/heads/main, full repo reconstruction is possible"
+  - title: "Spring Boot Actuator Exposure"
+    description: "Probe for exposed management endpoints"
+    payload: "/actuator/env, /actuator/heapdump, /actuator/mappings"
+    validation: "Env endpoint reveals config properties including credentials"
+  - title: "CORS Misconfiguration"
+    description: "Test for overly permissive cross-origin resource sharing"
+    payload: "Origin: https://evil.com (and Origin: null)"
+    validation: "If Access-Control-Allow-Origin reflects attacker origin with credentials, data theft is possible"
+  - title: "JWT Algorithm Confusion"
+    description: "Test for RS256 to HS256 downgrade attack"
+    payload: "Change alg header to HS256, sign with public key"
+    validation: "If server accepts the forged token, authentication bypass achieved"
   - title: "Parameter Pollution"
     description: "Test HTTP parameter pollution vulnerabilities"
     payload: "param=value1&param=value2"
     validation: "Analyze how application handles duplicate parameters"
-  - title: "HTTP Method Testing"
-    description: "Test for dangerous HTTP methods"
-    payload: "OPTIONS, PUT, DELETE, TRACE, CONNECT"
-    validation: "Check if dangerous methods are enabled"
-  - title: "Cookie Security Testing"
-    description: "Analyze cookie security attributes"
-    payload: "Check Secure, HttpOnly, SameSite attributes"
-    validation: "Verify cookies are properly protected"
+  - title: "Race Condition in Payment"
+    description: "Exploit TOCTOU in transaction processing"
+    payload: "Send 20+ concurrent requests to apply discount or transfer funds"
+    validation: "Check if discount applied multiple times or balance goes negative"
+  - title: "SSRF via URL Parameter"
+    description: "Test server-side request forgery through URL-accepting parameters"
+    payload: "url=http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+    validation: "Cloud IAM credentials returned in response"
 validation_methods:
   - "Verify vulnerabilities with proof-of-concept exploits"
   - "Test from different user privilege levels"
   - "Validate findings across different browsers and platforms"
   - "Check for false positives through manual verification"
   - "Document impact and exploitability of findings"
+  - "Confirm information disclosure with unique marker strings"
+  - "Validate smuggling with differential response analysis"
 references:
   - "https://owasp.org/www-project-web-security-testing-guide/"
   - "https://owasp.org/www-project-top-ten/"

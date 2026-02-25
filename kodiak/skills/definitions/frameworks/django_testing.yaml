@@ -13,64 +13,127 @@ tools:
   - httpx
   - subfinder
 knowledge: |
-  Django is a high-level Python web framework with specific security features and potential vulnerabilities.
-  
-  ## Common Django Vulnerabilities:
-  1. **Debug Mode Exposure**: Sensitive information in debug pages
-  2. **Admin Interface**: Default admin panel at /admin/
-  3. **CSRF Protection**: Django's CSRF middleware can be bypassed
-  4. **Template Injection**: Server-side template injection in Django templates
-  5. **ORM Injection**: SQL injection through Django ORM misuse
-  
-  ## Django-Specific Endpoints:
-  - `/admin/` - Django admin interface
-  - `/static/` - Static files directory
-  - `/media/` - User-uploaded files
-  - `/__debug__/` - Django Debug Toolbar (if enabled)
-  
-  ## Configuration Files:
-  - `settings.py` - Main configuration file
-  - `urls.py` - URL routing configuration
-  - `manage.py` - Django management script
-  - `requirements.txt` - Python dependencies
-  
-  ## Security Features to Test:
-  - **CSRF Protection**: Test CSRF token validation
-  - **XSS Protection**: Django auto-escapes templates
-  - **SQL Injection**: ORM provides protection but can be bypassed
-  - **Clickjacking**: X-Frame-Options middleware
+  Django's "batteries included" design means a large built-in attack surface. ORM, admin, templates, middleware, DRF — each has specific bypass patterns.
+
+  ## ORM Injection
+  - **.extra()**: Deprecated but still used — `queryset.extra(where=["name='%s'" % user_input])` is raw SQL. Direct injection.
+  - **.raw()**: `MyModel.objects.raw("SELECT * FROM t WHERE id=%s" % uid)` — classic SQLi when string-formatted.
+  - **RawSQL()**: `queryset.annotate(val=RawSQL("select col from t where id=%s" % input))` — injectable annotation.
+  - **__regex / __iregex**: `filter(name__regex=user_input)` — regex injection, potential ReDoS, backend-specific SQLi.
+  - **__contains / __icontains**: Safe in isolation, but combined with user-controlled field names → ORM filter injection.
+    `Model.objects.filter(**{user_field + "__contains": value})` — attacker controls field name → access any column.
+  - **F() expression injection**: When F() arguments come from user input, can reference arbitrary model fields.
+  - **JSONField lookups**: `data__key=value` — when key is user-controlled, enumerate JSON structure.
+  - **order_by injection**: `queryset.order_by(user_input)` — can reference related fields, leak data via timing/error.
+
+  ## Template Engine Attacks
+  - **Django template injection**: `{{ request.user.password }}` — when user input rendered as template, access context variables.
+    Detection: `{{ 7|add:"3" }}` → "10" confirms template evaluation. `{% debug %}` dumps full context.
+  - **Jinja2 misconfiguration**: When Django configured with Jinja2 backend, much more dangerous:
+    `{{ ''.__class__.__mro__[1].__subclasses__() }}` — enumerate classes for RCE.
+    `{{ config.items() }}` or `{{ settings.SECRET_KEY }}` — direct settings access in some configs.
+  - **{% load %} abuse**: Custom template tags may expose dangerous functionality.
+    `{% load log %}{% get_admin_log 100 as log %}` — if admin templatetags accessible.
+  - **{{ debug }}**: django.template.context_processors.debug adds debug variable — exposes SQL queries when DEBUG=True.
+  - **mark_safe / |safe filter**: Anywhere these are used with user input → XSS. Grep source for mark_safe, |safe, {% autoescape off %}.
+
+  ## Middleware Bypass
+  - **@csrf_exempt**: Views decorated with csrf_exempt skip CSRF validation entirely. Common on API views, webhooks.
+  - **Middleware ordering**: SecurityMiddleware must be first. If custom middleware runs before auth → bypass auth checks.
+    MIDDLEWARE list order matters — middleware processing is top-down for request, bottom-up for response.
+  - **Conditional middleware**: Some apps disable middleware in certain environments or for certain paths — test API endpoints.
+  - **CsrfViewMiddleware bypass**: Content-Type: application/json may bypass CSRF checks on older Django.
+    PUT/DELETE methods may skip CSRF if CsrfViewMiddleware not checking all methods.
+  - **SessionMiddleware + cookie manipulation**: Session cookie signed with SECRET_KEY — if leaked, forge sessions.
+
+  ## Django REST Framework (DRF)
+  - **permission_classes gaps**: Views with `permission_classes = []` or `AllowAny` — wide open.
+    Check if permission is checked per-action: list() authorized, destroy() not checked.
+  - **Serializer field exposure**: Serializer returns fields not meant for users — password_hash, internal_id, is_staff.
+    `fields = '__all__'` in serializer → exposes every model field including sensitive ones.
+  - **Writable serializer fields**: Read-only fields not enforced → mass assignment. Send is_staff=True, role="admin".
+  - **filter_backends injection**: DjangoFilterBackend with user-controlled filter fields → ORM filter injection.
+    `?field__password__startswith=p` → boolean-based extraction of password hashes.
+  - **Throttle bypass**: Different throttle classes per view. Anon vs auth throttle — switch between to reset.
+    Use multiple API keys or auth tokens to distribute requests across throttle buckets.
+  - **ViewSet action authorization**: Custom @action methods on ViewSets may not inherit ViewSet-level permissions.
+  - **Browsable API**: DRF's browsable API at /api/ exposes endpoint structure, schemas, and sometimes raw data.
+
+  ## Django Admin Exploitation
+  - **Admin action abuse**: Custom admin actions may perform dangerous operations — bulk delete, export, password reset.
+  - **ModelAdmin override gaps**: Custom save_model() or delete_model() may bypass validation or permission checks.
+  - **Inline model permissions**: Inline models in admin may not have independent permission checks.
+  - **Admin URL predictability**: /admin/app_name/model_name/ — enumerate models and apps from URL patterns.
+  - **LogEntry access**: /admin/admin/logentry/ — admin action log may reveal sensitive operations and data.
+  - **Admin brute force**: Default admin has no rate limiting or lockout. `/admin/login/` is brute-forceable.
+
+  ## SECRET_KEY Impact — When Leaked, Everything Falls
+  - **Session forgery**: Django sessions signed with SECRET_KEY. Leak → forge any user's session → instant account takeover.
+    `django.core.signing.loads(session_data, key=SECRET_KEY)` → decode, modify, re-sign.
+  - **Signed cookie manipulation**: All signed cookies (CSRF token, messages framework) forgeable with SECRET_KEY.
+  - **Password reset token forging**: Reset tokens use SECRET_KEY + user state. If key leaked and user state known → forge reset links.
+  - **Crypto operations**: Any use of django.core.signing, Signer, TimestampSigner compromised.
+  - **Where to find it**: DEBUG=True error pages, .env files, git repos, /settings.py, environment variable leaks, docker configs.
+
+  ## Dangerous Settings Patterns
+  - **DEBUG=True in production**: Exposes settings, SQL queries, full tracebacks, file paths, SECRET_KEY in error pages.
+  - **ALLOWED_HOSTS=['*']**: Enables host header injection → password reset poisoning, cache poisoning.
+  - **CORS_ALLOW_ALL_ORIGINS=True / CORS_ORIGIN_ALLOW_ALL=True**: Any origin can make authenticated API requests.
+  - **SESSION_COOKIE_SECURE=False**: Session cookie sent over HTTP → session hijacking on mixed-content pages.
+  - **SECURE_SSL_REDIRECT=False**: No HTTPS enforcement → MitM.
+  - **X_FRAME_OPTIONS not set**: Clickjacking possible when middleware missing or set to ALLOWALL.
+
+  ## Chaining Scenarios
+  - Debug page (trigger 404/500) → read settings → extract SECRET_KEY → forge admin session → full admin access.
+  - ORM filter injection via DRF → boolean-based data extraction → dump user table → credential theft.
+  - CSRF exempt API endpoint → mutation without user consent → account changes → privilege escalation.
+  - ALLOWED_HOSTS=['*'] → Host header poisoning → password reset to attacker domain → account takeover.
+  - Serializer exposes password hash → offline crack → login → admin access.
+  - Template injection → {% debug %} → leak context variables → find SECRET_KEY → forge sessions at scale.
 examples:
   - title: "Django Admin Discovery"
-    description: "Check for accessible Django admin interface"
-    payload: "/admin/"
-    validation: "Look for Django admin login page"
+    description: "Check for accessible Django admin interface and brute force"
+    payload: "/admin/, /admin/login/, /admin/admin/logentry/"
+    validation: "Look for Django admin login page; test for rate limiting on login"
   - title: "Debug Mode Detection"
-    description: "Test for Django debug mode exposure"
-    payload: "/nonexistent-page-12345"
-    validation: "Check for Django debug page with traceback"
-  - title: "Static File Enumeration"
-    description: "Enumerate static files and directories"
-    payload: "/static/admin/css/base.css"
-    validation: "Check if Django admin CSS files are accessible"
-  - title: "Template Injection"
-    description: "Test for server-side template injection"
-    payload: "{{7*7}}"
-    validation: "Look for '49' in response indicating template evaluation"
-  - title: "CSRF Token Bypass"
-    description: "Test CSRF protection bypass methods"
-    payload: "Content-Type: text/plain"
-    validation: "Check if CSRF validation is bypassed with different content types"
-  - title: "Django Secret Key Exposure"
-    description: "Look for exposed Django secret key"
-    payload: "/settings.py"
-    validation: "Search for SECRET_KEY in accessible files"
+    description: "Trigger Django debug error page to extract settings and SECRET_KEY"
+    payload: "/nonexistent-page-12345 or trigger 500 via malformed input"
+    validation: "Check for Django debug page with traceback, settings, and SQL queries"
+  - title: "ORM Filter Injection via DRF"
+    description: "Exploit DjangoFilterBackend to access unintended model fields"
+    payload: "GET /api/users/?email__startswith=admin or ?password__startswith=pbkdf2"
+    validation: "Check if filtering on sensitive fields returns different results (boolean extraction)"
+  - title: "Template Injection Detection"
+    description: "Test for server-side template injection in Django/Jinja2"
+    payload: "{{ 7|add:'3' }} for Django, {{ config.items() }} for Jinja2"
+    validation: "Django: '10' in response. Jinja2: config dict dumped"
+  - title: "Serializer Field Exposure"
+    description: "Check if DRF serializer exposes sensitive model fields"
+    payload: "GET /api/users/me/ — inspect response for password, is_staff, SECRET_KEY references"
+    validation: "Look for sensitive fields not intended for API consumers"
+  - title: "CSRF Exempt Endpoint Abuse"
+    description: "Find and exploit @csrf_exempt views for cross-site mutations"
+    payload: "POST from attacker origin to /api/update-email/ without CSRF token"
+    validation: "Check if state-changing operation succeeds without CSRF token"
+  - title: "SECRET_KEY Session Forgery"
+    description: "Forge Django session cookie using leaked SECRET_KEY"
+    payload: "python3 -c \"from django.core.signing import dumps; print(dumps({'_auth_user_id':'1','_auth_user_backend':'django.contrib.auth.backends.ModelBackend'}))\""
+    validation: "Use forged session cookie to access admin panel as superuser"
+  - title: "Host Header Poisoning"
+    description: "Exploit ALLOWED_HOSTS=['*'] for password reset poisoning"
+    payload: "POST /password_reset/ with Host: attacker.com"
+    validation: "Check if password reset email contains attacker.com URL"
 validation_methods:
-  - "Check HTTP response headers for Django-specific headers"
-  - "Look for Django admin interface at common paths"
-  - "Test for debug mode by accessing non-existent pages"
-  - "Enumerate static and media directories"
-  - "Test CSRF protection with different HTTP methods"
-  - "Search for Django-specific error messages"
+  - "Check HTTP response headers for Django-specific headers (X-Frame-Options, CSRF cookie name)"
+  - "Test for debug mode by triggering 404/500 errors and examining error pages"
+  - "Enumerate /admin/ paths and test for brute force protection"
+  - "Test ORM injection via DRF filter parameters with field traversal (__startswith, __regex)"
+  - "Inspect DRF serializer responses for sensitive field exposure"
+  - "Test CSRF enforcement across all state-changing endpoints"
+  - "Check for dangerous settings: DEBUG, ALLOWED_HOSTS, CORS, SESSION_COOKIE_SECURE"
+  - "Attempt session forgery if SECRET_KEY is discovered"
 references:
   - "https://docs.djangoproject.com/en/stable/topics/security/"
-  - "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information"
+  - "https://docs.djangoproject.com/en/stable/ref/settings/#secret-key"
+  - "https://www.django-rest-framework.org/api-guide/permissions/"
+  - "https://owasp.org/www-project-web-security-testing-guide/"

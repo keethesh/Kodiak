@@ -1,0 +1,193 @@
+name: race_conditions
+description: Race condition and TOCTOU exploitation techniques for web applications and APIs
+techniques:
+  - "HTTP/2 single-packet attack for precise request synchronization"
+  - "Last-byte synchronization for HTTP/1.1 targets"
+  - "TOCTOU exploitation in authorization and business logic"
+  - "Limit-overrun via concurrent request flooding"
+  - "Session-level race conditions for authentication bypass"
+  - "Database-level race conditions exploiting missing row locks"
+tools:
+  - curl
+  - httpx
+  - nuclei
+  - browser_navigate
+knowledge: |
+  Race conditions exploit the gap between check and use. When an application reads state, makes a decision,
+  then acts — a concurrent request can alter that state in between. The narrower the window, the more
+  requests you need. The wider the window (network calls, DB queries, external APIs), the easier the race.
+
+  ## Synchronization Techniques
+  The attack is only as good as your ability to make requests arrive simultaneously.
+
+  HTTP/2 single-packet attack (most reliable):
+    HTTP/2 multiplexes streams on one TCP connection. Send all request headers with END_HEADERS but
+    withhold the final DATA frame. Then send all final frames in a single TCP packet.
+    The server processes all requests in the same event loop tick.
+    Turbo Intruder: engine=Engine.HTTP2, requestsPerConnection=N, then gate.open().
+
+  Last-byte synchronization (HTTP/1.1 fallback):
+    Open N TCP connections. Send each request minus the last byte. Then send all final bytes
+    simultaneously across all connections. Reduces network jitter to ~1ms window.
+    Implementation: aiohttp with N sessions, send body[:-1], then asyncio.gather(send_last_byte()).
+
+  Server-side request queuing:
+    When the server uses connection pooling (e.g., PHP with keep-alive), send a dummy request
+    followed by the real request on the same connection — queued requests process back-to-back.
+    Useful when you can't control external network timing.
+
+  Connection warming:
+    Before the attack, establish connections and send a throwaway request to bypass TLS handshake
+    and TCP slow-start jitter. Then send the race payload on warm connections.
+
+  ## High-Value Targets — Where to Look
+  Financial operations:
+    Balance check → debit. Send concurrent withdrawals to overdraw account.
+    Transfer between accounts — concurrent transfers can double-spend.
+    Payment processing — charge once, deliver twice.
+    Refund processing — concurrent refund requests on the same transaction.
+
+  Coupon/promo code redemption:
+    "Single use" code checked then marked used — concurrent requests redeem multiple times.
+    Applies to: discount codes, referral bonuses, trial activations, gift card claims.
+
+  Voting/rating systems:
+    One-vote-per-user check → insert vote. Concurrent votes bypass uniqueness check.
+    Applies to: polls, likes, upvotes, reviews, contest entries.
+
+  Account operations:
+    Duplicate registration — concurrent signup with same email creates two accounts,
+    one may bypass email verification. Can lead to account confusion.
+    Concurrent password reset — two tokens generated; one may remain valid after the other is used.
+    Concurrent session creation — bypass "single active session" enforcement.
+
+  Inventory/quota:
+    Stock check → reserve — buy more items than available.
+    Seat reservation — book the same seat/slot twice.
+    Rate limit check → action — exceed rate limits via concurrency.
+
+  File operations:
+    Upload then process — race between upload and virus scan to serve malicious file.
+    Symlink races — replace file between stat() and open() on server filesystem.
+
+  ## TOCTOU Patterns in Code
+  Classic vulnerable pattern (pseudocode):
+    balance = get_balance(user)         # TIME OF CHECK
+    if balance >= amount:
+      deduct_balance(user, amount)      # TIME OF USE — no lock between check and use
+  What should exist:
+    SELECT ... FOR UPDATE (row-level DB lock)
+    or atomic operation: UPDATE balance SET amount = amount - X WHERE amount >= X
+
+  Authorization TOCTOU:
+    role = get_role(user)               # check: user is admin
+    # concurrent request demotes user
+    perform_admin_action()              # use: action proceeds with stale role
+
+  State machine TOCTOU:
+    order_status = get_status(order)    # check: order is "pending"
+    # concurrent request also reads "pending"
+    process_order(order)                # both requests process the same order
+    set_status(order, "completed")
+
+  ## Detection Methodology
+  Step 1 — Identify the target endpoint and the business logic it protects.
+  Step 2 — Determine the state change: what resource is being checked and modified?
+  Step 3 — Choose N (start with 10-20 concurrent requests).
+  Step 4 — Send N identical requests simultaneously using single-packet or last-byte sync.
+  Step 5 — Analyze outcomes:
+    - Count how many succeeded (should be 1; if >1, race confirmed).
+    - Check database: duplicate records? Negative balance? Exceeded quota?
+    - Compare total state change vs expected (e.g., balance dropped by N*amount instead of 1*amount).
+  Step 6 — Increase N and repeat to find the minimum concurrency needed.
+
+  ## Implementation Snippets
+  Python aiohttp last-byte sync:
+    async def race(url, data, n=20):
+        sessions = [aiohttp.ClientSession() for _ in range(n)]
+        # Prepare requests (send all but last byte)
+        tasks = [s.post(url, data=data[:-1]) for s in sessions]
+        prepared = await asyncio.gather(*tasks)
+        # Fire final bytes simultaneously
+        await asyncio.gather(*[p.send(data[-1:]) for p in prepared])
+
+  curl parallel (quick and dirty):
+    seq 1 20 | xargs -P 20 -I {} curl -s -X POST https://target/api/redeem -d 'code=PROMO1' &
+
+  Turbo Intruder (single-packet HTTP/2):
+    def queueRequests(target, wordlists):
+        engine = RequestEngine(endpoint=target.endpoint, concurrentConnections=1,
+                               requestsPerConnection=20, engine=Engine.HTTP2)
+        for i in range(20):
+            engine.queue(target.req, gate='race')
+        engine.openGate('race')
+
+  ## Subtle Variants
+  Partial construction race:
+    Object created in multiple steps (insert user → assign role → send welcome email).
+    Race between insert and role assignment: access account before role is set → default/admin role.
+
+  Cache poisoning race:
+    Concurrent requests during cache miss: first request fetches legitimate data, second request
+    poisons the cache with attacker-controlled data. Subsequent users get poisoned response.
+
+  Multi-endpoint race:
+    One request checks balance on /api/balance. Another request debits on /api/transfer.
+    The check and use happen on different endpoints but share state.
+
+  Session race:
+    Login endpoint returns session token. Concurrent login requests may get the same token,
+    or concurrent requests with the same token may hit different backend servers with stale session state.
+
+  ## Escalation Chains
+  Race on coupon redemption → unlimited discounts → financial loss.
+  Race on account creation → duplicate accounts → bypass email verification → account takeover.
+  Race on password reset → multiple valid tokens → token remains valid after "used" → account takeover.
+  Race on balance transfer → negative balance / double-spend → financial fraud.
+  Race on file upload → bypass malware scan → serve malicious file → RCE.
+  Race on authorization check → TOCTOU on role → perform admin actions → privilege escalation.
+
+  ## Common Pitfalls
+  - Single concurrency isn't enough; server-side lock contention means you may need 50-100 requests.
+  - HTTP/1.1 with keep-alive may serialize requests on one connection — use separate connections.
+  - Load balancers can distribute requests to different backends — each backend has independent state.
+    Sticky sessions or targeting a single backend IP increases success rate.
+  - Idempotency keys defeat race conditions; check if the API accepts and enforces them.
+  - Database serializable isolation level prevents most races; test if the app actually uses it.
+  - Some frameworks use optimistic locking (version column) — race will fail with conflict errors.
+  - Always check: did the race create observable side effects even if the response was an error?
+examples:
+  - title: "Double-Spend via Balance Transfer Race"
+    description: "Exploit concurrent transfer requests to withdraw more than available balance"
+    payload: "Send 20 simultaneous POST /api/transfer {amount: 100, to: attacker} requests using HTTP/2 single-packet attack"
+    validation: "Recipient received 20x the amount while sender's balance only decreased once or went negative"
+  - title: "Coupon Code Multi-Redemption"
+    description: "Redeem a single-use promo code multiple times via concurrent requests"
+    payload: "Send 15 simultaneous POST /api/promo/redeem {code: 'SAVE50'} with last-byte sync"
+    validation: "Discount applied to multiple orders; database shows coupon used_count > 1 or multiple discount records"
+  - title: "Duplicate Account Registration"
+    description: "Create duplicate accounts by racing the uniqueness check"
+    payload: "Send 10 simultaneous POST /api/register {email: 'test@example.com', password: 'pass'}"
+    validation: "Two or more accounts created with the same email; one may bypass email verification flow"
+  - title: "Rate Limit Bypass via Concurrency"
+    description: "Exceed rate-limited action by sending concurrent requests before counter updates"
+    payload: "Send 50 simultaneous POST /api/vote {post_id: 1} within a single TCP packet"
+    validation: "Vote count increased by more than the per-user limit; rate limiter failed to block concurrent requests"
+  - title: "Password Reset Token Reuse"
+    description: "Race the password reset flow to keep a token valid after it should be consumed"
+    payload: "Send 5 simultaneous POST /api/reset-password {token: 'abc123', new_password: 'pwned'}"
+    validation: "Multiple requests succeed with the same token; verify by attempting to use the token again after reset"
+  - title: "Inventory Oversell"
+    description: "Purchase more items than available stock by racing the inventory check"
+    payload: "Send 30 simultaneous POST /api/checkout {item_id: 42, qty: 1} when only 5 remain in stock"
+    validation: "More than 5 orders confirmed; stock went negative or oversold beyond available inventory"
+validation_methods:
+  - "Compare actual state change (balance, count, inventory) against expected single-operation result to confirm multiple successful executions"
+  - "Check database for duplicate records that should be unique (accounts, votes, redemptions, transactions)"
+  - "Verify financial impact: negative balances, double-spent funds, or excess refunds after concurrent operations"
+  - "Repeat with increasing concurrency levels (10, 20, 50) to determine reliability and minimum trigger threshold"
+  - "Confirm the race window by measuring with single requests first (should fail), then concurrent (should succeed)"
+references:
+  - "https://portswigger.net/research/smashing-the-state-machine"
+  - "https://owasp.org/www-community/attacks/Testing_for_Race_Conditions"
+  - "https://github.com/PortSwigger/turbo-intruder"

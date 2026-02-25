@@ -38,6 +38,7 @@ class ActionType(str, Enum):
     ADVANCE = "advance"
     COMPLETE = "complete"
     WRITE_FILE = "write_file"
+    LOAD_SKILLS = "load_skills"
 
 
 class NoteCategoryEnum(str, Enum):
@@ -84,7 +85,7 @@ class Action(BaseModel):
     """Explicit manager action for event-driven orchestration."""
 
     type: ActionType = Field(
-        description="Action type: launch, cancel, wait, advance, complete"
+        description="Action type: launch, cancel, wait, advance, complete, load_skills"
     )
     command: str = Field(
         default="",
@@ -113,6 +114,10 @@ class Action(BaseModel):
     content: str = Field(
         default="",
         description="Required for write_file. The exact string/code content to write.",
+    )
+    skills: List[str] = Field(
+        default_factory=list,
+        description="Required for load_skills. Skill names to load from the available catalog.",
     )
 
 
@@ -205,7 +210,7 @@ class KodiakResponse(BaseModel):
         default_factory=list,
         description=(
             "Event-driven manager actions. Preferred over commands[] when provided. "
-            "Supported: launch, cancel, wait, advance, complete."
+            "Supported: launch, cancel, wait, advance, complete, load_skills."
         ),
     )
     discoveries: Discovery = Field(

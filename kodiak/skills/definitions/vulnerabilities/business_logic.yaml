@@ -1,0 +1,184 @@
+name: business_logic
+description: Business logic vulnerability detection — state machine abuse, numeric manipulation, and workflow bypass
+techniques:
+  - "State machine and workflow bypass"
+  - "Numeric and currency manipulation"
+  - "Race condition exploitation in business context"
+  - "Price and discount tampering"
+  - "Multi-step process parameter abuse"
+  - "Validation gap identification"
+tools:
+  - httpx
+  - curl
+  - browser_navigate
+  - nuclei
+knowledge: |
+  Business logic flaws exploit legitimate application functionality in unintended ways.
+  Unlike injection attacks, these abuse correct syntax with incorrect semantics — the
+  request is well-formed but violates business invariants the developers assumed would hold.
+
+  ## State Machine Abuse:
+
+  Most multi-step workflows encode an implicit state machine. Map it, then violate it:
+  - **Step skipping**: Go directly from step 1 to step 3 — if step 2 performs
+    authorization or validation, skipping it may grant unauthorized access
+  - **Step replay**: Complete a step, then replay it — double-apply discounts,
+    re-trigger provisioning, duplicate rewards
+  - **Reverse transitions**: Move from "completed" back to "pending" — re-open
+    closed orders, revert approvals, un-cancel subscriptions
+  - **Parallel state**: Open same workflow in two tabs/sessions — each may see
+    stale state, allowing both to proceed past mutual exclusion points
+  - **State parameter tampering**: If state is tracked client-side (hidden field,
+    JWT claim, cookie), modify it directly to jump states
+
+  When you see a multi-step flow, immediately test: Can I reach the final step by
+  replaying only the last request? Can I go backwards? Can I skip the payment step?
+
+  ## Numeric Manipulation:
+
+  Anywhere the application processes numbers, probe boundary conditions:
+  - **Negative values**: Quantity = -1 on a purchase may credit the account instead
+    of debiting it; refund amount = -$50 may charge instead of refunding
+  - **Zero values**: Quantity = 0 may bypass minimum order checks but still trigger
+    fulfillment side effects (shipping label generation, inventory reservation)
+  - **Integer overflow**: On 32-bit systems, quantity > 2,147,483,647 wraps to
+    negative — price × negative quantity = negative total = credit
+  - **Floating point precision**: 0.1 + 0.2 ≠ 0.3 in IEEE 754 — currency calculations
+    with floating point can produce rounding errors exploitable at scale
+  - **Rounding exploitation**: Buy 3 items at $1.33 each — depending on rounding
+    direction, total may differ from expected; exploit with high-volume transactions
+  - **MAX_INT + 1**: Unsigned overflow wraps to 0 — item count of 0 at checkout
+    may skip payment validation entirely
+  - **Currency precision**: Send 0.001 units in a system that rounds to 2 decimal
+    places — repeated micro-transactions may accumulate or be free
+  - **Type confusion**: Send string "99" vs integer 99 vs float 99.0 — different
+    parsing paths may apply different validation rules
+
+  ## Workflow Bypass Patterns:
+
+  Look for business rules enforced only at the UI layer or in a single code path:
+  - **Coupon stacking**: Apply multiple coupons by sending concurrent requests,
+    or replay the coupon-apply request with different codes before order finalizes
+  - **Referral self-referral**: Create account A, generate referral code, use it
+    to create account B — if referral validation only checks code format, not
+    whether referrer and referee are the same person/IP/device
+  - **Trial extension**: Delete cookie/local storage tracking trial start, or
+    create new account with same payment method — if trial eligibility is
+    client-side or per-account rather than per-payment-instrument
+  - **Feature gate bypass**: Premium features may be gated at the UI but the
+    API endpoint processes requests regardless of subscription tier —
+    call the API directly with a free-tier session
+  - **Rate limit bypass for business impact**: If rate limiting is per-IP,
+    use proxy rotation; if per-account, use multiple accounts; if per-API-key,
+    check if limit resets on key rotation
+  - **Approval bypass**: Submit action, then modify it after approval but before
+    execution — TOCTOU between approval check and action execution
+
+  ## Race Conditions in Business Logic:
+
+  Race conditions become business logic bugs when they violate financial invariants:
+  - **Double-spend**: Send two simultaneous payment requests against same balance —
+    if balance check and debit are not atomic, both succeed
+  - **Inventory oversell**: Two users purchase last item simultaneously — both get
+    confirmed if stock check and decrement are separate operations
+  - **Double-vote / double-apply**: Submit two applications or votes concurrently —
+    uniqueness constraint checked at application layer (not DB) may allow both
+  - **Coupon race**: Apply same single-use coupon from two sessions simultaneously
+  - **Balance transfer race**: Transfer full balance to two recipients simultaneously
+
+  Testing technique: Use parallel HTTP requests (curl with xargs, Turbo Intruder,
+  race-the-web). Send 10-50 identical requests within a tight window (~50ms).
+  Compare expected vs actual state (balance, inventory count, vote tally).
+
+  ## Price and Discount Manipulation:
+
+  Client-side price data should never be trusted, but frequently is:
+  - **Price in request body**: Intercept checkout request, modify item price field —
+    if server doesn't re-validate price against catalog, arbitrary pricing
+  - **Currency parameter**: Change currency code (USD→VND) without corresponding
+    price adjustment — pay in weaker currency at stronger-currency price
+  - **Discount stacking order**: Apply percentage discount then fixed discount vs
+    reverse — different order may yield lower total
+  - **Negative discount**: Send discount_amount=-50 — may add to price or wrap to
+    a very large discount depending on unsigned handling
+  - **Tax/shipping manipulation**: Modify tax rate or shipping cost in request —
+    server may trust client-calculated totals
+  - **Gift card + refund**: Purchase with gift card, refund to credit card — net
+    extraction of gift card balance as cash equivalent
+
+  ## Validation Gap Identification:
+
+  Systematically compare validation between UI and API:
+  - **Client-side only**: Disable JavaScript or intercept request after client
+    validation — if server accepts invalid data, validation is client-only
+  - **Inconsistent between endpoints**: Web form validates email format but mobile
+    API does not — same backend, different input paths
+  - **Validation order dependency**: Field A validation depends on field B value —
+    submit valid B first, then change B after A is validated
+  - **Partial update bypass**: PATCH request with only the field you want to change
+    may skip validation that runs on full-object PUT requests
+  - **Batch vs single**: Single item creation validates; batch import does not
+  - **Import/export asymmetry**: Export data, modify restricted fields in CSV/JSON,
+    re-import — import parser may not enforce same constraints as UI
+
+  ## Multi-Step Process Abuse:
+
+  TOCTOU (Time of Check to Time of Use) between steps is the core vulnerability:
+  - **Parameter tampering between steps**: Change address after payment validation
+    but before shipping label generation — ship to different address than validated
+  - **Session fixation between steps**: Start checkout as user A, complete payment
+    as user B — order may process under B's account with A's cart
+  - **Async step exploitation**: If step N triggers async processing, modify
+    state before async job reads it — job sees tampered state
+  - **Idempotency key reuse**: Replay successful transaction with same idempotency
+    key but different parameters — server may return cached success for new params
+
+  ## Chaining Patterns:
+
+  Business logic flaws compound with other vulnerability classes:
+  - **Business logic → financial loss**: Negative quantity purchases, coupon stacking,
+    price manipulation — direct monetary impact
+  - **Workflow bypass → privilege escalation**: Skip approval step → gain admin
+    provisioning without authorization
+  - **Race condition → data corruption**: Concurrent state mutations → inconsistent
+    database state → cascading application failures
+  - **IDOR + business logic**: Access another user's workflow, modify their in-progress
+    transaction → redirect their order, change their settings
+  - **Business logic + CSRF**: Force victim through manipulated workflow via CSRF —
+    victim's session executes attacker's business logic exploit
+examples:
+  - title: "Negative Quantity Purchase"
+    description: "Submit order with negative item quantity to generate account credit"
+    payload: "POST /api/orders {\"item_id\": \"SKU-123\", \"quantity\": -5, \"price\": 29.99}"
+    validation: "Check if account balance increases instead of decreasing; verify order total is negative"
+  - title: "Checkout Step Skip"
+    description: "Jump directly to order confirmation bypassing payment step"
+    payload: "POST /api/checkout/confirm {\"order_id\": \"ORD-456\", \"step\": \"confirm\"} — skip /checkout/payment"
+    validation: "Verify order is confirmed and fulfilled without payment processing"
+  - title: "Race Condition Double-Spend"
+    description: "Send concurrent withdrawal requests against same balance"
+    payload: "Send 20 parallel POST /api/transfer {\"amount\": 100, \"to\": \"attacker\"} requests with 50ms window"
+    validation: "Compare total transferred amount against original balance; if total > balance, race condition confirmed"
+  - title: "Coupon Stacking via Concurrent Requests"
+    description: "Apply multiple single-use coupons simultaneously"
+    payload: "Parallel POST /api/cart/coupon with different coupon codes in sub-50ms window"
+    validation: "Verify multiple coupons applied to same order; check final price reflects stacked discounts"
+  - title: "Feature Gate Bypass via Direct API"
+    description: "Access premium endpoint with free-tier session token"
+    payload: "GET /api/premium/export-report with free-tier Authorization header"
+    validation: "If report data returns with 200 status, premium gate is UI-only"
+  - title: "Price Tampering in Checkout Request"
+    description: "Modify unit price in the purchase request body"
+    payload: "POST /api/checkout {\"items\": [{\"id\": \"ITEM-1\", \"price\": 0.01, \"quantity\": 1}]}"
+    validation: "Check if order processes at modified price; compare charged amount vs catalog price"
+validation_methods:
+  - "Compare server-side balance/inventory before and after concurrent duplicate requests to detect race conditions"
+  - "Submit requests with negative, zero, and boundary numeric values and observe server response and state changes"
+  - "Replay completed workflow steps and verify if server re-processes them or rejects duplicates"
+  - "Skip intermediate workflow steps by directly calling the final endpoint and check if the action completes"
+  - "Intercept and modify price, quantity, or discount fields in transit and verify if server re-validates against source of truth"
+  - "Access premium or restricted API endpoints using a lower-privilege session token to identify feature gate gaps"
+references:
+  - "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/"
+  - "https://portswigger.net/web-security/logic-flaws"
+  - "https://portswigger.net/web-security/race-conditions"

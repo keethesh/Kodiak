@@ -1,0 +1,175 @@
+name: csrf
+description: Cross-Site Request Forgery detection, token bypass, and exploitation techniques
+techniques:
+  - "CSRF token bypass and extraction"
+  - "SameSite cookie attribute abuse"
+  - "Content-Type manipulation for preflight bypass"
+  - "HTTP method override exploitation"
+  - "Referer and Origin header bypass"
+  - "Cross-origin state-changing request crafting"
+tools:
+  - browser_navigate
+  - httpx
+  - nuclei
+  - curl
+knowledge: |
+  Cross-Site Request Forgery forces authenticated users to execute unintended state-changing
+  requests. The attack leverages the browser's automatic credential attachment behavior —
+  cookies, HTTP auth, client certs all ride along on cross-origin requests by default.
+
+  ## Token Bypass Arsenal:
+
+  When you see a CSRF token, probe these weaknesses before assuming it's solid:
+  - **Missing validation**: Submit request with token removed entirely — many apps check
+    presence but not validity, or skip validation for certain endpoints
+  - **Static token**: Reuse a token across sessions or users — if it works, the token
+    is not session-bound (common in frameworks with misconfigured middleware)
+  - **Token in GET parameter**: Check Referer header leakage to third-party resources —
+    tokens in URLs leak via Referer to any embedded image/script/stylesheet domain
+  - **Predictable token**: Analyze entropy — timestamps, sequential IDs, weak PRNG
+  - **Token not rotated**: Use same token after password change or privilege escalation
+  - **Method-dependent check**: If POST is protected, try same action via GET or PUT —
+    many frameworks only enforce CSRF on POST
+  - **Subdomain token scope**: Token from sub.target.com may work on target.com if
+    cookie scope is .target.com
+  - **Token via API**: Fetch token from a JSON endpoint using CORS if Access-Control
+    headers are permissive, then use it in the forged request
+
+  ## Content-Type Tricks:
+
+  Browsers send "simple" requests without CORS preflight for these Content-Types:
+  - application/x-www-form-urlencoded (default form submission)
+  - multipart/form-data (file upload forms)
+  - text/plain (rarely checked server-side but skips preflight)
+
+  When an API expects application/json, consider:
+  - **text/plain with JSON body**: `<form enctype="text/plain">` sends body as
+    `key=value` — craft input name to produce valid JSON: name=`{"action":"delete","x":"` value=`"}` 
+  - **Endpoint accepts multiple types**: Many frameworks auto-detect Content-Type;
+    if it parses form data AND JSON, send as form data to avoid preflight
+  - **Flash-based Content-Type override**: Legacy but still works on some targets —
+    SWF files can send arbitrary Content-Type cross-origin (requires Flash enabled)
+  - **307 redirect**: POST to attacker server → 307 redirect to target preserves
+    body AND Content-Type, bypassing simple request restriction
+
+  ## SameSite Cookie Behavior:
+
+  | Attribute | Cross-site POST | Cross-site GET (top-level) | Cross-site iframe |
+  |-----------|----------------|---------------------------|-------------------|
+  | None      | Sent           | Sent                      | Sent              |
+  | Lax       | NOT sent       | Sent (within 2 min)       | NOT sent          |
+  | Strict    | NOT sent       | NOT sent                  | NOT sent          |
+
+  Lax bypass vectors:
+  - **Top-level GET navigation**: `window.open()`, `<a>` click, or meta refresh — cookie
+    IS sent for GET, so any state change via GET is exploitable under Lax
+  - **Method override on GET**: `GET /api/action?_method=POST` — if app honors method
+    override, Lax cookies ride along on what the server treats as POST
+  - **Client-side redirect chains**: OAuth flows, SSO callbacks — if redirect target
+    accepts GET with state-changing params, Lax cookies attach
+  - **2-minute window**: Chrome sends Lax cookies cross-site on top-level POST for
+    cookies set less than 2 minutes ago (anti-breakage heuristic)
+  - **Subdomain as cross-site boundary**: Subdomains of different registrable domains
+    are cross-site — but subdomains of SAME registrable domain are same-site
+
+  Strict bypass:
+  - Requires an open redirect or XSS on the target origin to initiate same-site navigation
+  - Window.open from XSS on sibling subdomain → navigate to target endpoint
+
+  ## Method Override Techniques:
+
+  When the target only allows non-simple methods (PUT/DELETE/PATCH), try:
+  - `X-HTTP-Method-Override: DELETE` on a POST request
+  - `X-Method-Override: PUT` (alternative header name)
+  - `_method=DELETE` as form parameter (Rails, Laravel convention)
+  - `?_method=PUT` as query parameter
+  - `X-HTTP-Method: PATCH` (Microsoft convention)
+  These convert a simple POST (no preflight) into the method the server processes.
+
+  ## Referer / Origin Bypass:
+
+  When CSRF protection relies on Referer or Origin header checking:
+  - **Empty Referer**: `<meta name="referrer" content="no-referrer">` in attacker page
+    strips Referer — if server accepts missing Referer, bypass is complete
+  - **data: URI**: `<iframe src="data:text/html,<form action='...'...">` — some
+    browsers send empty or null Origin from data: URIs
+  - **Referrer-Policy: no-referrer**: Set on attacker page to suppress Referer header
+  - **Subdomain match**: If check is `endswith('target.com')`, register
+    `attackertarget.com` — regex anchoring failure
+  - **URL path confusion**: If check validates `Referer contains target.com`, use
+    `attacker.com/target.com/csrf.html` as path
+  - **Origin: null**: Sandboxed iframes, data: URIs, and cross-origin redirects can
+    produce `Origin: null` — if server whitelists null, it's game over
+  - **HTTPS→HTTP downgrade**: Referer stripped when navigating from HTTPS to HTTP target
+
+  ## High-Value CSRF Targets:
+
+  Prioritize state-changing operations with maximum impact:
+  - **Email change → password reset chain**: Change victim's email, trigger password
+    reset to attacker-controlled email → full account takeover
+  - **Password change**: Direct ATO if no current password required, or if current
+    password field can be brute-forced via CSRF (race against rate limits)
+  - **Admin actions**: Create admin user, modify permissions, disable security controls
+  - **Payment/financial**: Transfer funds, change billing details, add attacker's payment method
+  - **API key rotation**: Rotate and exfiltrate new keys via DNS/error-based extraction
+  - **OAuth/SSO linking**: Link attacker's OAuth identity to victim's account
+  - **Webhook configuration**: Set webhook to attacker URL to exfiltrate future data
+  - **MFA disable**: Turn off two-factor authentication via CSRF
+
+  ## Chaining Patterns:
+
+  CSRF rarely exists in isolation — look for escalation paths:
+  - **CSRF + self-XSS = stored XSS**: If app has XSS only exploitable against self
+    (e.g., profile field), CSRF injects payload into victim's own profile
+  - **CSRF → ATO**: Email change CSRF → password reset → account takeover
+  - **CSRF + CORS misconfiguration**: CSRF to modify CORS whitelist → full API access
+  - **CSRF + open redirect**: Bypass Referer checks, chain with token theft
+  - **CSRF + clickjacking**: Frame the state-changing page, overlay with bait
+  - **Login CSRF**: Force victim to authenticate as attacker → victim enters sensitive
+    data into attacker's session → attacker retrieves it later
+
+  ## Framework-Specific Notes:
+
+  - **Django**: CSRF middleware checks POST only by default; exempt decorators may over-apply
+  - **Rails**: protect_from_forgery with null_session vs exception — null_session logs out
+    but may have side effects worth testing
+  - **Express/Node**: csurf deprecated — many apps migrated poorly or dropped CSRF entirely
+  - **Spring**: CSRF enabled by default in Spring Security but often disabled for APIs
+  - **Laravel**: VerifyCsrfToken middleware has $except array — check for over-broad exclusions
+  - **ASP.NET**: ValidateAntiForgeryToken is opt-in per action — missing on any action is a gap
+examples:
+  - title: "Basic CSRF - Missing Token"
+    description: "State-changing POST with no CSRF token required"
+    payload: "<form action='https://target.com/api/email/change' method='POST'><input name='email' value='attacker@evil.com'><input type='submit'></form><script>document.forms[0].submit()</script>"
+    validation: "Confirm email change occurs for authenticated victim visiting attacker page"
+  - title: "SameSite Lax Bypass via GET Method Override"
+    description: "Exploit Lax cookie with GET request using method override"
+    payload: "<a href='https://target.com/api/password?_method=POST&new_password=hacked123'>Click here</a>"
+    validation: "Check if password change processes via GET with _method override while Lax cookies are sent"
+  - title: "Content-Type text/plain JSON Forgery"
+    description: "Bypass JSON Content-Type requirement using text/plain form encoding"
+    payload: "<form action='https://target.com/api/settings' method='POST' enctype='text/plain'><input name='{\"role\":\"admin\",\"x\":\"' value='\"}' type='hidden'><input type='submit'></form>"
+    validation: "Verify if server parses text/plain body as JSON and processes role change"
+  - title: "Referer Header Bypass via no-referrer"
+    description: "Strip Referer header to bypass Referer-based CSRF protection"
+    payload: "<html><meta name='referrer' content='no-referrer'><form action='https://target.com/transfer' method='POST'><input name='amount' value='10000'><input name='to' value='attacker'></form><script>document.forms[0].submit()</script></html>"
+    validation: "Confirm request arrives without Referer header and action completes"
+  - title: "Login CSRF - Session Fixation"
+    description: "Force victim to log into attacker's account"
+    payload: "<form action='https://target.com/login' method='POST'><input name='username' value='attacker'><input name='password' value='attackerpass'></form><script>document.forms[0].submit()</script>"
+    validation: "Victim is now authenticated as attacker — any data entered goes to attacker's account"
+  - title: "CSRF Token Reuse Across Sessions"
+    description: "Test if CSRF tokens are globally valid rather than session-bound"
+    payload: "Extract token from session A, inject into forged request targeting session B user"
+    validation: "If request succeeds with cross-session token, tokens are not session-bound"
+validation_methods:
+  - "Submit state-changing request from a different origin without CSRF token and verify action completes"
+  - "Replay a CSRF token from a different user session to confirm tokens are session-bound"
+  - "Remove or empty the CSRF token parameter and check if the server still processes the request"
+  - "Change request Content-Type to text/plain and verify if the server accepts and processes the body"
+  - "Use browser DevTools to confirm cookies are sent cross-origin based on SameSite attribute"
+  - "Test all HTTP method override headers (X-HTTP-Method-Override, _method) to convert GET to POST"
+references:
+  - "https://owasp.org/www-community/attacks/csrf"
+  - "https://portswigger.net/web-security/csrf"
+  - "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html"

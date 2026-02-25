@@ -1,0 +1,219 @@
+name: information_disclosure
+description: Information disclosure and sensitive data exposure — source code leaks, debug endpoints, and metadata extraction
+techniques:
+  - "Source code and version control exposure"
+  - "Debug and error page information extraction"
+  - "Default file and endpoint enumeration"
+  - "HTTP header intelligence gathering"
+  - "API verbose error and schema exposure"
+  - "Cloud storage misconfiguration detection"
+tools:
+  - httpx
+  - nuclei
+  - ffuf
+  - curl
+  - browser_navigate
+knowledge: |
+  Information disclosure provides the intelligence foundation for targeted attacks. Every
+  leaked detail — technology version, internal path, API schema, credential fragment —
+  narrows the attack surface from "try everything" to "exploit this specific thing."
+
+  ## Source Code and Version Control Exposure:
+
+  Exposed source control metadata is often the highest-value info disclosure finding:
+  - **Git directory**: `/.git/HEAD` returns `ref: refs/heads/main` if exposed —
+    use git-dumper to reconstruct full repo including commit history, credentials
+    in old commits, and internal documentation
+  - **Git config**: `/.git/config` leaks remote URLs (internal GitLab/GitHub),
+    author emails, and sometimes access tokens in remote URLs
+  - **Git objects**: Even if directory listing is disabled, `/.git/objects/` files
+    can be enumerated by brute-forcing SHA1 prefixes or using known file paths
+  - **SVN metadata**: `/.svn/entries` (SVN < 1.7) or `/.svn/wc.db` (SVN 1.7+) —
+    SQLite database containing full file listing and metadata
+  - **Mercurial**: `/.hg/store/data/` — similar to git exposure
+  - **.DS_Store**: macOS directory metadata — `.DS_Store` parser reveals filenames
+    including hidden files, backup directories, admin panels
+  - **.env files**: `/.env`, `/app/.env`, `/api/.env` — environment variables with
+    database credentials, API keys, secret keys, debug flags
+  - **Source maps**: `/.js.map`, `/static/js/*.js.map` — full original source code
+    including comments, variable names, and internal API routes
+  - **Backup files**: Try `.bak`, `.old`, `.orig`, `.save`, `~`, `.swp`, `.swo` suffixes
+    on known files: `config.php.bak`, `web.config.old`, `index.php~`
+  - **Editor artifacts**: `.vscode/settings.json`, `.idea/workspace.xml`,
+    `*.sublime-project` — IDE configs may reference internal paths and servers
+  - **Package files**: `package.json` (Node deps + scripts), `composer.json` (PHP),
+    `requirements.txt` (Python), `Gemfile` (Ruby) — reveals exact dependency
+    versions for CVE matching
+
+  ## Debug and Error Page Exposure:
+
+  Debug modes trade security for developer convenience — always probe for them:
+  - **Django debug**: If DEBUG=True, error pages show full settings (including
+    SECRET_KEY), SQL queries, installed apps, middleware stack, template paths
+  - **Laravel debug**: Ignition error pages expose .env contents, database
+    credentials, app key, and full stack traces with source code
+  - **Spring Boot Actuator**: `/actuator`, `/actuator/env`, `/actuator/health`,
+    `/actuator/beans`, `/actuator/mappings`, `/actuator/configprops` —
+    env endpoint shows property sources with credentials (partially masked,
+    but keys reveal what to target)
+  - **PHP errors**: `display_errors=On` leaks file paths, function names, SQL
+    queries, and sometimes partial source code in error messages
+  - **ASP.NET**: Custom errors off shows full stack traces with internal paths;
+    yellow screen of death includes framework version and config
+  - **Express.js**: Default error handler in development mode shows stack traces
+    with full file paths and line numbers
+  - **Ruby on Rails**: Development mode shows ActionDispatch debug page with
+    request details, session data, and environment variables
+  - **Werkzeug debugger**: Flask debug mode exposes interactive Python console
+    at `/?__debugger__=yes` — direct RCE if accessible
+  - **Sentry/error tracking**: Public DSN endpoints may leak error details;
+    misconfigured Sentry instances may expose all project errors
+
+  Force errors to trigger debug output: malformed input, invalid content-type,
+  oversized requests, special characters in parameters, non-existent routes
+  with various HTTP methods.
+
+  ## Default Files and Endpoint Discovery:
+
+  Standard files present on most web deployments, each leaking specific intelligence:
+  - **robots.txt**: Lists disallowed paths — these are often admin panels,
+    staging environments, API endpoints the developer wanted hidden
+  - **sitemap.xml**: Full URL structure including unlisted pages, API versions,
+    and sometimes internal-only paths accidentally included
+  - **crossdomain.xml / clientaccesspolicy.xml**: Flash/Silverlight cross-domain
+    policies — overly permissive policies enable cross-origin data theft
+  - **security.txt**: `/.well-known/security.txt` — contact info, PGP keys,
+    security policy, and sometimes disclosure of security tooling in use
+  - **Swagger/OpenAPI**: `/swagger.json`, `/openapi.json`, `/api-docs`,
+    `/swagger-ui.html`, `/v2/api-docs`, `/v3/api-docs` — complete API schema
+    with all endpoints, parameters, and sometimes example values
+  - **GraphQL introspection**: `POST /graphql` with `{"query":"{__schema{types{name}}}"}`
+    — full schema dump including all queries, mutations, types, and fields
+  - **WSDL**: `?wsdl` on SOAP endpoints — complete service definition
+  - **phpinfo()**: `/phpinfo.php`, `/info.php`, `/test.php` — full PHP config,
+    loaded modules, environment variables, include paths
+  - **elmah.axd**: ASP.NET error log viewer — stack traces, request details
+  - **Trace.axd**: ASP.NET request tracing — session IDs, auth tokens in requests
+
+  ## HTTP Header Intelligence:
+
+  Response headers reveal technology stack without any active exploitation:
+  - **Server**: `Apache/2.4.49` — specific version enables CVE lookup (2.4.49 = path
+    traversal via CVE-2021-41773)
+  - **X-Powered-By**: `Express`, `PHP/7.4.3`, `ASP.NET` — framework identification
+  - **X-AspNet-Version**: Specific .NET runtime version
+  - **X-Debug-Token**: Symfony profiler token — access debug toolbar via
+    `/_profiler/{token}` for full request/response inspection
+  - **X-Request-Id / X-Trace-Id**: Correlation IDs that may enable log injection
+    or trace lookup in exposed monitoring systems
+  - **Via**: Proxy information — reveals internal proxy servers, CDN nodes, and
+    sometimes internal IP addresses
+  - **X-Forwarded-For / X-Real-IP**: Internal network topology, load balancer IPs
+  - **Set-Cookie flags**: Missing Secure, HttpOnly, SameSite attributes indicate
+    weakened cookie security
+  - **CORS headers**: `Access-Control-Allow-Origin: *` or permissive patterns
+    enable cross-origin data theft
+  - **CSP headers**: Content Security Policy reveals trusted domains, CDN sources,
+    and inline script allowances — map the trust boundary
+
+  ## API Information Leakage:
+
+  APIs often over-share data in responses — compare what's needed vs what's returned:
+  - **Verbose errors**: Database error messages with table/column names, SQL syntax
+    errors revealing query structure, ORM-generated queries
+  - **Excessive data**: User endpoint returns password hashes, internal IDs, email
+    addresses, permission flags not needed by the client
+  - **Debug parameters**: `?debug=true`, `?verbose=1`, `?trace=on` — may enable
+    additional response data or logging information in response
+  - **Stack traces in JSON**: Error responses include full stack trace as JSON field —
+    parse for file paths, dependency versions, internal service names
+  - **GraphQL introspection**: Even if disabled for full schema, individual type
+    queries may work: `{__type(name:"User"){fields{name type{name}}}}`
+  - **API versioning leaks**: `/api/v1/` returns 404 but `/api/v2/` works —
+    test `/api/v0/`, `/api/internal/`, `/api/admin/`, `/api/beta/`
+  - **Rate limit headers**: `X-RateLimit-*` reveals rate limiting implementation,
+    helping calibrate brute force and enumeration speed
+  - **Pagination metadata**: Total count in paginated responses reveals data volume
+    (e.g., total_users: 50000 — confirms user enumeration scope)
+
+  ## Cloud-Specific Exposure:
+
+  Cloud misconfigurations are among the highest-impact info disclosure findings:
+  - **S3 buckets**: `https://bucket-name.s3.amazonaws.com/` — if listing enabled,
+    full file enumeration; common bucket name patterns: company-backup,
+    company-assets, company-logs, company-dev
+  - **Azure Blob**: `https://account.blob.core.windows.net/container?restype=container&comp=list`
+    — public container listing
+  - **GCP Storage**: `https://storage.googleapis.com/bucket-name/` — similar to S3
+  - **Instance metadata**: `http://169.254.169.254/latest/meta-data/` (AWS),
+    `http://169.254.169.254/metadata/instance?api-version=2021-02-01` (Azure),
+    `http://metadata.google.internal/computeMetadata/v1/` (GCP) — if SSRF
+    exists, these yield IAM credentials and instance identity
+  - **Firebase**: `https://project.firebaseio.com/.json` — if rules allow,
+    dumps entire database
+  - **Kubernetes**: Service account tokens in pods, exposed dashboards,
+    etcd ports, kubelet API
+
+  ## Metadata Extraction:
+
+  Files served by the application carry hidden intelligence:
+  - **EXIF in images**: GPS coordinates (office location), camera/software info,
+    timestamps, author names — use exiftool for bulk extraction
+  - **PDF metadata**: Author name (employee enumeration), software version
+    (Adobe Acrobat 2017 = potential CVE), creation date, modification history
+  - **Office documents**: `.docx`, `.xlsx`, `.pptx` — XML-based, contain author,
+    company name, internal file paths, revision history, and sometimes
+    tracked changes with deleted content
+  - **Email headers**: Full routing path with internal server names and IPs
+
+  ## Chaining Patterns:
+
+  Information disclosure enables and amplifies other attacks:
+  - **Info → technology ID → targeted CVE**: Server header reveals Apache 2.4.49 →
+    CVE-2021-41773 path traversal → RCE
+  - **Credential leak → direct access**: .env file → database password → direct
+    database connection → full data access
+  - **Source code → auth bypass**: Leaked source reveals JWT secret or hardcoded
+    API key → forge authentication tokens
+  - **Internal IP → SSRF targeting**: Via header reveals internal proxy at 10.0.0.5 →
+    SSRF to internal services
+  - **API schema → business logic abuse**: Swagger reveals undocumented admin
+    endpoints → direct admin API access
+  - **Git history → secret extraction**: git-dumper reconstructs repo → git log
+    reveals commits like "remove API keys" → git show that commit → keys recovered
+examples:
+  - title: "Git Directory Exposure"
+    description: "Check for exposed .git directory and reconstruct repository"
+    payload: "GET /.git/HEAD — if returns 'ref: refs/heads/main', use git-dumper to extract full repo"
+    validation: "Response contains 'ref: refs/heads/' string confirming git metadata exposure"
+  - title: "Spring Boot Actuator Endpoints"
+    description: "Enumerate Spring Boot management endpoints for config and environment data"
+    payload: "GET /actuator/env — returns environment properties including database URLs, API keys (partially masked)"
+    validation: "Response contains property sources with spring.datasource, credentials, and system properties"
+  - title: "Source Map Disclosure"
+    description: "Download JavaScript source maps to recover original unminified source code"
+    payload: "GET /static/js/main.chunk.js.map — returns full webpack source map with original files"
+    validation: "Source map contains 'sourcesContent' array with complete original source code and comments"
+  - title: "GraphQL Introspection Schema Dump"
+    description: "Extract full API schema via GraphQL introspection query"
+    payload: "POST /graphql with body: {\"query\":\"{__schema{queryType{name}mutationType{name}types{name fields{name args{name type{name}}}}}}\"}"
+    validation: "Response contains complete type definitions, including mutations for admin operations and hidden fields"
+  - title: "Firebase Database Public Read"
+    description: "Access Firebase Realtime Database with permissive security rules"
+    payload: "GET https://project-name.firebaseio.com/.json"
+    validation: "Response contains JSON dump of entire database including user data, if security rules allow public read"
+  - title: "Exposed Environment Variables"
+    description: "Access .env file containing application secrets"
+    payload: "GET /.env — returns plaintext environment variables"
+    validation: "Response contains KEY=VALUE pairs including DATABASE_URL, SECRET_KEY, API credentials"
+validation_methods:
+  - "Request /.git/HEAD, /.env, /swagger.json and check for valid content vs 404/403 responses"
+  - "Trigger application errors with malformed input and analyze error response verbosity for path and version leaks"
+  - "Inspect all response headers for technology fingerprints (Server, X-Powered-By, X-Debug-Token)"
+  - "Compare API response fields against UI display to identify excessive data returned beyond what the client renders"
+  - "Enumerate common debug and actuator endpoints with wordlist scanning, noting any that return 200 or redirect"
+  - "Extract metadata from all downloadable files (images, PDFs, documents) using exiftool and compare against sensitive info policy"
+references:
+  - "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/"
+  - "https://portswigger.net/web-security/information-disclosure"
+  - "https://cheatsheetseries.owasp.org/cheatsheets/Error_Handling_Cheat_Sheet.html"

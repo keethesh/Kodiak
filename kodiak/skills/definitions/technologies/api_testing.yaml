@@ -13,67 +13,117 @@ tools:
   - nuclei
   - browser_navigate
 knowledge: |
-  API security testing focuses on identifying vulnerabilities in REST APIs,
-  GraphQL endpoints, and other API architectures.
-  
-  ## API Types:
-  1. **REST APIs**: RESTful web services using HTTP methods
-  2. **GraphQL**: Query language and runtime for APIs
-  3. **SOAP**: Simple Object Access Protocol
-  4. **gRPC**: High-performance RPC framework
-  
-  ## Common API Vulnerabilities:
-  - **Broken Object Level Authorization**: IDOR in API endpoints
-  - **Broken User Authentication**: Weak API authentication
-  - **Excessive Data Exposure**: APIs returning sensitive data
-  - **Lack of Resources & Rate Limiting**: DoS vulnerabilities
-  - **Broken Function Level Authorization**: Privilege escalation
-  - **Mass Assignment**: Binding client input to data models
-  - **Security Misconfiguration**: Default configs, CORS issues
-  - **Injection**: SQL, NoSQL, Command injection in API parameters
-  - **Improper Assets Management**: Outdated API versions
-  - **Insufficient Logging & Monitoring**: Lack of security monitoring
-  
-  ## Testing Strategies:
-  - **Endpoint Discovery**: Find undocumented API endpoints
-  - **Parameter Fuzzing**: Test all input parameters
-  - **Authentication Testing**: Test API keys, tokens, OAuth
-  - **Authorization Testing**: Test access controls between users
-  - **Rate Limiting**: Test for DoS and brute force protection
-  - **Data Validation**: Test input validation and sanitization
+  API attack surface is broad — authentication, authorization, input handling, and business logic all intersect at API boundaries.
+
+  ## REST-Specific Attacks
+  - **HTTP method override**: When PUT/DELETE blocked, try X-HTTP-Method-Override, X-Method-Override, X-HTTP-Method headers.
+    POST /api/users/123 with X-HTTP-Method-Override: DELETE may bypass method restrictions.
+  - **Content-type switching**: Send same payload as JSON, XML, form-urlencoded. XML may enable XXE.
+    Switch Content-Type: application/json → application/xml → application/x-www-form-urlencoded.
+    Some parsers auto-detect — send XML body with JSON content-type to confuse input validation.
+  - **Parameter pollution**: /api/search?role=user&role=admin — backend may take first, last, or array.
+    HPP across body + query: POST /api/users?role=user body: {"role":"admin"} — which wins?
+  - **Verb tampering**: Try HEAD, OPTIONS, PATCH, TRACE on every endpoint. TRACE may reflect headers (XST).
+    Some WAFs only filter GET/POST — PUT/PATCH bypass content inspection.
+
+  ## GraphQL Deep Attacks
+  - **Full introspection dump**: `{__schema{types{name fields{name type{name kind ofType{name}}}}}}` — map entire API surface.
+    When introspection disabled, use field suggestion: query with typos triggers "Did you mean X?" → enumerate fields.
+  - **Nested query DoS**: `{user{friends{friends{friends{friends{name}}}}}}` — exponential resolver load.
+    Batching: send array of queries `[{query:"..."},{query:"..."}]` × 100 in single request.
+  - **Mutation authorization bypass**: Introspect mutations, test each with low-priv user. Common gap: query authorized, mutation not.
+    `mutation{updateUserRole(id:"victim",role:"admin"){id role}}` — test with regular user token.
+  - **Subscription hijack**: WebSocket-based subscriptions often skip auth checks applied to HTTP queries.
+    Connect to ws:// endpoint, subscribe to events for other users' data streams.
+  - **Alias-based batching**: `{a1:login(u:"user1",p:"pass1") a2:login(u:"user2",p:"pass2")}` — brute force in single request, bypasses rate limiting.
+  - **Directive injection**: `@include(if:true)` and `@skip(if:false)` — test custom directives for logic bypass.
+
+  ## BOLA/BFLA Patterns (Broken Object/Function Level Authorization)
+  - **Sequential ID guessing**: /api/orders/1001 → /api/orders/1002. Iterate ±1000 from known ID.
+  - **UUID prediction**: v1 UUIDs contain timestamp + MAC — predictable. v4 should be random but check entropy.
+    Collect several UUIDs, check if they're sequential or time-correlated.
+  - **Cross-tenant access**: Change tenant_id, org_id, or workspace_id in requests. Test with tokens from different tenants.
+  - **Batch endpoint gaps**: /api/users/123 checks auth, but /api/users?ids=123,456,789 may skip per-object checks.
+  - **BFLA**: Regular user calling admin endpoints: POST /api/admin/users, DELETE /api/settings.
+    Change HTTP method: GET /api/users/123 authorized → DELETE /api/users/123 not checked.
+  - **Nested object access**: /api/users/123/documents/456 — authorized for user 123 but document 456 belongs to user 789.
+  - **State-based BOLA**: Access objects in different states — draft/published/archived may have different auth checks.
+
+  ## Rate Limit Bypass Arsenal
+  - **IP header rotation**: X-Forwarded-For, X-Real-IP, X-Originating-IP, X-Client-IP, True-Client-IP, CF-Connecting-IP.
+    Cycle through: X-Forwarded-For: 1.2.3.4, then 1.2.3.5, etc. Some apps trust these blindly.
+  - **Endpoint variation**: /api/v1/login vs /API/V1/LOGIN vs /api/v1/login/ vs /api/v1/login?x=1 — different rate limit buckets.
+  - **Case sensitivity**: /Api/Users vs /api/users — may route same handler but bypass rate limit key.
+  - **Trailing slash/dot**: /api/login vs /api/login/ vs /api/login/. vs /api/login%00 — normalization gaps.
+  - **Unicode normalization**: /api/users vs /api/us%65rs — same endpoint, different rate limit key.
+  - **HTTP/2 multiplexing**: Multiple requests over single connection may bypass connection-based limits.
+  - **GraphQL alias batching**: Single request, multiple operations — one rate limit hit, N actual operations.
+
+  ## Mass Assignment
+  - **Hidden fields**: Compare API docs/schema to actual request handling. Send fields not in docs: is_admin, role, verified, balance.
+  - **Role/privilege fields**: POST /api/register with {"username":"test","password":"pass","role":"admin","is_staff":true}.
+  - **Internal attributes**: created_by, updated_at, internal_id, tenant_id — test if writable via API.
+  - **Framework detection**: Rails → check for strong_parameters bypass. Django → serializer field exposure. Express → no default protection.
+  - **Nested mass assignment**: {"user":{"profile":{"role":"admin"}}} — nested objects may bypass top-level filters.
+
+  ## API Versioning Exploits
+  - **Old versions with weaker auth**: /api/v1/ may lack OAuth/JWT enforcement added in /api/v2/. Test all versions.
+  - **Deprecated but live**: /api/v0/, /api/beta/, /api/internal/ — often forgotten, still routed.
+  - **Version header bypass**: Api-Version: 1 or Accept: application/vnd.api.v1+json — downgrade to weaker version.
+  - **Changelog recon**: /api/docs, /swagger.json, /openapi.yaml — version history reveals removed-but-accessible endpoints.
+
+  ## Chaining Scenarios
+  - API enumeration → discover undocumented endpoint → BOLA on user objects → bulk data exfiltration.
+  - GraphQL introspection → find admin mutation → BFLA bypass → privilege escalation → account takeover.
+  - Mass assignment → set is_admin=true → access admin API → extract all user data.
+  - Rate limit bypass → credential stuffing via GraphQL aliases → account compromise at scale.
+  - Old API version → missing auth → access internal endpoints → pivot to backend services.
+  - Content-type switch to XML → XXE → SSRF → internal network access → cloud metadata theft.
 examples:
   - title: "API Endpoint Discovery"
     description: "Discover API endpoints through common patterns"
-    payload: "/api/v1/, /api/v2/, /rest/, /graphql"
+    payload: "/api/v1/, /api/v2/, /rest/, /graphql, /api/internal/, /api/beta/"
     validation: "Check for API documentation or endpoint responses"
-  - title: "GraphQL Introspection"
-    description: "Extract GraphQL schema information"
-    payload: "query IntrospectionQuery { __schema { types { name } } }"
-    validation: "Check if introspection reveals sensitive schema details"
-  - title: "IDOR in API Parameters"
-    description: "Test for insecure direct object references"
-    payload: "GET /api/users/123 -> GET /api/users/124"
-    validation: "Check if user can access other users' data"
-  - title: "Mass Assignment Attack"
-    description: "Test for mass assignment vulnerabilities"
-    payload: '{"username":"test","password":"pass","role":"admin"}'
-    validation: "Check if additional parameters are processed"
-  - title: "API Version Testing"
-    description: "Test older API versions for vulnerabilities"
-    payload: "/api/v1/users vs /api/v2/users"
-    validation: "Check if older versions have weaker security"
-  - title: "CORS Misconfiguration"
-    description: "Test Cross-Origin Resource Sharing configuration"
-    payload: "Origin: https://evil.com"
-    validation: "Check if API allows requests from arbitrary origins"
+  - title: "Full GraphQL Introspection"
+    description: "Extract complete GraphQL schema with types, fields, and mutations"
+    payload: "{__schema{queryType{name}mutationType{name}types{name fields{name args{name type{name}}type{name kind ofType{name}}}}}}"
+    validation: "Map all types, queries, mutations, and their arguments"
+  - title: "BOLA Sequential ID"
+    description: "Test broken object level authorization with sequential IDs"
+    payload: "GET /api/users/123 → GET /api/users/124, /api/users/125 (iterate ±1000)"
+    validation: "Check if user can access other users' data without authorization"
+  - title: "Mass Assignment with Hidden Fields"
+    description: "Inject privilege-related fields not documented in API"
+    payload: '{"username":"test","password":"pass","role":"admin","is_staff":true,"verified":true}'
+    validation: "Check if hidden fields are processed and persist"
+  - title: "Rate Limit Bypass via Headers"
+    description: "Rotate IP-related headers to bypass rate limiting"
+    payload: "X-Forwarded-For: 1.2.3.{1-255} with repeated login attempts"
+    validation: "Check if rate limit resets with each new header value"
+  - title: "HTTP Method Override"
+    description: "Bypass method restrictions using override headers"
+    payload: "POST /api/users/123 with X-HTTP-Method-Override: DELETE"
+    validation: "Check if the resource is deleted despite POST-only restrictions"
+  - title: "GraphQL Alias Brute Force"
+    description: "Batch login attempts using GraphQL aliases in single request"
+    payload: '{a1:login(u:"user",p:"pass1") a2:login(u:"user",p:"pass2") ...a100:login(u:"user",p:"pass100")}'
+    validation: "Check if all attempts execute, bypassing per-request rate limits"
+  - title: "Content-Type Switching to XXE"
+    description: "Switch JSON body to XML to test for XXE injection"
+    payload: '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><user><name>&xxe;</name></user>'
+    validation: "Check if XML parser processes external entities"
 validation_methods:
-  - "Test API endpoints with different HTTP methods"
-  - "Verify authentication and authorization controls"
-  - "Test rate limiting and input validation"
-  - "Check for information disclosure in error messages"
-  - "Validate CORS configuration and security headers"
-  - "Test API versioning and backward compatibility issues"
+  - "Test all HTTP methods (GET/POST/PUT/DELETE/PATCH/OPTIONS/HEAD) on each endpoint"
+  - "Verify BOLA by accessing resources belonging to other users with sequential/predictable IDs"
+  - "Test mass assignment with undocumented fields (role, is_admin, verified, internal_id)"
+  - "Attempt rate limit bypass with IP header rotation and endpoint variation"
+  - "Run full GraphQL introspection and test authorization on every mutation"
+  - "Test content-type switching between JSON, XML, and form-encoded"
+  - "Verify API versioning — test old versions for weaker security controls"
+  - "Check CORS with Origin headers from attacker domains and null origin"
 references:
   - "https://owasp.org/www-project-api-security/"
-  - "https://github.com/OWASP/API-Security/blob/master/2019/en/dist/owasp-api-security-top-10.pdf"
+  - "https://owasp.org/API-Security/editions/2023/en/0x11-t10/"
   - "https://graphql.org/learn/introspection/"
+  - "https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html"
+  - "https://portswigger.net/web-security/api-testing"

