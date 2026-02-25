@@ -684,18 +684,10 @@ def doctor():
         return
 
     # Probe all docker-backed Kodiak tools in one container run.
-    docker_tool_map = {
-        "nmap": "nmap",
-        "nuclei": "nuclei",
-        "subfinder": "subfinder",
-        "httpx": "httpx",
-        "katana": "katana",
-        "ffuf": "ffuf",
-        "whatweb": "whatweb",
-        "sqlmap": "sqlmap",
-        "commix": "commix",
-        "searchsploit": "searchsploit",
-    }
+    # Tool map is the single source of truth from registry.py
+    from kodiak.core.tools.registry import get_docker_tool_map
+    docker_tool_map = get_docker_tool_map()
+
     probe_pairs = [f"{tool}:{binary}" for tool, binary in docker_tool_map.items()]
     probe_wordlist = " ".join(shlex.quote(pair) for pair in probe_pairs)
     probe_script = (

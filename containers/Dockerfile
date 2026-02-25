@@ -67,11 +67,7 @@ RUN apt-get install -y --no-install-recommends \
     (setcap -r /usr/bin/nmap || true) && \
     (setcap -r /usr/lib/nmap/nmap || true)
 
-# Install Playwright browser dependencies
-RUN apt-get install -y --no-install-recommends \
-    libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libatspi2.0-0 \
-    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2t64 \
-    fonts-unifont fonts-noto-color-emoji fonts-freefont-ttf fonts-dejavu-core ttf-bitstream-vera
+
 
 # Clean up apt caches
 RUN apt-get autoremove -y && \
@@ -105,15 +101,6 @@ RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/
 RUN npm cache clean --force && \
     rm -rf /root/.cache/pipx /root/.cache/pip /tmp/*
 
-# Install Playwright Chromium specifically (avoid bulky full installs)
-# Avoid --force-reinstall on Kali/apt Python because distro-managed packages
-# (e.g. typing-extensions) may not have RECORD metadata for uninstall.
-RUN pip3 install --break-system-packages --upgrade playwright && \
-    # Install ONLY chromium directly and delete the bloated unused package downloads
-    playwright install chromium && \
-    rm -rf /root/.cache/pip && \
-    # Strip unnecessary browser binaries if they downloaded anyway
-    find /root/.cache/ms-playwright -mindepth 1 -maxdepth 1 ! -name 'chromium-*' -exec rm -rf {} +
 
 # ============================================================
 # ENTRYPOINT SETUP

@@ -623,19 +623,8 @@ class ManagerAgent:
             )
 
         allowed = set(allowed_tools or [])
-        gated_tool_names = {
-            "nmap",
-            "nuclei",
-            "subfinder",
-            "httpx",
-            "katana",
-            "ffuf",
-            "whatweb",
-            "sqlmap",
-            "wpscan",
-            "commix",
-            "searchsploit",
-        }
+        from kodiak.core.tools.registry import get_gated_tool_names
+        gated_tool_names = get_gated_tool_names()
         filtered: List[CommandTask] = []
         seen_commands: set[str] = set()
         for task in launch_tasks:
@@ -915,35 +904,7 @@ class ManagerAgent:
             "  and timing deltas to auto-triage anomalies.",
             "</constraints>",
             "",
-            "<tool_catalog>",
-            "All tools are pre-installed in a Kali-based Docker sandbox. Use any bash command.",
-            "",
-            "## Reconnaissance",
-            "- `subfinder -d <domain> -silent` — Passive subdomain enumeration",
-            "- `nmap -sV -sC -p <ports> <target>` — Port scan + service detection. Use -p- for all ports, -T4 for speed.",
-            "- `httpx -l <file> -sc -title -tech-detect` — HTTP probe with status codes and tech detection",
-            "- `whatweb <url>` — Web technology fingerprinting (CMS, frameworks, server)",
-            "- `dig <domain> ANY`, `host <domain>`, `whois <domain>` — DNS and WHOIS recon",
-            "",
-            "## Web Crawling & Fuzzing",
-            "- `katana -u <url> -d <depth> -silent` — Crawl websites for endpoints. Use -jc for JS, -rl <n> for rate limit.",
-            "- `ffuf -u <url>/FUZZ -w <wordlist> -mc 200,301,302 -t <threads>` — Directory/file fuzzing",
-            "  Wordlists: /usr/share/seclists/Discovery/Web-Content/common.txt (fast), big.txt (thorough)",
-            "",
-            "## Vulnerability Scanning",
-            "- `nuclei -u <url> -rl <rate> -silent` — Template-based vuln scanner. Tags: -tags cve,sqli,xss,lfi,rce. Severity: -s critical,high,medium,low. Use -as for auto-template selection.",
-            "- `nikto -h <url>` — Web server misconfiguration scanner",
-            "- `wpscan --url <url> -e vp,vt,u --api-token $WPSCAN_API_TOKEN` — WordPress vuln scanner",
-            "",
-            "## Exploitation",
-            "- `sqlmap -u <url> --data=<post> --batch --level=3 --risk=2` — SQL injection. Use --dump, --os-shell, --technique=BEUSTQ",
-            "- `commix --url=<url> --data=<post> --batch` — OS command injection",
-            "- `searchsploit <query>` — Offline Exploit-DB search. Use after identifying service versions.",
-            "",
-            "## General Purpose",
-            "- `curl -s -I <url>` — HTTP requests with full header control. Use for WAF bypass, path traversal, custom headers.",
-            "- Any standard Linux command: grep, awk, sed, wget, python3, etc.",
-            "</tool_catalog>",
+            *__import__('kodiak.core.tools.registry', fromlist=['get_prompt_catalog']).get_prompt_catalog(),
             "",
         ]
 

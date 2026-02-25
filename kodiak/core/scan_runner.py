@@ -50,24 +50,10 @@ class ScanRunner:
         self._finding_keys: set[str] = set()
         self._finding_counts_by_severity: Dict[str, int] = {}
         self._finding_records: Dict[str, Dict[str, Any]] = {}
-        self._docker_tool_map = {
-            "nmap": "nmap",
-            "nuclei": "nuclei",
-            "subfinder": "subfinder",
-            "httpx": "httpx",
-            "katana": "katana",
-            "ffuf": "ffuf",
-            "whatweb": "whatweb",
-            "sqlmap": "sqlmap",
-            "wpscan": "wpscan",
-            "commix": "commix",
-            "searchsploit": "searchsploit",
-            "dig": "dig",
-            "whois": "whois",
-            "curl": "curl",
-            "mysql": "mysql",
-            "hydra": "hydra",
-        }
+        # HARDCODED: sourced from registry.py — single source of truth for all tool binaries
+        from kodiak.core.tools.registry import get_docker_tool_map as _get_docker_tool_map
+        self._docker_tool_map = _get_docker_tool_map()
+
     
     async def run(
         self,

@@ -1,5 +1,7 @@
-from typing import Dict, Type, Optional
+from typing import Dict, Optional
+
 from kodiak.core.tools.base import KodiakTool
+
 
 class ToolInventory:
     def __init__(self):
@@ -10,87 +12,87 @@ class ToolInventory:
         """Register a tool with the inventory"""
         self._tools[tool.name] = tool
 
-    def get(self, name: str) -> KodiakTool | None:
+    def get(self, name: str) -> Optional[KodiakTool]:
         """Get a tool by name"""
         return self._tools.get(name)
 
     def list_tools(self) -> Dict[str, str]:
         """List all registered tools"""
         return {name: tool.description for name, tool in self._tools.items()}
-    
+
     def get_all_tools(self) -> Dict[str, KodiakTool]:
         """Get all registered tool instances"""
         return self._tools.copy()
-    
+
     def initialize_tools(self):
         """Initialize and register all available tools"""
-        # Import and register all tools
         from kodiak.core.tools.definitions.network import NmapTool
         from kodiak.core.tools.definitions.web import NucleiTool
-        from kodiak.core.tools.definitions.system import TerminalTool
-        from kodiak.core.tools.definitions.discovery import SubfinderTool, HttpxTool, KatanaTool, FfufTool, WhatWebTool
-        from kodiak.core.tools.definitions.browser import BrowserNavigateTool
+        from kodiak.core.tools.definitions.discovery import (
+            SubfinderTool, HttpxTool, KatanaTool, FfufTool, WhatWebTool,
+        )
         from kodiak.core.tools.definitions.osint import WebSearchTool
-        from kodiak.core.tools.definitions.exploitation import SQLMapTool, CommixTool, SearchsploitTool, WPScanTool
+        from kodiak.core.tools.definitions.exploitation import (
+            SQLMapTool, CommixTool, SearchsploitTool, WPScanTool,
+        )
         from kodiak.core.tools.definitions.proxy import (
-            ProxyStartTool, ProxyRequestTool, ProxyHistoryTool, ProxyStopTool
+            ProxyStartTool, ProxyRequestTool, ProxyHistoryTool, ProxyStopTool,
         )
         from kodiak.core.tools.definitions.terminal import (
-            TerminalStartTool, TerminalExecuteTool, TerminalHistoryTool, TerminalStopTool
+            TerminalStartTool, TerminalExecuteTool, TerminalHistoryTool, TerminalStopTool,
         )
         from kodiak.core.tools.definitions.python_runtime import (
-            PythonStartTool, PythonExecuteTool, PythonHistoryTool, PythonStopTool
+            PythonStartTool, PythonExecuteTool, PythonHistoryTool, PythonStopTool,
         )
         from kodiak.core.tools.definitions.complete_scan import CompleteScanTool
-        from kodiak.core.tools.definitions.engagement_memory import SaveNoteTool, SaveFindingTool
 
-        # Register all tools
+        # Network & vulnerability scanning
         self.register(NmapTool())
         self.register(NucleiTool())
-        self.register(TerminalTool())
+
+        # Discovery & reconnaissance
         self.register(SubfinderTool())
         self.register(HttpxTool())
-        self.register(BrowserNavigateTool())
+        self.register(KatanaTool())
+        self.register(FfufTool())
+        self.register(WhatWebTool())
+
+        # OSINT
         self.register(WebSearchTool())
+
+        # Web application exploitation
         self.register(SQLMapTool())
         self.register(WPScanTool())
         self.register(CommixTool())
         self.register(SearchsploitTool())
 
-        # Register new discovery tools
-        self.register(KatanaTool())
-        self.register(FfufTool())
-        self.register(WhatWebTool())
-
-        # Register new comprehensive tools
+        # HTTP proxy
         self.register(ProxyStartTool())
         self.register(ProxyRequestTool())
         self.register(ProxyHistoryTool())
         self.register(ProxyStopTool())
 
+        # Persistent terminal
         self.register(TerminalStartTool())
         self.register(TerminalExecuteTool())
         self.register(TerminalHistoryTool())
         self.register(TerminalStopTool())
 
+        # Python runtime
         self.register(PythonStartTool())
         self.register(PythonExecuteTool())
         self.register(PythonHistoryTool())
         self.register(PythonStopTool())
 
-        # Register scan control tools
+        # Scan control
         self.register(CompleteScanTool())
-
-        # Register engagement memory tools (in-process, intercepted by manager)
-        self.register(SaveNoteTool())
-        self.register(SaveFindingTool())
 
 
 # Legacy global instance for backward compatibility
-# This will be replaced by the instance created in main.py
 _legacy_inventory = None
 
-def get_legacy_inventory():
+
+def get_legacy_inventory() -> ToolInventory:
     """Get the legacy global inventory instance"""
     global _legacy_inventory
     if _legacy_inventory is None:
@@ -98,50 +100,13 @@ def get_legacy_inventory():
         _legacy_inventory.initialize_tools()
     return _legacy_inventory
 
+
 # For backward compatibility
 inventory = get_legacy_inventory()
+# Derived from the single source of truth in registry.py.
+# Covers Core + Extended tools (not Utility — those are implicit Kali builtins).
+from kodiak.core.tools.registry import get_available_tools as _get_available_tools
+AVAILABLE_TOOLS = _get_available_tools()
 
-# Export available tools for easy access
-AVAILABLE_TOOLS = {
-    # Network & Infrastructure
-    "nmap": "Network discovery and security auditing",
-    "nuclei": "Fast vulnerability scanner with YAML templates",
-    
-    # Discovery & Reconnaissance  
-    "subfinder": "Passive subdomain enumeration",
-    "httpx": "HTTP toolkit for probing web services",
-    "katana": "Web crawler for discovering URLs and API endpoints",
-    "ffuf": "Fast web fuzzer for discovering hidden directories and files",
-    "whatweb": "Web technology fingerprinting tool",
-    
-    # Web Application Testing
-    "browser_navigate": "Browser automation for web app testing",
-    "sqlmap": "Automatic SQL injection detection and exploitation",
-    "wpscan": "WordPress security scanner for core, plugin, theme, and config issues",
-    "commix": "Command injection detection and exploitation",
-    "searchsploit": "Offline Exploit-DB search and exploit export",
-    
-    # HTTP Proxy System
-    "proxy_start": "Start HTTP proxy server for request interception",
-    "proxy_request": "Send HTTP requests through proxy with full control",
-    "proxy_history": "View proxy request/response history",
-    "proxy_stop": "Stop HTTP proxy server",
-    
-    # Terminal Environment
-    "terminal_start": "Start persistent terminal session",
-    "terminal_execute": "Execute commands in terminal session",
-    "terminal_history": "View terminal command history",
-    "terminal_stop": "Stop terminal session",
-    
-    # Python Runtime
-    "python_start": "Start Python session for exploit development",
-    "python_execute": "Execute Python code in persistent session",
-    "python_history": "View Python execution history",
-    "python_stop": "Stop Python session",
 
-    # OSINT & Information Gathering
-    "web_search": "Web search for reconnaissance",
 
-    # Scan Control
-    "complete_scan": "Signal scan completion with summary",
-}

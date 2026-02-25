@@ -74,21 +74,17 @@ python-multipart = {version = "^0.0.9", optional = true}
 python-jose = {extras = ["cryptography"], version = "^3.3.0", optional = true}
 passlib = {extras = ["bcrypt"], version = "^1.7.4", optional = true}
 
-# Browser automation (optional, heavy dependency)
-playwright = {version = "^1.40.0", optional = true}
 
 # Monitoring (optional)
 sentry-sdk = {version = "^1.40.0", optional = true}
 
 [tool.poetry.extras]
 # Full installation with all features (PostgreSQL + all tools)
-full = ["sqlalchemy", "sqlmodel", "alembic", "asyncpg", "psycopg", "fastapi", "uvicorn", "websockets", "python-multipart", "python-jose", "passlib", "playwright", "sentry-sdk"]
+full = ["sqlalchemy", "sqlmodel", "alembic", "asyncpg", "psycopg", "fastapi", "uvicorn", "websockets", "python-multipart", "python-jose", "passlib", "sentry-sdk"]
 # Local mode: SQLite-based, zero external dependencies
 local = ["sqlalchemy", "sqlmodel", "alembic"]
 # Database support for PostgreSQL persistent storage
 database = ["sqlalchemy", "sqlmodel", "alembic", "asyncpg", "psycopg"]
-# Web browser automation
-browser = ["playwright"]
 # API server mode
 api = ["fastapi", "uvicorn", "websockets", "python-multipart", "python-jose", "passlib"]
 # Monitoring and telemetry
