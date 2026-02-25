@@ -948,7 +948,7 @@ class ManagerAgent:
             "4. ACT: Output runtime actions using `actions[]` (preferred) and/or `commands[]` (legacy).",
             "   Use `launch` to run commands, `cancel` to stop low-value running tasks,",
             "   `write_file` to safely write exploit scripts/payloads to the sandbox (avoids bash escaping hell),",
-            "   `load_skills` to load specialized knowledge (see <available_skills> catalog) when you encounter a specific vuln class or tech stack,",
+            "   `load_skills` to pull deep knowledge for a specific vuln class (see <available_skills>); takes effect next iteration,",
             "   `wait` to defer, `advance` to move phase, `complete` when done.",
             "   For every launch/cancel/write_file action, explain your rationale.",
             "   Be CREATIVE over repetitive: try one well-crafted payload per technique class",
@@ -1084,8 +1084,11 @@ class ManagerAgent:
             catalog = skill_loader.get_skills_catalog()
             if catalog:
                 parts.append("<available_skills>")
-                parts.append("Load specialized knowledge mid-scan with a load_skills action.")
-                parts.append("Choose skills relevant to what you're discovering — don't load everything upfront.")
+                parts.append("When you identify a relevant vuln class or tech stack, load the matching skill to get deep")
+                parts.append("techniques, payloads, and tool flags. Use a load_skills action — it takes effect next iteration.")
+                parts.append('Example: {"type": "load_skills", "skills": ["sql_injection", "ssrf"], "rationale": "SQL errors in responses + internal URLs in redirects"}')
+                parts.append("You can load up to 5 skills total across the scan. Load what's relevant, not everything.")
+                parts.append("")
                 parts.append(catalog)
                 parts.append("</available_skills>")
 
