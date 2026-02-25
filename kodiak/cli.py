@@ -660,27 +660,38 @@ def doctor():
     """Check installation status."""
     from kodiak.core.config import settings
 
-    def status_label(ok: bool) -> str:
-        return "[green]OK[/green]" if ok else "[red]FAIL[/red]"
+    def ok_badge(ok: bool) -> str:
+        return "[bold green]✓[/bold green]" if ok else "[bold red]✗[/bold red]"
 
-    console.print("[bold]Kodiak Doctor[/bold]\n")
-    console.print(f"Python: {sys.version.split()[0]}")
-    console.print(f"Database: {status_label(HAS_DATABASE)}")
-    
+    console.print()
+    console.rule("[bold cyan]Kodiak Doctor[/bold cyan]", style="dim")
+    console.print()
+
+    # System info table
+    info = Table.grid(padding=(0, 2))
+    info.add_column(style="dim", min_width=22)
+    info.add_column()
+    info.add_row("Python", f"[cyan]{sys.version.split()[0]}[/cyan]")
+
+    db_label = "[green]SQLite[/green]" if HAS_DATABASE else "[red]unavailable[/red]"
+    info.add_row("Database", db_label)
+
     docker_ok = check_docker_available()
-    console.print(f"Docker: {status_label(docker_ok)}")
-    console.print(f"Toolbox Image: {settings.toolbox_image}")
+    info.add_row("Docker", ok_badge(docker_ok))
+    info.add_row("Toolbox Image", f"[dim]{settings.toolbox_image}[/dim]")
+    console.print(info)
+    console.print()
 
     if not docker_ok:
-        console.print("[red]Docker is required for tool execution in this build.[/red]")
-        console.print("[yellow]Start Docker and re-run `kodiak doctor`.[/yellow]")
+        console.print("  [red]✗[/red]  Docker is required for tool execution.")
+        console.print("  [dim]Start Docker and re-run [cyan]kodiak doctor[/cyan].[/dim]")
         return
 
     image_ok, image_detail = run_check(["docker", "image", "inspect", settings.toolbox_image], timeout=20)
-    console.print(f"Toolbox Image Available: {status_label(image_ok)}")
+    console.print(f"  {'[green]✓[/green]' if image_ok else '[red]✗[/red]'}  Toolbox image {'available' if image_ok else 'not found'}")
     if not image_ok:
-        console.print(f"[yellow]Image inspect failed: {image_detail}[/yellow]")
-        console.print(f"[yellow]Try: docker pull {settings.toolbox_image}[/yellow]")
+        console.print(f"  [dim]{image_detail}[/dim]")
+        console.print(f"  [dim]Try: [cyan]docker pull {settings.toolbox_image}[/cyan][/dim]")
         return
 
     # Probe all docker-backed Kodiak tools in one container run.
@@ -745,20 +756,44 @@ def doctor():
             )
             status_map[tool_name] = tool_ok
 
-    console.print("\n[bold]Docker Tool Availability[/bold]")
+    console.print()
+    console.rule("[bold]Tool Availability[/bold]", style="dim")
+    console.print()
+
+    tools_table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2), expand=False)
+    tools_table.add_column(min_width=20)
+    tools_table.add_column(min_width=6)
+    tools_table.add_column(min_width=20)
+    tools_table.add_column(min_width=6)
+
     missing_tools: List[str] = []
-    for tool_name in sorted(docker_tool_map.keys()):
+    sorted_tools = sorted(docker_tool_map.keys())
+    rows = []
+    for tool_name in sorted_tools:
         tool_ok = status_map.get(tool_name, False)
-        console.print(f"{tool_name}: {status_label(tool_ok)}")
+        badge = "[bold green]✓[/bold green]" if tool_ok else "[bold red]✗[/bold red]"
+        rows.append((tool_name, badge))
         if not tool_ok:
             missing_tools.append(tool_name)
 
-    console.print(
-        f"Summary: {len(docker_tool_map) - len(missing_tools)}/{len(docker_tool_map)} available"
-    )
+    # Two columns
+    mid = (len(rows) + 1) // 2
+    for i in range(mid):
+        left_name, left_badge = rows[i]
+        if i + mid < len(rows):
+            right_name, right_badge = rows[i + mid]
+            tools_table.add_row(f"[dim]{left_name}[/dim]", left_badge, f"[dim]{right_name}[/dim]", right_badge)
+        else:
+            tools_table.add_row(f"[dim]{left_name}[/dim]", left_badge, "", "")
+
+    console.print(tools_table)
+
+    total = len(docker_tool_map)
+    ok_count = total - len(missing_tools)
+    summary_color = "green" if not missing_tools else "yellow"
+    console.print(f"  [{summary_color}]{ok_count}/{total} tools available[/{summary_color}]")
+    console.print()
     if missing_tools:
         console.print(
-            "[yellow]Unavailable tools may be auto-disabled during scans: "
-            + ", ".join(missing_tools)
-            + "[/yellow]"
+            f"  [dim]Unavailable: [yellow]{', '.join(missing_tools)}[/yellow][/dim]"
         )

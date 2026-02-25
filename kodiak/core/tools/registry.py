@@ -282,6 +282,12 @@ TOOL_REGISTRY: List[ToolEntry] = [
         tier=ToolTier.EXTENDED,
         description="JWT manipulation and attack tool (alg confusion, none attack, brute)",
     ),
+    ToolEntry(
+        name="xsstrike",
+        binary="xsstrike",
+        tier=ToolTier.EXTENDED,
+        description="Advanced XSS scanner with fuzzing, crawling, and DOM XSS detection",
+    ),
 
     # -------------------------------------------------------------------------
     # UTILITY — Standard Linux / Kali builtins

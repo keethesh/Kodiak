@@ -89,6 +89,12 @@ RUN pipx install semgrep || echo "Warning: Failed to install semgrep"
 RUN pipx install bandit || echo "Warning: Failed to install bandit"
 RUN pipx install jwt-tool || echo "Warning: Failed to install jwt-tool"
 
+# Install XSStrike (XSS scanner)
+RUN git clone --depth 1 https://github.com/s0md3v/XSStrike.git /opt/xsstrike && \
+    pip3 install --break-system-packages -r /opt/xsstrike/requirements.txt || echo "Warning: XSStrike deps failed" && \
+    printf '#!/bin/sh\nexec python3 /opt/xsstrike/xsstrike.py "$@"\n' > /usr/local/bin/xsstrike && \
+    chmod +x /usr/local/bin/xsstrike
+
 # Setup Node tools
 RUN mkdir -p /root/.npm-global && \
     npm install -g retire@latest eslint@latest js-beautify@latest jshint@latest

@@ -16,36 +16,38 @@ VERBOSE="${VERBOSE:-false}"
 INSTALL_LOG="${INSTALL_LOG:-/tmp/kodiak-install.log}"
 TOOLBOX_IMAGE="ghcr.io/keethesh/kodiak-toolbox:latest"
 
-# Colors for output
+# Colors and text effects
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
 
 # ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
 
 print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "  ${DIM}·${NC}  $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "  ${GREEN}✓${NC}  $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "  ${YELLOW}⚠${NC}  $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "  ${RED}✗${NC}  $1"
 }
 
 print_step() {
-    echo -e "${CYAN}[STEP]${NC} $1"
+    echo
+    echo -e "  ${CYAN}${BOLD}▸${NC} ${BOLD}$1${NC}"
 }
 
 print_blank() {
@@ -53,33 +55,34 @@ print_blank() {
 }
 
 print_rule() {
-    local width=53
-    local line
-    printf -v line '%*s' "$width" ''
-    line=${line// /-}
-    echo -e "${CYAN}${line}${NC}"
+    echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
 }
 
 print_banner() {
-    print_rule
-    echo -e "${GREEN}Kodiak Installer${NC}"
-    echo "Penetration Testing Suite"
-    echo "AI-Powered Security Testing Framework"
-    print_rule
-    print_blank
+    echo
+    echo -e "${CYAN}${BOLD}  ██╗  ██╗ ██████╗ ██████╗ ██╗ █████╗ ██╗  ██╗${NC}"
+    echo -e "${CYAN}${BOLD}  ██║ ██╔╝██╔═══██╗██╔══██╗██║██╔══██╗██║ ██╔╝${NC}"
+    echo -e "${CYAN}${BOLD}  █████╔╝ ██║   ██║██║  ██║██║███████║█████╔╝ ${NC}"
+    echo -e "${CYAN}${BOLD}  ██╔═██╗ ██║   ██║██║  ██║██║██╔══██║██╔═██╗ ${NC}"
+    echo -e "${CYAN}${BOLD}  ██║  ██╗╚██████╔╝██████╔╝██║██║  ██║██║  ██╗${NC}"
+    echo -e "${CYAN}${BOLD}  ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝${NC}"
+    echo
+    echo -e "  ${DIM}AI-Powered Penetration Testing Suite${NC}"
+    echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
+    echo
 }
 
 print_section() {
-    print_blank
-    echo -e "${CYAN}$1${NC}"
+    echo
+    echo -e "  ${BOLD}$1${NC}"
 }
 
 print_item() {
-    echo "  - $1"
+    echo -e "    ${DIM}▪${NC}  $1"
 }
 
 print_command() {
-    echo -e "    ${CYAN}$1${NC}"
+    echo -e "    ${CYAN}\$${NC}  $1"
 }
 
 run_cmd() {
@@ -739,22 +742,16 @@ setup_docker() {
             
             if [[ "$image_exists" == "false" ]] || [[ "$FORCE_INSTALL" == "true" ]]; then
                 local pulled=false
-                if [[ "$FORCE_INSTALL" != "true" ]]; then
-                    print_status "Attempting to pull pre-built Kodiak toolbox image..."
-                    if run_cmd "Pulling pre-built toolbox image" docker pull "$TOOLBOX_IMAGE"; then
-                        print_success "Kodiak toolbox Docker image pulled successfully from GHCR"
-                        pulled=true
-                    else
-                        print_warning "Could not pull pre-built image. Proceeding with local build."
-                    fi
+                print_status "Attempting to pull pre-built Kodiak toolbox image from GHCR..."
+                if run_cmd "Pulling pre-built toolbox image" docker pull "$TOOLBOX_IMAGE"; then
+                    print_success "Kodiak toolbox Docker image pulled successfully from GHCR"
+                    pulled=true
+                else
+                    print_warning "Could not pull pre-built image from GHCR. Falling back to local build..."
                 fi
-                
+
                 if [[ "$pulled" == "false" ]]; then
-                    if [[ "$image_exists" == "true" ]]; then
-                        print_status "Force install requested. Rebuilding Kodiak toolbox Docker image (this may take a while)..."
-                    else
-                        print_status "Building Kodiak toolbox Docker image from scratch (this may take a while)..."
-                    fi
+                    print_status "Building Kodiak toolbox Docker image locally (this may take a while)..."
                     
                     # Check if we are in the source directory (either from git clone or manual download)
                     local dockerfile_path=""
@@ -807,27 +804,36 @@ setup_docker() {
 show_next_steps() {
     print_success "Kodiak installation complete."
 
-    print_section "Quick Start"
-    print_item "Set up Gemini model and API key (interactive wizard)"
-    print_command "kodiak config"
-    print_item "Initialize the database"
-    print_command "kodiak init"
-    print_item "Start scanning"
-    print_command "kodiak --target ./my-app"
-
-    print_section "What's Included"
-    print_item "SQLite database (zero external dependencies)"
-    print_item "Security tools via Docker (nmap, nuclei, sqlmap, etc.)"
-    print_item "TUI interface for real-time monitoring"
-
-    print_section "Commands"
-    print_item "kodiak              Launch TUI interface"
-    print_item "kodiak config       Configure LLM and settings"
-    print_item "kodiak doctor       Check installation status"
-    print_item "kodiak --help       Show all commands"
-
-    print_section "Resources"
-    print_item "GitHub: https://github.com/keethesh/Kodiak"
+    echo
+    echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
+    echo
+    echo -e "  ${BOLD}Quick Start${NC}"
+    echo
+    echo -e "    ${CYAN}\$${NC}  kodiak config       ${DIM}Configure LLM & API key${NC}"
+    echo -e "    ${CYAN}\$${NC}  kodiak init         ${DIM}Initialize the database${NC}"
+    echo -e "    ${CYAN}\$${NC}  kodiak --target .   ${DIM}Start scanning${NC}"
+    echo
+    echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
+    echo
+    echo -e "  ${BOLD}What's Included${NC}"
+    echo
+    echo -e "    ${DIM}▪${NC}  SQLite database (zero external dependencies)"
+    echo -e "    ${DIM}▪${NC}  Security tools via Docker (nmap, nuclei, sqlmap, …)"
+    echo -e "    ${DIM}▪${NC}  TUI interface for real-time monitoring"
+    echo
+    echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
+    echo
+    echo -e "  ${BOLD}Commands${NC}"
+    echo
+    echo -e "    ${CYAN}kodiak${NC}               Launch TUI interface"
+    echo -e "    ${CYAN}kodiak config${NC}        Configure LLM and settings"
+    echo -e "    ${CYAN}kodiak doctor${NC}        Check installation status"
+    echo -e "    ${CYAN}kodiak --help${NC}        Show all commands"
+    echo
+    echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
+    echo
+    echo -e "  ${DIM}github.com/keethesh/Kodiak${NC}"
+    echo
 
     if [[ ! -f "$HOME/.local/bin/kodiak" ]]; then
         print_warning "If 'kodiak' command is not found, restart your shell or run:"
