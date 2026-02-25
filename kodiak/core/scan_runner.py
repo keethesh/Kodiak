@@ -32,6 +32,11 @@ class ScanResult:
     findings_count: int
     duration_seconds: float
     iterations: int
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_thinking_tokens: int = 0
+    total_cached_tokens: int = 0
+    total_cost_usd: float = 0.0
 
 
 class ScanRunner:
@@ -171,6 +176,11 @@ class ScanRunner:
                     findings_count=manager_result.findings_count,
                     duration_seconds=duration,
                     iterations=manager_result.iterations,
+                    total_input_tokens=manager_result.total_input_tokens,
+                    total_output_tokens=manager_result.total_output_tokens,
+                    total_thinking_tokens=manager_result.total_thinking_tokens,
+                    total_cached_tokens=manager_result.total_cached_tokens,
+                    total_cost_usd=manager_result.total_cost_usd,
                 )
                 
                 attempts = await crud.attempt.get_attempts_by_scan(session, scan_job.id, limit=400)

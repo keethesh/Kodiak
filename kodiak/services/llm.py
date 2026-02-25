@@ -13,6 +13,36 @@ ALLOWED_GEMINI_MODELS: Final[tuple[str, str]] = (
     "gemini/gemini-3-flash-preview",
 )
 
+# Pricing per 1M tokens (USD). Input/output/thinking/cached billed separately.
+# cached = discounted rate for context-cache hits (25% of input price).
+_MODEL_PRICING: dict[str, dict[str, float]] = {
+    "gemini/gemini-3.1-pro-preview": {"input": 1.25, "output": 10.00, "thinking": 3.50, "cached": 0.3125},
+    "gemini/gemini-3-flash-preview":  {"input": 0.15, "output": 0.60,  "thinking": 3.50, "cached": 0.0375},
+}
+
+
+def calculate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    thinking_tokens: int = 0,
+    cached_tokens: int = 0,
+) -> float:
+    """Return estimated USD cost for a given token usage and model.
+
+    ``input_tokens`` is the full prompt_token_count (which includes cached tokens).
+    ``cached_tokens`` are re-billed at the cheaper cached rate instead of the
+    full input rate, so we subtract them from the non-cached input bucket.
+    """
+    pricing = _MODEL_PRICING.get(model) or _MODEL_PRICING["gemini/gemini-3.1-pro-preview"]
+    non_cached_input = max(0, input_tokens - cached_tokens)
+    return (
+        (non_cached_input  / 1_000_000) * pricing["input"]
+        + (cached_tokens   / 1_000_000) * pricing["cached"]
+        + (output_tokens   / 1_000_000) * pricing["output"]
+        + (thinking_tokens / 1_000_000) * pricing["thinking"]
+    )
+
 
 def normalize_model_name(model_string: str) -> str:
     """

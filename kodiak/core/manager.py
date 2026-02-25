@@ -49,6 +49,11 @@ class ManagerResult:
     summary: str
     findings_count: int
     iterations: int
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_thinking_tokens: int = 0
+    total_cached_tokens: int = 0
+    total_cost_usd: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +82,10 @@ class ManagerAgent:
         self._gemini = GeminiClient()
         self.scan_state: Optional[ScanState] = None
         self._prior_knowledge: str = ""
+        self._total_input_tokens: int = 0
+        self._total_output_tokens: int = 0
+        self._total_thinking_tokens: int = 0
+        self._total_cached_tokens: int = 0
 
     # ------------------------------------------------------------------
     # Main loop
@@ -226,6 +235,7 @@ class ManagerAgent:
                     summary=summary,
                     findings_count=self.scan_state.findings_count,
                     iterations=iteration,
+                    **self._token_stats(),
                 )
 
             if resolved_phase_action == PhaseAction.ADVANCE:
@@ -259,6 +269,7 @@ class ManagerAgent:
             summary=f"Reached iteration budget ({max_iterations})",
             findings_count=self.scan_state.findings_count,
             iterations=max_iterations,
+            **self._token_stats(),
         )
 
     async def _run_event_mode(
@@ -420,6 +431,7 @@ class ManagerAgent:
                             summary=summary,
                             findings_count=self.scan_state.findings_count,
                             iterations=llm_calls,
+                            **self._token_stats(),
                         )
 
                     if not scheduler.has_inflight():
@@ -486,6 +498,7 @@ class ManagerAgent:
                 summary=f"Reached iteration budget ({max_iterations})",
                 findings_count=self.scan_state.findings_count,
                 iterations=llm_calls,
+                **self._token_stats(),
             )
         finally:
             await scheduler.cancel_all()
@@ -493,6 +506,23 @@ class ManagerAgent:
     # ------------------------------------------------------------------
     # LLM interaction
     # ------------------------------------------------------------------
+
+    def _token_stats(self) -> dict:
+        """Return token counts and estimated cost for inclusion in ManagerResult."""
+        cost = llm.calculate_cost(
+            model=llm.normalize_model_name(settings.llm_model),
+            input_tokens=self._total_input_tokens,
+            output_tokens=self._total_output_tokens,
+            thinking_tokens=self._total_thinking_tokens,
+            cached_tokens=self._total_cached_tokens,
+        )
+        return {
+            "total_input_tokens": self._total_input_tokens,
+            "total_output_tokens": self._total_output_tokens,
+            "total_thinking_tokens": self._total_thinking_tokens,
+            "total_cached_tokens": self._total_cached_tokens,
+            "total_cost_usd": cost,
+        }
 
     async def _think(
         self,
@@ -538,6 +568,32 @@ class ManagerAgent:
                 thinking_level=thinking_level,
                 response_schema=KodiakResponse,
             )
+            if response:
+                self._total_input_tokens += response.input_tokens
+                self._total_output_tokens += response.output_tokens
+                self._total_thinking_tokens += response.thinking_tokens
+                self._total_cached_tokens += response.cached_tokens
+                if self.event_manager:
+                    try:
+                        iter_cost = llm.calculate_cost(
+                            model=normalized_model,
+                            input_tokens=response.input_tokens,
+                            output_tokens=response.output_tokens,
+                            thinking_tokens=response.thinking_tokens,
+                            cached_tokens=response.cached_tokens,
+                        )
+                        await self.event_manager.emit_llm_response(
+                            iteration=iteration,
+                            raw_json=response.content,
+                            input_tokens=response.input_tokens,
+                            output_tokens=response.output_tokens,
+                            thinking_tokens=response.thinking_tokens,
+                            cached_tokens=response.cached_tokens,
+                            cost_usd=iter_cost,
+                            scan_id=scan_id,
+                        )
+                    except Exception:
+                        pass
             return response if response else None
         except Exception as exc:
             logger.error(f"Manager think() failed: {exc}")

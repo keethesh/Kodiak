@@ -73,4 +73,14 @@ def map_tui_event_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, An
             "notes_count": data.get("notes_count", 0),
             "findings_count": data.get("findings_count", 0),
         }
+    if event_type == "llm_response":
+        return {
+            "iteration": data.get("iteration"),
+            "raw_json": data.get("raw_json"),
+            "input_tokens": data.get("input_tokens", 0),
+            "output_tokens": data.get("output_tokens", 0),
+            "thinking_tokens": data.get("thinking_tokens", 0),
+            "cached_tokens": data.get("cached_tokens", 0),
+            "cost_usd": data.get("cost_usd", 0.0),
+        }
     return data or {}

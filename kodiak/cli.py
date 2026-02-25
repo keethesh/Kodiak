@@ -291,6 +291,25 @@ def scan(
                         n = payload.get("notes_count", 0)
                         f_ = payload.get("findings_count", 0)
                         console.print(f"[blue][memory][/blue] 🧠 Prior knowledge loaded: {n} notes, {f_} findings")
+                    elif event.type == "llm_response":
+                        itr = payload.get("iteration", "?")
+                        in_t = payload.get("input_tokens", 0)
+                        out_t = payload.get("output_tokens", 0)
+                        think_t = payload.get("thinking_tokens", 0)
+                        cached_t = payload.get("cached_tokens", 0)
+                        cost = payload.get("cost_usd", 0.0)
+                        parts = [f"in={in_t:,}", f"out={out_t:,}"]
+                        if think_t:
+                            parts.append(f"think={think_t:,}")
+                        if cached_t:
+                            parts.append(f"[green]cached={cached_t:,}[/green]")
+                        parts.append(f"[yellow]${cost:.4f}[/yellow]")
+                        console.print(f"[dim][llm:iter {itr}][/dim]  {' · '.join(parts)}")
+                        raw = str(payload.get("raw_json", "") or "").strip()
+                        if raw:
+                            console.print(f"[dim]{'─' * 60}[/dim]")
+                            console.print_json(raw) if raw.startswith(("{", "[")) else console.print(f"[dim]{raw}[/dim]")
+                            console.print(f"[dim]{'─' * 60}[/dim]")
                     elif event.type == "scan_failed":
                         console.print(f"[red][scan][/red] failed: {payload.get('error', 'unknown error')}")
 
@@ -552,6 +571,16 @@ def scan(
             summary_table.add_row("Duration", f"{int(result.duration_seconds)}s")
             summary_table.add_row("Tools Run", str(state["tool_count"]))
             summary_table.add_row("Tool Failures", str(state["tool_failures"]))
+            if result.total_input_tokens or result.total_output_tokens:
+                summary_table.add_section()
+                total_tokens = result.total_input_tokens + result.total_output_tokens + result.total_thinking_tokens
+                summary_table.add_row("Tokens (in / out)", f"{result.total_input_tokens:,} / {result.total_output_tokens:,}")
+                if result.total_thinking_tokens:
+                    summary_table.add_row("Thinking Tokens", f"{result.total_thinking_tokens:,}")
+                if result.total_cached_tokens:
+                    summary_table.add_row("Cached Tokens", f"[green]{result.total_cached_tokens:,}[/green]")
+                summary_table.add_row("Total Tokens", f"{total_tokens:,}")
+                summary_table.add_row("Est. Cost", f"${result.total_cost_usd:.4f}")
             summary_table.add_section()
             for sev_name in ("critical", "high", "medium", "low", "info"):
                 count = sev[sev_name]

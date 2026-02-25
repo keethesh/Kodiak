@@ -46,6 +46,10 @@ class GeminiResponse:
     content: str
     tool_calls: List[GeminiToolCall]
     finish_reason: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    thinking_tokens: int = 0
+    cached_tokens: int = 0
 
 
 class GeminiClient:
@@ -261,8 +265,13 @@ class GeminiClient:
                 )
             )
 
+        usage = getattr(response, "usage_metadata", None)
         return GeminiResponse(
             content="\n".join(text_parts).strip(),
             tool_calls=tool_calls,
             finish_reason=finish_reason,
+            input_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
+            output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
+            thinking_tokens=int(getattr(usage, "thoughts_token_count", 0) or 0),
+            cached_tokens=int(getattr(usage, "cached_content_token_count", 0) or 0),
         )

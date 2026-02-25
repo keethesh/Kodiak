@@ -439,6 +439,37 @@ class TUIEventManager:
                 event_type="prior_knowledge_loaded",
                 details={"notes_count": notes_count, "findings_count": findings_count, "scan_id": scan_id, "original_error": str(e)},
             )
+
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_llm_response(
+        self,
+        iteration: int,
+        raw_json: str,
+        input_tokens: int,
+        output_tokens: int,
+        thinking_tokens: int,
+        cached_tokens: int,
+        cost_usd: float,
+        scan_id: str = None,
+    ):
+        """Broadcast a single LLM response with token usage (verbose/debug use)."""
+        try:
+            event = TUIEvent("llm_response", {
+                "iteration": iteration,
+                "raw_json": raw_json,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "thinking_tokens": thinking_tokens,
+                "cached_tokens": cached_tokens,
+                "cost_usd": cost_usd,
+            })
+            await self.emit(event, scan_id)
+        except Exception as e:
+            raise EventBroadcastingError(
+                message="Failed to emit llm_response event",
+                event_type="llm_response",
+                details={"iteration": iteration, "scan_id": scan_id, "original_error": str(e)},
+            )
     
     def get_health_status(self) -> Dict[str, Any]:
         """Get EventManager health status"""
