@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -Eeuo pipefail
 
 # Kodiak Installation Script
 # Robust installation using UV (modern Python package manager)
@@ -11,6 +11,8 @@ UV_VERSION="0.5.11"
 FORCE_INSTALL="${FORCE_INSTALL:-false}"
 UPDATE_INSTALL="${UPDATE_INSTALL:-false}"
 SKIP_DOCKER="${SKIP_DOCKER:-false}"
+DRY_RUN="${DRY_RUN:-false}"
+TOOLBOX_IMAGE="ghcr.io/keethesh/kodiak-toolbox:latest"
 
 # Colors for output
 RED='\033[0;31m'
@@ -19,6 +21,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
 
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -39,6 +45,140 @@ print_error() {
 print_step() {
     echo -e "${CYAN}[STEP]${NC} $1"
 }
+
+print_blank() {
+    echo
+}
+
+print_rule() {
+    local width=53
+    local line
+    printf -v line '%*s' "$width" ''
+    line=${line// /-}
+    echo -e "${CYAN}${line}${NC}"
+}
+
+print_banner() {
+    print_rule
+    echo -e "${GREEN}Kodiak Installer${NC}"
+    echo "Penetration Testing Suite"
+    echo "AI-Powered Security Testing Framework"
+    print_rule
+    print_blank
+}
+
+print_section() {
+    print_blank
+    echo -e "${CYAN}$1${NC}"
+}
+
+print_item() {
+    echo "  - $1"
+}
+
+print_command() {
+    echo -e "    ${CYAN}$1${NC}"
+}
+
+run_cmd() {
+    local description="$1"
+    shift
+
+    print_status "$description"
+    print_command "$*"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        return 0
+    fi
+
+    "$@"
+}
+
+run_cmd_shell() {
+    local description="$1"
+    local command_string="$2"
+
+    print_status "$description"
+    print_command "$command_string"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        return 0
+    fi
+
+    bash -o pipefail -c "$command_string"
+}
+
+run_cmd_allow_fail() {
+    local description="$1"
+    shift
+
+    print_status "$description"
+    print_command "$*"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        return 0
+    fi
+
+    "$@" || true
+}
+
+on_error() {
+    local exit_code=$?
+    local line_no="${BASH_LINENO[0]:-unknown}"
+    local cmd="${BASH_COMMAND:-unknown}"
+    local func_name="${FUNCNAME[1]:-main}"
+    print_error "Error at line ${line_no} in ${func_name}: ${cmd}"
+    exit "$exit_code"
+}
+
+show_help() {
+    print_banner
+    echo "Usage: $0 [options]"
+
+    print_section "Options"
+    print_item "--help, -h         Show this help message"
+    print_item "--version VERSION  Install specific version/branch"
+    print_item "--force, -f        Force reinstall even if already installed"
+    print_item "--update, -u       Update Kodiak via git pull or PyPI upgrade"
+    print_item "--skip-docker      Skip building the Kodiak toolbox Docker image"
+    print_item "--dry-run          Print planned actions without executing them"
+    print_item "--verbose, -v      Enable verbose output"
+
+    print_section "Environment Variables"
+    print_item "KODIAK_VERSION     Set specific version to install (default: latest)"
+    print_item "DRY_RUN            Set to true to print commands only"
+
+    print_section "Examples"
+    print_item "$0"
+    print_item "$0 --version v1.0"
+    print_item "$0 --force"
+    print_item "$0 --dry-run"
+    print_blank
+}
+
+cleanup_existing_kodiak_installations() {
+    # Remove UV tool installations
+    if command_exists uv; then
+        run_cmd_allow_fail "Removing uv tool: kodiak-pentest" uv tool uninstall kodiak-pentest
+        run_cmd_allow_fail "Removing uv tool: kodiak" uv tool uninstall kodiak
+    fi
+
+    # Remove pipx installations
+    if command_exists pipx; then
+        run_cmd_allow_fail "Removing pipx package: kodiak-pentest" pipx uninstall kodiak-pentest
+        run_cmd_allow_fail "Removing pipx package: kodiak" pipx uninstall kodiak
+    fi
+
+    # Remove binaries and UV tool directories
+    run_cmd_allow_fail "Removing existing kodiak binary from user bin" rm -f "$HOME/.local/bin/kodiak"
+    run_cmd_allow_fail "Removing existing kodiak binary from /usr/local/bin" rm -f "/usr/local/bin/kodiak"
+    run_cmd_allow_fail "Removing uv tool directory: kodiak-pentest" rm -rf "$HOME/.local/share/uv/tools/kodiak-pentest"
+    run_cmd_allow_fail "Removing uv tool directory: kodiak" rm -rf "$HOME/.local/share/uv/tools/kodiak"
+}
+
+# ---------------------------------------------------------------------------
+# Platform and dependency checks
+# ---------------------------------------------------------------------------
 
 # Detect OS and architecture
 detect_platform() {
@@ -75,7 +215,9 @@ check_requirements() {
         print_warning "Running as root! Kodiak tool packages will be installed to /root/.local/bin."
         print_status "Browser binaries and config will also be placed in /root."
         print_warning "If this is unintended, press Ctrl+C within 5 seconds to cancel."
-        sleep 5
+        if [[ "$DRY_RUN" != "true" ]]; then
+            sleep 5
+        fi
     fi
     
     # Check Python version
@@ -139,15 +281,15 @@ install_uv() {
         linux-x86_64|linux-aarch64|macos-x86_64|macos-aarch64)
             # Use official installer
             if command_exists curl; then
-                curl -LsSf https://astral.sh/uv/install.sh | sh
+                run_cmd_shell "Installing uv via official curl installer" "curl -LsSf https://astral.sh/uv/install.sh | sh"
             elif command_exists wget; then
-                wget -qO- https://astral.sh/uv/install.sh | sh
+                run_cmd_shell "Installing uv via official wget installer" "wget -qO- https://astral.sh/uv/install.sh | sh"
             fi
             ;;
         *)
             # Fallback to pip installation
             print_warning "Using pip fallback for UV installation on $platform"
-            python3 -m pip install --user uv
+            run_cmd "Installing uv with pip fallback" python3 -m pip install --user uv
             ;;
     esac
     
@@ -159,7 +301,7 @@ install_uv() {
         for profile in ~/.bashrc ~/.zshrc ~/.profile; do
             if [[ -f "$profile" ]]; then
                 if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$profile"; then
-                    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile"
+                    run_cmd_shell "Adding ~/.local/bin to PATH in $profile" "echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"$profile\""
                 fi
                 break
             fi
@@ -183,10 +325,10 @@ install_playwright() {
     local args=("$@")
     
     if command_exists uv; then
-        if uv run "${args[@]}" playwright install chromium; then
+        if run_cmd "Installing Playwright Chromium browser" uv run "${args[@]}" playwright install chromium; then
             if [[ "$(uname -s)" == "Linux" ]]; then
                 print_status "Installing Playwright system dependencies (may prompt for sudo)..."
-                uv run "${args[@]}" playwright install-deps chromium || print_warning "Failed to install dependencies automatically. Run 'playwright install-deps chromium' if browser tools fail."
+                run_cmd_allow_fail "Installing Playwright Linux dependencies" uv run "${args[@]}" playwright install-deps chromium
             fi
         else
             print_warning "Failed to install Playwright browsers. Browser tools may not work."
@@ -194,13 +336,17 @@ install_playwright() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Kodiak installation paths
+# ---------------------------------------------------------------------------
+
 # Install Kodiak
 install_kodiak() {
     print_step "Installing Kodiak..."
     
     # Create directories
-    mkdir -p "$INSTALL_DIR"
-    mkdir -p "$BIN_DIR"
+    run_cmd "Creating install directory" mkdir -p "$INSTALL_DIR"
+    run_cmd "Creating binary directory" mkdir -p "$BIN_DIR"
     
     # Check if already installed and WORKING
     local kodiak_works=false
@@ -237,40 +383,21 @@ install_kodiak() {
     
     if [[ "$FORCE_INSTALL" == "true" ]]; then
         print_status "Force reinstalling Kodiak..."
-        
-        # Aggressively clean up ALL existing Kodiak installations
+
+        # Aggressively clean up all existing Kodiak installations.
         print_status "Cleaning up existing installations..."
-        
-        # Remove UV tool installations
-        if command_exists uv; then
-            uv tool uninstall kodiak-pentest 2>/dev/null || true
-            uv tool uninstall kodiak 2>/dev/null || true
-        fi
-        
-        # Remove pipx installations
-        if command_exists pipx; then
-            pipx uninstall kodiak-pentest 2>/dev/null || true
-            pipx uninstall kodiak 2>/dev/null || true
-        fi
-        
-        # Remove any existing kodiak binary in common locations
-        rm -f "$HOME/.local/bin/kodiak" 2>/dev/null || true
-        rm -f "/usr/local/bin/kodiak" 2>/dev/null || true
-        
-        # Remove UV tool directory for kodiak
-        rm -rf "$HOME/.local/share/uv/tools/kodiak-pentest" 2>/dev/null || true
-        rm -rf "$HOME/.local/share/uv/tools/kodiak" 2>/dev/null || true
+        cleanup_existing_kodiak_installations
     fi
     
     # Try PyPI installation first
     print_status "Attempting PyPI installation..."
     
-    local uv_install_cmd="uv tool install kodiak-pentest[full]"
+    local uv_install_args=(uv tool install "kodiak-pentest[full]")
     if [[ "$UPDATE_INSTALL" == "true" ]] || [[ "$FORCE_INSTALL" == "true" ]]; then
-        uv_install_cmd="$uv_install_cmd --force"
+        uv_install_args+=(--force)
     fi
     
-    if $uv_install_cmd 2>/dev/null; then
+    if run_cmd "Installing Kodiak from PyPI via uv" "${uv_install_args[@]}"; then
         print_success "Kodiak installed/updated from PyPI"
         
         install_playwright --with kodiak-pentest
@@ -329,18 +456,18 @@ install_from_source() {
             if ! git diff-index --quiet HEAD --; then
                 print_warning "Local repository has uncommitted changes."
                 print_status "Stashing local changes..."
-                git stash || true
+                run_cmd_allow_fail "Stashing local repository changes" git stash
                 dirty=true
             fi
             
-            git pull --rebase || {
+            run_cmd "Pulling latest changes with rebase" git pull --rebase || {
                 print_error "Failed to pull updates from repository. You may need to fetch manually."
                 exit 1
             }
             
             if [[ "$dirty" == "true" ]]; then
                 print_status "Restoring local changes..."
-                git stash pop || print_warning "Merge conflicts detected while restoring stash. Please resolve manually."
+                run_cmd_allow_fail "Restoring stashed local changes" git stash pop
             fi
         fi
     else
@@ -348,40 +475,21 @@ install_from_source() {
         if [[ "$is_update" == "true" ]]; then
             print_status "Updating existing Kodiak repository..."
             cd "$source_dir"
-            git fetch --all --tags
+            run_cmd "Fetching remote updates and tags" git fetch --all --tags
         else
             # Clean up existing installation
             if [[ -d "$source_dir" ]]; then
                 print_status "Removing existing source installation..."
-                rm -rf "$source_dir"
+                run_cmd "Removing existing source directory" rm -rf "$source_dir"
             fi
-            
-            # Aggressively clean up ALL existing Kodiak installations
+
+            # Aggressively clean up all existing Kodiak installations.
             print_status "Cleaning up any existing Kodiak installations..."
-            
-            # Remove UV tool installations
-            if command_exists uv; then
-                uv tool uninstall kodiak-pentest 2>/dev/null || true
-                uv tool uninstall kodiak 2>/dev/null || true
-            fi
-            
-            # Remove pipx installations
-            if command_exists pipx; then
-                pipx uninstall kodiak-pentest 2>/dev/null || true
-                pipx uninstall kodiak 2>/dev/null || true
-            fi
-            
-            # Remove any existing kodiak binary in common locations
-            rm -f "$HOME/.local/bin/kodiak" 2>/dev/null || true
-            rm -f "/usr/local/bin/kodiak" 2>/dev/null || true
-            
-            # Remove UV tool directory for kodiak
-            rm -rf "$HOME/.local/share/uv/tools/kodiak-pentest" 2>/dev/null || true
-            rm -rf "$HOME/.local/share/uv/tools/kodiak" 2>/dev/null || true
+            cleanup_existing_kodiak_installations
             
             # Clone repository
             print_status "Cloning Kodiak repository..."
-            if ! git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
+            if ! run_cmd "Cloning Kodiak repository" git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
                 print_error "Failed to clone repository"
                 exit 1
             fi
@@ -393,31 +501,32 @@ install_from_source() {
     # Checkout specific branch/version if specified
     if [[ "$KODIAK_VERSION" != "latest" ]]; then
         print_status "Checking out version $KODIAK_VERSION..."
-        git checkout "$KODIAK_VERSION" || {
+        run_cmd_allow_fail "Checking out version $KODIAK_VERSION" git checkout "$KODIAK_VERSION"
+        if [[ "$DRY_RUN" != "true" ]] && ! git rev-parse --verify --quiet "$KODIAK_VERSION" >/dev/null 2>&1; then
             print_warning "Version $KODIAK_VERSION not found"
-        }
+        fi
         
         if [[ "$is_update" == "true" ]]; then
             # Handle uncommitted changes for specific version pull
             local dirty=false
             if ! git diff-index --quiet HEAD --; then
-                git stash || true
+                run_cmd_allow_fail "Stashing local changes before version pull" git stash
                 dirty=true
             fi
             
-            git pull origin "$KODIAK_VERSION" --rebase || true
+            run_cmd_allow_fail "Pulling branch $KODIAK_VERSION with rebase" git pull origin "$KODIAK_VERSION" --rebase
             
             if [[ "$dirty" == "true" ]]; then
-                git stash pop || print_warning "Conflicts restoring stash."
+                run_cmd_allow_fail "Restoring stashed local changes" git stash pop
             fi
         fi
     else
         # Latest tracks main branch by default.
         if git show-ref --verify --quiet refs/remotes/origin/main; then
             print_status "Using main branch..."
-            git checkout main || true
+            run_cmd_allow_fail "Checking out main branch" git checkout main
             if [[ "$is_update" == "true" ]] && [[ "$source_dir" != "$PWD" || $(git symbolic-ref --short HEAD 2>/dev/null) == "main" ]]; then
-                git pull origin main --rebase || true
+                run_cmd_allow_fail "Pulling latest main branch changes" git pull origin main --rebase
             fi
         else
             print_warning "origin/main not found. Staying on current branch."
@@ -430,17 +539,17 @@ install_from_source() {
 
     if [[ -z "$project_dir" ]] && [[ "$source_dir" != "$PWD" ]]; then
         print_warning "Source checkout missing pyproject.toml/setup.py. Re-cloning repository..."
-        rm -rf "$source_dir"
-        if ! git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
+        run_cmd "Removing invalid source checkout" rm -rf "$source_dir"
+        if ! run_cmd "Re-cloning Kodiak repository" git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
             print_error "Failed to re-clone repository"
             exit 1
         fi
         cd "$source_dir"
 
         if [[ "$KODIAK_VERSION" != "latest" ]]; then
-            git checkout "$KODIAK_VERSION" || true
+            run_cmd_allow_fail "Checking out version $KODIAK_VERSION after re-clone" git checkout "$KODIAK_VERSION"
         elif git show-ref --verify --quiet refs/remotes/origin/main; then
-            git checkout main || true
+            run_cmd_allow_fail "Checking out main after re-clone" git checkout main
         fi
 
         project_dir="$(resolve_python_project_dir "$source_dir" || true)"
@@ -458,12 +567,12 @@ install_from_source() {
     
     # Install using UV with force flag to always overwrite
     print_status "Installing dependencies and Kodiak..."
-    if ! uv tool install --force --editable ".[full]"; then
+    if ! run_cmd "Installing Kodiak in editable mode via uv" uv tool install --force --editable ".[full]"; then
         print_error "Failed to install Kodiak from source"
         print_status "Trying alternative installation method..."
         
         # Fallback: try without --editable
-        if ! uv tool install --force ".[full]"; then
+        if ! run_cmd "Installing Kodiak in non-editable mode via uv" uv tool install --force ".[full]"; then
             print_error "Alternative installation also failed"
             exit 1
         fi
@@ -475,18 +584,25 @@ install_from_source() {
     print_success "Kodiak installed from source"
 }
 
+# ---------------------------------------------------------------------------
+# Post-install setup and validation
+# ---------------------------------------------------------------------------
+
 # Setup configuration
 setup_configuration() {
     print_step "Setting up configuration..."
     
     # Create config directory
-    mkdir -p "$INSTALL_DIR"
+    run_cmd "Ensuring config directory exists" mkdir -p "$INSTALL_DIR"
     
     # Create a minimal config file with SQLite defaults
     local config_file="$INSTALL_DIR/config.env"
     if [[ ! -f "$config_file" ]]; then
         print_status "Creating default configuration (SQLite mode)..."
-        cat > "$config_file" << 'EOF'
+        if [[ "$DRY_RUN" == "true" ]]; then
+            print_command "cat > \"$config_file\" << 'EOF' ... EOF"
+        else
+            cat > "$config_file" << 'EOF'
 # Kodiak Configuration
 # Generated by install script - run 'kodiak config' to customize
 
@@ -508,8 +624,9 @@ KODIAK_ENABLE_HIVE_MIND=true
 # Toolbox Container (for security tools)
 KODIAK_TOOLBOX_IMAGE=ghcr.io/keethesh/kodiak-toolbox:latest
 EOF
+        fi
         # Set restrictive permissions
-        chmod 600 "$config_file" 2>/dev/null || true
+        run_cmd_allow_fail "Setting restrictive permissions on config file" chmod 600 "$config_file"
     fi
     
     print_success "Configuration created at $config_file"
@@ -547,7 +664,7 @@ verify_installation() {
 }
 
 verify_toolbox_tools() {
-    local image="${1:-ghcr.io/keethesh/kodiak-toolbox:latest}"
+    local image="${1:-$TOOLBOX_IMAGE}"
     local missing=0
     local tools=(
         nmap
@@ -565,7 +682,7 @@ verify_toolbox_tools() {
 
     print_status "Verifying required tools inside $image..."
     for tool in "${tools[@]}"; do
-        if docker run --rm --entrypoint /bin/sh "$image" -lc "command -v $tool" >/dev/null 2>&1; then
+        if run_cmd "Checking tool '$tool' in toolbox image" docker run --rm --entrypoint /bin/sh "$image" -lc "command -v $tool"; then
             print_success "Tool '$tool' found in toolbox image"
         else
             print_error "Tool '$tool' NOT found in toolbox image"
@@ -591,7 +708,7 @@ setup_docker() {
             
             # Check if image exists locally
             local image_exists=false
-            if docker image inspect ghcr.io/keethesh/kodiak-toolbox:latest >/dev/null 2>&1; then
+            if docker image inspect "$TOOLBOX_IMAGE" >/dev/null 2>&1; then
                 image_exists=true
             fi
             
@@ -599,7 +716,7 @@ setup_docker() {
                 local pulled=false
                 if [[ "$FORCE_INSTALL" != "true" ]]; then
                     print_status "Attempting to pull pre-built Kodiak toolbox image..."
-                    if docker pull ghcr.io/keethesh/kodiak-toolbox:latest; then
+                    if run_cmd "Pulling pre-built toolbox image" docker pull "$TOOLBOX_IMAGE"; then
                         print_success "Kodiak toolbox Docker image pulled successfully from GHCR"
                         pulled=true
                     else
@@ -626,11 +743,11 @@ setup_docker() {
                     fi
                     
                     if [[ -n "$dockerfile_path" ]]; then
-                        if docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f "$dockerfile_path" "$build_context"; then
+                        if run_cmd "Building toolbox image locally" docker build -t "$TOOLBOX_IMAGE" -f "$dockerfile_path" "$build_context"; then
                             print_success "Kodiak toolbox Docker image built successfully"
                         else
                             print_warning "Failed to build Docker image locally"
-                            print_status "You can build it later by running: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
+                            print_status "You can build it later by running: docker build -t $TOOLBOX_IMAGE -f containers/Dockerfile containers/"
                         fi
                     else
                         print_warning "Dockerfile not found. Could not build Kodiak toolbox image locally."
@@ -643,53 +760,55 @@ setup_docker() {
             fi
 
             # Validate critical tools expected by the agent loop.
-            if ! verify_toolbox_tools "ghcr.io/keethesh/kodiak-toolbox:latest"; then
+            if ! verify_toolbox_tools "$TOOLBOX_IMAGE"; then
                 print_error "Toolbox image is missing required tools (nmap/nuclei/subfinder/httpx/katana/ffuf/whatweb/sqlmap/wpscan/commix/searchsploit)."
-                print_status "Rebuild with: docker build -t ghcr.io/keethesh/kodiak-toolbox:latest -f containers/Dockerfile containers/"
+                print_status "Rebuild with: docker build -t $TOOLBOX_IMAGE -f containers/Dockerfile containers/"
                 return 1
             fi
         else
             print_warning "Docker is installed but the daemon is not running."
-            print_status "Start Docker and run 'docker pull ghcr.io/keethesh/kodiak-toolbox:latest' or build it manually."
+            print_status "Start Docker and run 'docker pull $TOOLBOX_IMAGE' or build it manually."
         fi
     else
         print_warning "Docker not found. Security tools will rely on local installations."
     fi
 }
 
+# ---------------------------------------------------------------------------
+# UX and CLI entrypoints
+# ---------------------------------------------------------------------------
+
 # Show next steps
 show_next_steps() {
-    echo
-    print_success "🎉 Kodiak installation complete!"
-    echo
-    echo "📋 Quick Start:"
-    echo "  1. Set up Gemini model and API key (interactive wizard):"
-    echo -e "     ${CYAN}kodiak config${NC}"
-    echo
-    echo "  2. Initialize the database:"
-    echo -e "     ${CYAN}kodiak init${NC}"
-    echo
-    echo "  3. Start scanning:"
-    echo -e "     ${CYAN}kodiak --target ./my-app${NC}"
-    echo
-    echo "📦 What's Included:"
-    echo "  • SQLite database (zero external dependencies)"
-    echo "  • Security tools via Docker (nmap, nuclei, sqlmap, etc.)"
-    echo "  • TUI interface for real-time monitoring"
-    echo
-    echo "📚 Commands:"
-    echo -e "  ${CYAN}kodiak${NC}              Launch TUI interface"
-    echo -e "  ${CYAN}kodiak config${NC}       Configure LLM and settings"
-    echo -e "  ${CYAN}kodiak doctor${NC}       Check installation status"
-    echo -e "  ${CYAN}kodiak --help${NC}       Show all commands"
-    echo
-    echo "🔗 Resources:"
-    echo "  GitHub: https://github.com/keethesh/Kodiak"
-    echo
+    print_success "Kodiak installation complete."
+
+    print_section "Quick Start"
+    print_item "Set up Gemini model and API key (interactive wizard)"
+    print_command "kodiak config"
+    print_item "Initialize the database"
+    print_command "kodiak init"
+    print_item "Start scanning"
+    print_command "kodiak --target ./my-app"
+
+    print_section "What's Included"
+    print_item "SQLite database (zero external dependencies)"
+    print_item "Security tools via Docker (nmap, nuclei, sqlmap, etc.)"
+    print_item "TUI interface for real-time monitoring"
+
+    print_section "Commands"
+    print_item "kodiak              Launch TUI interface"
+    print_item "kodiak config       Configure LLM and settings"
+    print_item "kodiak doctor       Check installation status"
+    print_item "kodiak --help       Show all commands"
+
+    print_section "Resources"
+    print_item "GitHub: https://github.com/keethesh/Kodiak"
+
     if [[ ! -f "$HOME/.local/bin/kodiak" ]]; then
-        echo "⚠️  If 'kodiak' command is not found, restart your shell or run:"
-        echo -e "  ${CYAN}source ~/.bashrc${NC}  # or ~/.zshrc"
+        print_warning "If 'kodiak' command is not found, restart your shell or run:"
+        print_command "source ~/.bashrc  # or ~/.zshrc"
     fi
+    print_blank
 }
 
 # Cleanup on error
@@ -701,7 +820,7 @@ cleanup_on_error() {
         
         # Remove partial installation
         if [[ -d "$INSTALL_DIR/source" ]]; then
-            rm -rf "$INSTALL_DIR/source"
+            run_cmd_allow_fail "Removing partial source directory" rm -rf "$INSTALL_DIR/source"
         fi
         
         print_status "You can try running the installer again or install manually"
@@ -714,26 +833,7 @@ handle_arguments() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --help|-h)
-                echo "Kodiak Installation Script"
-                echo
-                echo "Usage: $0 [options]"
-                echo
-                echo "Options:"
-                echo "  --help, -h         Show this help message"
-                echo "  --version VERSION  Install specific version/branch"
-                echo "  --force, -f        Force reinstall even if already installed"
-                echo "  --update, -u       Update Kodiak to the latest version via git pull or PyPI upgrade"
-                echo "  --skip-docker      Skip building the Kodiak toolbox Docker image"
-                echo "  --verbose, -v      Enable verbose output"
-                echo
-                echo "Environment variables:"
-                echo "  KODIAK_VERSION     Set specific version to install (default: latest)"
-                echo
-                echo "Examples:"
-                echo "  $0                 Install latest version"
-                echo "  $0 --version v1.0  Install version v1.0"
-                echo "  $0 --force         Force reinstall"
-                echo
+                show_help
                 exit 0
                 ;;
             --version)
@@ -757,6 +857,10 @@ handle_arguments() {
                 SKIP_DOCKER=true
                 shift
                 ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
             --verbose|-v)
                 set -x
                 shift
@@ -773,24 +877,25 @@ handle_arguments() {
 # Main installation function
 main() {
     # Set up error handling
+    trap on_error ERR
     trap cleanup_on_error EXIT
     
-    echo -e "${CYAN}┌─────────────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}│${NC}  🐻  ${GREEN}Kodiak${NC} — Penetration Testing Suite      ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}     AI-Powered Security Testing Framework    ${CYAN}│${NC}"
-    echo -e "${CYAN}└─────────────────────────────────────────────┘${NC}"
-    echo
+    print_banner
     
     # Handle command line arguments
     handle_arguments "$@"
     
     # Show installation info
+    if [[ "$DRY_RUN" == "true" ]]; then
+        print_warning "Dry-run mode enabled. Commands will be printed but not executed."
+    fi
+
     if [[ "$KODIAK_VERSION" != "latest" ]]; then
         print_status "Installing Kodiak version: $KODIAK_VERSION"
     else
         print_status "Installing latest Kodiak version"
     fi
-    echo
+    print_blank
     
     # Run installation steps
     check_requirements
