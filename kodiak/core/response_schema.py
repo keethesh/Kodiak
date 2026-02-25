@@ -37,6 +37,7 @@ class ActionType(str, Enum):
     WAIT = "wait"
     ADVANCE = "advance"
     COMPLETE = "complete"
+    WRITE_FILE = "write_file"
 
 
 class NoteCategoryEnum(str, Enum):
@@ -104,6 +105,14 @@ class Action(BaseModel):
     reason: str = Field(
         default="",
         description="Optional cancellation/wait/phase reason.",
+    )
+    target_path: str = Field(
+        default="",
+        description="Required for write_file. The absolute path to write the file to within the sandbox.",
+    )
+    content: str = Field(
+        default="",
+        description="Required for write_file. The exact string/code content to write.",
     )
 
 

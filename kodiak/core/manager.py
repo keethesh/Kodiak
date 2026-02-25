@@ -599,6 +599,19 @@ class ManagerAgent:
                 phase_action = PhaseAction.ADVANCE
             elif action.type == ActionType.COMPLETE:
                 phase_action = PhaseAction.COMPLETE
+            elif action.type == ActionType.WRITE_FILE and action.target_path.strip() and action.content:
+                import base64
+                import shlex
+                b64_content = base64.b64encode(action.content.encode("utf-8")).decode("utf-8")
+                target_path = shlex.quote(action.target_path.strip())
+                bash_cmd = f"echo {b64_content} | base64 -d > {target_path}"
+                launch_tasks.append(
+                    CommandTask(
+                        command=bash_cmd,
+                        rationale=action.rationale or f"Write file to {target_path}",
+                        timeout=max(1, int(action.timeout or 30)),
+                    )
+                )
 
         for cmd in kodiak_resp.commands:
             launch_tasks.append(
@@ -857,8 +870,9 @@ class ManagerAgent:
             "3. PRIORITIZE: Rank targets by attack surface. Focus on what's most likely exploitable.",
             "4. ACT: Output runtime actions using `actions[]` (preferred) and/or `commands[]` (legacy).",
             "   Use `launch` to run commands, `cancel` to stop low-value running tasks,",
+            "   `write_file` to safely write exploit scripts/payloads to the sandbox (avoids bash escaping hell),",
             "   `wait` to defer, `advance` to move phase, `complete` when done.",
-            "   For every launch/cancel action, explain your rationale.",
+            "   For every launch/cancel/write_file action, explain your rationale.",
             "   Be CREATIVE over repetitive: try one well-crafted payload per technique class",
             "   (reflected, stored, DOM-based, attribute breakout, event handler) rather than brute-forcing the same vector.",
             "5. ADAPT: If a command fails or a WAF blocks you, change approach entirely.",
@@ -894,6 +908,8 @@ class ManagerAgent:
             "  at least one concrete proof-of-concept attempt. Scanner output alone is not evidence —",
             "  confirm exploitability with a targeted request (curl, sqlmap, or a custom script).",
             "- When CLI tools are insufficient for a vector, write a python3 script instead.",
+            "  Use the `write_file` action to drop the script cleanly into the sandbox (e.g. target_path='/tmp/exploit.py').",
+            "  Then use a `launch` action to run it: `python3 /tmp/exploit.py`.",
             "  Use asyncio/aiohttp for concurrent payload sprays. Batch payloads into a single script",
             "  rather than issuing one command per attempt. Log status codes, response lengths,",
             "  and timing deltas to auto-triage anomalies.",
