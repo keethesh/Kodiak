@@ -12,6 +12,8 @@ FORCE_INSTALL="${FORCE_INSTALL:-false}"
 UPDATE_INSTALL="${UPDATE_INSTALL:-false}"
 SKIP_DOCKER="${SKIP_DOCKER:-false}"
 DRY_RUN="${DRY_RUN:-false}"
+VERBOSE="${VERBOSE:-false}"
+INSTALL_LOG="${INSTALL_LOG:-/tmp/kodiak-install.log}"
 TOOLBOX_IMAGE="ghcr.io/keethesh/kodiak-toolbox:latest"
 
 # Colors for output
@@ -85,13 +87,19 @@ run_cmd() {
     shift
 
     print_status "$description"
-    print_command "$*"
 
     if [[ "$DRY_RUN" == "true" ]]; then
+        print_command "$*"
         return 0
     fi
 
-    "$@"
+    if [[ "$VERBOSE" == "true" ]]; then
+        print_command "$*"
+        "$@"
+        return $?
+    fi
+
+    "$@" >>"$INSTALL_LOG" 2>&1
 }
 
 run_cmd_shell() {
@@ -99,27 +107,39 @@ run_cmd_shell() {
     local command_string="$2"
 
     print_status "$description"
-    print_command "$command_string"
 
     if [[ "$DRY_RUN" == "true" ]]; then
+        print_command "$command_string"
         return 0
     fi
 
-    bash -o pipefail -c "$command_string"
+    if [[ "$VERBOSE" == "true" ]]; then
+        print_command "$command_string"
+        bash -o pipefail -c "$command_string"
+        return $?
+    fi
+
+    bash -o pipefail -c "$command_string" >>"$INSTALL_LOG" 2>&1
 }
 
 run_cmd_allow_fail() {
     local description="$1"
     shift
 
-    print_status "$description"
-    print_command "$*"
-
     if [[ "$DRY_RUN" == "true" ]]; then
+        print_status "$description"
+        print_command "$*"
         return 0
     fi
 
-    "$@" || true
+    if [[ "$VERBOSE" == "true" ]]; then
+        print_status "$description"
+        print_command "$*"
+        "$@" || true
+        return 0
+    fi
+
+    "$@" >>"$INSTALL_LOG" 2>&1 || true
 }
 
 on_error() {
@@ -128,6 +148,9 @@ on_error() {
     local cmd="${BASH_COMMAND:-unknown}"
     local func_name="${FUNCNAME[1]:-main}"
     print_error "Error at line ${line_no} in ${func_name}: ${cmd}"
+    if [[ "${DRY_RUN:-false}" != "true" ]]; then
+        print_status "Install log: ${INSTALL_LOG:-/tmp/kodiak-install.log}"
+    fi
     exit "$exit_code"
 }
 
@@ -142,11 +165,13 @@ show_help() {
     print_item "--update, -u       Update Kodiak via git pull or PyPI upgrade"
     print_item "--skip-docker      Skip building the Kodiak toolbox Docker image"
     print_item "--dry-run          Print planned actions without executing them"
-    print_item "--verbose, -v      Enable verbose output"
+    print_item "--verbose, -v      Show full command output (default is concise)"
 
     print_section "Environment Variables"
     print_item "KODIAK_VERSION     Set specific version to install (default: latest)"
     print_item "DRY_RUN            Set to true to print commands only"
+    print_item "VERBOSE            Set to true to show full command output"
+    print_item "INSTALL_LOG        Path for installer command logs"
 
     print_section "Examples"
     print_item "$0"
@@ -816,6 +841,9 @@ cleanup_on_error() {
     local exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
         print_error "Installation failed with exit code $exit_code"
+        if [[ "$DRY_RUN" != "true" ]]; then
+            print_status "Install log: $INSTALL_LOG"
+        fi
         print_status "Cleaning up..."
         
         # Remove partial installation
@@ -862,7 +890,7 @@ handle_arguments() {
                 shift
                 ;;
             --verbose|-v)
-                set -x
+                VERBOSE=true
                 shift
                 ;;
             *)
@@ -884,10 +912,16 @@ main() {
     
     # Handle command line arguments
     handle_arguments "$@"
+
+    if [[ "$DRY_RUN" != "true" ]]; then
+        : > "$INSTALL_LOG"
+    fi
     
     # Show installation info
     if [[ "$DRY_RUN" == "true" ]]; then
         print_warning "Dry-run mode enabled. Commands will be printed but not executed."
+    elif [[ "$VERBOSE" != "true" ]]; then
+        print_status "Concise output mode enabled. Detailed logs: $INSTALL_LOG"
     fi
 
     if [[ "$KODIAK_VERSION" != "latest" ]]; then
