@@ -54,7 +54,7 @@ class KodiakSettings(BaseSettings):
     llm_api_key: Optional[str] = Field(default=None, alias="KODIAK_LLM_API_KEY")
     google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
     llm_temperature: float = Field(default=1.0, alias="KODIAK_LLM_TEMPERATURE")
-    llm_max_tokens: int = Field(default=4096, alias="KODIAK_LLM_MAX_TOKENS")
+    llm_max_tokens: int = Field(default=8192, alias="KODIAK_LLM_MAX_TOKENS")  # Output can be large containing arrays of JSON actions
     llm_knowledge_cutoff: str = Field(default="2025-01", alias="KODIAK_LLM_KNOWLEDGE_CUTOFF")
     gemini_thinking_level: str = Field(default="high", alias="KODIAK_GEMINI_THINKING_LEVEL")
     max_tools_in_prompt: int = Field(default=16, alias="KODIAK_MAX_TOOLS_IN_PROMPT")

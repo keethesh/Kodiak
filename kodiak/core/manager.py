@@ -360,7 +360,15 @@ class ManagerAgent:
                         })
 
                     if resolved_phase_action == PhaseAction.ADVANCE:
-                        await self._advance_phase(scan_id_str)
+                        advanced = await self._advance_phase(scan_id_str, scheduler)
+                        if not advanced:
+                            history.append({
+                                "role": "user",
+                                "content": (
+                                    "<phase_advance_deferred>Phase advance requested but deferred "
+                                    "because critical recon tasks are still running.</phase_advance_deferred>"
+                                ),
+                            })
 
                     if resolved_phase_action == PhaseAction.COMPLETE:
                         if iteration < min_iterations:
@@ -631,11 +639,24 @@ class ManagerAgent:
         unique_cancel_ids = list(dict.fromkeys(cancel_task_ids))
         return filtered, unique_cancel_ids, phase_action
 
-    async def _advance_phase(self, scan_id_str: str) -> None:
+    async def _advance_phase(self, scan_id_str: str, scheduler=None) -> bool:
+        if self.scan_state.phase == ScanPhase.RECON and scheduler:
+            recon_tools = {"nmap", "subfinder", "dig", "whois", "whatweb", "httpx"}
+            running_recon = [
+                tid for tid, state in (scheduler.snapshot_states() or {}).items()
+                if state == "running" and any(
+                    t in self.scan_state.active_tasks.get(tid, __import__("kodiak.core.scan_state", fromlist=["TaskRecord"]).TaskRecord("", "", "", "")).command
+                    for t in recon_tools
+                )
+            ]
+            if running_recon:
+                logger.info(f"⏸️ Phase advance deferred: {len(running_recon)} recon tasks still running")
+                return False
+
         old_phase = self.scan_state.phase.value
         advanced = self.scan_state.advance_phase()
         if not advanced:
-            return
+            return False
         new_phase = self.scan_state.phase.value
         logger.info(f"📍 Phase advanced: {old_phase} → {new_phase}")
         if self.event_manager:
@@ -647,6 +668,7 @@ class ManagerAgent:
                 )
             except Exception:
                 pass
+        return True
 
     @staticmethod
     def _tool_from_command(command: str) -> str:
@@ -1039,6 +1061,14 @@ class ManagerAgent:
     # Discovery processing
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_hostname(host: str) -> str:
+        """Normalize hostname by stripping www. prefix."""
+        h = host.strip().lower()
+        if h.startswith("www."):
+            h = h[4:]
+        return h
+
     def _apply_discoveries(self, resp: KodiakResponse) -> None:
         """Update ScanState from the LLM's structured discoveries."""
         disc = resp.discoveries
@@ -1047,18 +1077,21 @@ class ManagerAgent:
 
         for host in disc.hosts:
             if host and "." in host:
-                self.scan_state.ensure_target(host)
+                norm = self._normalize_hostname(host)
+                self.scan_state.ensure_target(norm)
 
         # ports is now List[HostPorts]
         for hp in disc.ports:
-            ts = self.scan_state.ensure_target(hp.host)
+            norm = self._normalize_hostname(hp.host)
+            ts = self.scan_state.ensure_target(norm)
             for port in hp.ports:
                 if port not in ts.ports:
                     ts.ports.append(port)
 
         # technologies is now List[HostTechs]
         for ht in disc.technologies:
-            ts = self.scan_state.ensure_target(ht.host)
+            norm = self._normalize_hostname(ht.host)
+            ts = self.scan_state.ensure_target(norm)
             for tech in ht.technologies:
                 if tech and tech not in ts.technologies and len(tech) < 60:
                     ts.technologies.append(tech)
@@ -1077,7 +1110,8 @@ class ManagerAgent:
                 from urllib.parse import urlparse
                 parsed = urlparse(url)
                 if parsed.hostname:
-                    ts = self.scan_state.ensure_target(parsed.hostname)
+                    norm = self._normalize_hostname(parsed.hostname)
+                    ts = self.scan_state.ensure_target(norm)
                     if url not in ts.urls:
                         ts.urls.append(url)
 

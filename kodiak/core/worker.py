@@ -42,11 +42,15 @@ class CommandResult:
     exit_code: int
     duration_seconds: float
     timed_out: bool = False
+    timeout_limit: int = 300
 
     def to_prompt_text(self) -> str:
         """Format for inclusion in the next LLM iteration as context."""
-        status = "TIMED OUT" if self.timed_out else f"exit={self.exit_code}"
-        header = f"[cmd] {self.command} ({status}, {self.duration_seconds:.1f}s)"
+        if self.timed_out:
+            status = f"TIMED OUT at {self.timeout_limit}s limit, ran {self.duration_seconds:.1f}s"
+        else:
+            status = f"exit={self.exit_code}, {self.duration_seconds:.1f}s"
+        header = f"[cmd] {self.command} ({status})"
 
         # Combine stdout + stderr, truncate to keep history bounded
         output = self.stdout.strip()
@@ -65,6 +69,22 @@ class CommandResult:
 # Single-command executor
 # ---------------------------------------------------------------------------
 
+_cached_executor: Optional["DockerExecutor"] = None
+_executor_lock = asyncio.Lock()
+
+async def _get_cached_executor() -> "DockerExecutor":
+    global _cached_executor
+    if _cached_executor is not None:
+        return _cached_executor
+    async with _executor_lock:
+        if _cached_executor is not None:
+            return _cached_executor
+        from kodiak.core.config import settings
+        from kodiak.services.executor import get_docker_executor
+        _cached_executor = await get_docker_executor(preferred_image=settings.toolbox_image)
+        return _cached_executor
+
+
 async def execute_command(
     task: CommandTask,
     semaphore: asyncio.Semaphore,
@@ -72,16 +92,13 @@ async def execute_command(
     """
     Execute a single shell command inside the Docker sandbox.
 
-    Uses the existing DockerExecutor infrastructure.
+    Uses the existing DockerExecutor infrastructure, caching the executor
+    to avoid re-running image availability checks for every task.
     """
-    # Lazy import to avoid circular dependency at module load time
-    from kodiak.core.config import settings
-    from kodiak.services.executor import get_docker_executor
-
     t0 = time.monotonic()
 
     try:
-        executor = await get_docker_executor(preferred_image=settings.toolbox_image)
+        executor = await _get_cached_executor()
 
         try:
             result = await asyncio.wait_for(
@@ -102,6 +119,7 @@ async def execute_command(
                 exit_code=-1,
                 duration_seconds=round(elapsed, 2),
                 timed_out=True,
+                timeout_limit=task.timeout,
             )
 
         elapsed = time.monotonic() - t0
@@ -113,6 +131,7 @@ async def execute_command(
             stderr=getattr(result, "stderr", "") or "",
             exit_code=getattr(result, "exit_code", -1),
             duration_seconds=round(elapsed, 2),
+            timeout_limit=task.timeout,
         )
 
     except Exception as exc:
@@ -125,6 +144,7 @@ async def execute_command(
             stderr=str(exc)[:500],
             exit_code=-1,
             duration_seconds=round(time.monotonic() - t0, 2),
+            timeout_limit=task.timeout,
         )
 
 
@@ -195,6 +215,7 @@ async def dispatch_commands(
                 stderr=str(res)[:500],
                 exit_code=-1,
                 duration_seconds=0.0,
+                timeout_limit=task.timeout,
             ))
         else:
             final.append(res)

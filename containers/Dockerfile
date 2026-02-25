@@ -62,8 +62,8 @@ RUN apt-get install -y --no-install-recommends \
 RUN apt-get install -y --no-install-recommends \
     libcap2-bin nmap ncat ndiff masscan \
     sqlmap naabu nikto wapiti whatweb wpscan \
-    commix \
-    exploitdb seclists && \
+    commix hydra \
+    exploitdb seclists default-mysql-client whois && \
     (setcap -r /usr/bin/nmap || true) && \
     (setcap -r /usr/lib/nmap/nmap || true)
 
@@ -201,7 +201,7 @@ RUN set -eux; \
 # Fail fast if required toolbox binaries are missing.
 RUN set -eux; \
     missing=0; \
-    for tool in nmap nuclei subfinder httpx katana ffuf whatweb sqlmap wpscan commix searchsploit; do \
+    for tool in nmap nuclei subfinder httpx katana ffuf whatweb sqlmap wpscan commix searchsploit mysql whois hydra; do \
         if ! command -v "$tool" >/dev/null 2>&1; then \
             echo "Missing required toolbox binary: $tool" >&2; \
             missing=1; \

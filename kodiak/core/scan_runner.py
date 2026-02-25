@@ -62,6 +62,11 @@ class ScanRunner:
             "wpscan": "wpscan",
             "commix": "commix",
             "searchsploit": "searchsploit",
+            "dig": "dig",
+            "whois": "whois",
+            "curl": "curl",
+            "mysql": "mysql",
+            "hydra": "hydra",
         }
     
     async def run(
