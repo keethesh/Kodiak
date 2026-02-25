@@ -328,10 +328,27 @@ class ManagerAgent:
                     self._apply_discoveries(kodiak_resp)
                     await self._persist_response_findings_notes(kodiak_resp, session, project_id, scan_id)
 
-                    launch_tasks, cancel_task_ids, resolved_phase_action = self._extract_runtime_actions(
+                    write_tasks, launch_tasks, cancel_task_ids, resolved_phase_action = self._extract_runtime_actions(
                         kodiak_resp=kodiak_resp,
                         allowed_tools=allowed_tools,
                     )
+
+                    # Execute write_file actions synchronously first to avoid race conditions
+                    if write_tasks:
+                        from kodiak.core.worker import dispatch_commands
+                        write_results = await dispatch_commands(
+                            write_tasks,
+                            event_manager=self.event_manager,
+                            scan_id=scan_id_str,
+                            global_concurrency=4,
+                        )
+                        for res in write_results:
+                            await self._persist_command_attempt(session, project_id, scan_id, res)
+                            self._record_command_result_to_scan_state(res)
+                            # Let the LLM know the file was written
+                            history.append({"role": "user", "content": self._format_command_results([res])})
+
+
 
                     for cancel_id in cancel_task_ids:
                         await scheduler.cancel(cancel_id)
@@ -579,7 +596,8 @@ class ManagerAgent:
         *,
         kodiak_resp: KodiakResponse,
         allowed_tools: Optional[List[str]],
-    ) -> tuple[List[CommandTask], List[str], PhaseAction]:
+    ) -> tuple[List[CommandTask], List[CommandTask], List[str], PhaseAction]:
+        write_tasks: List[CommandTask] = []
         launch_tasks: List[CommandTask] = []
         cancel_task_ids: List[str] = []
         phase_action = kodiak_resp.phase_action
@@ -605,7 +623,7 @@ class ManagerAgent:
                 b64_content = base64.b64encode(action.content.encode("utf-8")).decode("utf-8")
                 target_path = shlex.quote(action.target_path.strip())
                 bash_cmd = f"echo {b64_content} | base64 -d > {target_path}"
-                launch_tasks.append(
+                write_tasks.append(
                     CommandTask(
                         command=bash_cmd,
                         rationale=action.rationale or f"Write file to {target_path}",
@@ -625,21 +643,26 @@ class ManagerAgent:
         allowed = set(allowed_tools or [])
         from kodiak.core.tools.registry import get_gated_tool_names
         gated_tool_names = get_gated_tool_names()
-        filtered: List[CommandTask] = []
+        
+        filtered_write: List[CommandTask] = []
+        filtered_launch: List[CommandTask] = []
         seen_commands: set[str] = set()
-        for task in launch_tasks:
-            normalized = task.command.strip()
-            if not normalized or normalized in seen_commands:
-                continue
-            tool = self._tool_from_command(normalized)
-            if allowed_tools and tool in gated_tool_names and tool not in allowed:
-                logger.debug(f"Skipping disallowed tool command: {tool} -> {normalized[:120]}")
-                continue
-            seen_commands.add(normalized)
-            filtered.append(task)
+        
+        for tasks, filtered_list in [(write_tasks, filtered_write), (launch_tasks, filtered_launch)]:
+            for task in tasks:
+                normalized = task.command.strip()
+                if not normalized or normalized in seen_commands:
+                    continue
+                tool = self._tool_from_command(normalized)
+                if allowed_tools and tool in gated_tool_names and tool not in allowed:
+                    logger.debug(f"Skipping disallowed tool command: {tool} -> {normalized[:120]}")
+                    continue
+                seen_commands.add(normalized)
+                filtered_list.append(task)
 
         unique_cancel_ids = list(dict.fromkeys(cancel_task_ids))
-        return filtered, unique_cancel_ids, phase_action
+        return filtered_write, filtered_launch, unique_cancel_ids, phase_action
+
 
     async def _advance_phase(self, scan_id_str: str, scheduler=None) -> bool:
         if self.scan_state.phase == ScanPhase.RECON and scheduler:
