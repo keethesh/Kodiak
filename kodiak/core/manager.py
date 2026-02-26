@@ -886,8 +886,10 @@ class ManagerAgent:
 
         phase_objectives = {
             ScanPhase.RECON: (
-                "Discover the full attack surface: subdomains, open ports, "
-                "and technology fingerprints. Dispatch multiple recon commands in parallel."
+                "Start with passive URL harvesting (gau, waybackurls) alongside subdomain enumeration (subfinder) — "
+                "these are zero-noise and reveal historical endpoints, API routes, and forgotten files. "
+                "Then use their output to drive targeted port scanning (nmap) and technology fingerprinting. "
+                "Dispatch multiple recon commands in parallel."
             ),
             ScanPhase.ENUMERATION: (
                 "Map services on live hosts: probe HTTP endpoints, crawl for URLs, "
@@ -937,6 +939,8 @@ class ManagerAgent:
             "",
             "<instructions>",
             "For each iteration, reason through these steps:",
+            "0. PASSIVE FIRST: In RECON, always launch passive tools (gau, waybackurls, subfinder) in the first iteration.",
+            "   Their output informs all subsequent active scanning — use discovered URLs to seed ffuf wordlists and nmap port targets.",
             "1. ANALYZE: Review scan state and previous command results. What is known? What is unknown?",
             "2. CORRELATE: Connect findings across commands — a version string suggests specific CVEs,",
             "   an exposed .git means source code review, an error message leaks internal paths.",
@@ -988,9 +992,11 @@ class ManagerAgent:
             "- When CLI tools are insufficient for a vector, write a python3 script instead.",
             "  Use the `write_file` action to drop the script cleanly into the sandbox (e.g. target_path='/tmp/exploit.py').",
             "  Then use a `launch` action to run it: `python3 /tmp/exploit.py`.",
-            "  Use asyncio/aiohttp for concurrent payload sprays. Batch payloads into a single script",
-            "  rather than issuing one command per attempt. Log status codes, response lengths,",
-            "  and timing deltas to auto-triage anomalies.",
+            "  Pre-installed Python libraries: aiohttp, requests, beautifulsoup4, lxml, pyjwt, pycryptodome, websocket-client.",
+            "  Use asyncio/aiohttp for concurrent payload sprays and race condition testing.",
+            "  Use requests + BeautifulSoup for multi-step exploits that need CSRF token extraction or session chaining.",
+            "  Batch payloads into a single script rather than issuing one command per attempt.",
+            "  Log status codes, response lengths, and timing deltas to auto-triage anomalies.",
             "</constraints>",
             "",
             *__import__('kodiak.core.tools.registry', fromlist=['get_prompt_catalog']).get_prompt_catalog(),

@@ -89,6 +89,17 @@ RUN pipx install semgrep || echo "Warning: Failed to install semgrep"
 RUN pipx install bandit || echo "Warning: Failed to install bandit"
 RUN pipx install jwt-tool || echo "Warning: Failed to install jwt-tool"
 
+# Install Python pentest scripting libraries
+# These are used by the agent when writing custom exploit scripts inside the sandbox.
+# aiohttp/requests: HTTP clients (aiohttp referenced in system prompt for concurrent payload sprays)
+# beautifulsoup4/lxml: HTML parsing for CSRF token extraction, form analysis, response scraping
+# pyjwt: JWT forging/decoding (referenced in jwt_testing skill)
+# pycryptodome: Crypto ops for padding oracle, hash manipulation, custom crypto exploits
+# websocket-client: WebSocket endpoint testing (referenced in api_testing skill)
+RUN pip3 install --break-system-packages --no-cache-dir \
+    aiohttp requests beautifulsoup4 lxml pyjwt pycryptodome websocket-client \
+    || echo "Warning: Failed to install Python pentest libraries"
+
 # Install XSStrike (XSS scanner)
 RUN git clone --depth 1 https://github.com/s0md3v/XSStrike.git /opt/xsstrike && \
     pip3 install --break-system-packages -r /opt/xsstrike/requirements.txt || echo "Warning: XSStrike deps failed" && \

@@ -62,6 +62,28 @@ TOOL_REGISTRY: List[ToolEntry] = [
         prompt_category="Reconnaissance",
     ),
     ToolEntry(
+        name="gau",
+        binary="gau",
+        tier=ToolTier.CORE,
+        description="GetAllUrls — fetch known URLs from AlienVault, Wayback, Common Crawl",
+        prompt_usage=(
+            "`gau <domain> --subs` — Passive URL harvesting from public archives. "
+            "Run early in RECON to seed targeted scanning. Pipe to `grep -iE '\\.(js|json|xml|config|env|bak|sql)'` for high-value files."
+        ),
+        prompt_category="Reconnaissance",
+    ),
+    ToolEntry(
+        name="waybackurls",
+        binary="waybackurls",
+        tier=ToolTier.CORE,
+        description="Fetch URLs from the Wayback Machine for a domain",
+        prompt_usage=(
+            "`echo <domain> | waybackurls` — Fetch historical URLs from the Wayback Machine. "
+            "Reveals forgotten endpoints, old API routes, admin panels. Combine with gau for full coverage."
+        ),
+        prompt_category="Reconnaissance",
+    ),
+    ToolEntry(
         name="nmap",
         binary="nmap",
         tier=ToolTier.CORE,
@@ -196,18 +218,7 @@ TOOL_REGISTRY: List[ToolEntry] = [
         tier=ToolTier.EXTENDED,
         description="Fast web spider for crawling and link extraction",
     ),
-    ToolEntry(
-        name="waybackurls",
-        binary="waybackurls",
-        tier=ToolTier.EXTENDED,
-        description="Fetch URLs from the Wayback Machine for a domain",
-    ),
-    ToolEntry(
-        name="gau",
-        binary="gau",
-        tier=ToolTier.EXTENDED,
-        description="GetAllUrls — fetch known URLs from AlienVault, Wayback, Common Crawl",
-    ),
+    # gau and waybackurls promoted to CORE — see Reconnaissance section above
     ToolEntry(
         name="masscan",
         binary="masscan",
