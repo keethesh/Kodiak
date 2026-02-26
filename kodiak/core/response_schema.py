@@ -76,8 +76,8 @@ class Command(BaseModel):
         )
     )
     timeout: int = Field(
-        default=300,
-        description="Max seconds before the command is killed (default 300)",
+        default=600,
+        description="Max seconds before the command is killed (default 600)",
     )
 
 
@@ -96,7 +96,7 @@ class Action(BaseModel):
         description="Reason for this action (especially important for launch/cancel).",
     )
     timeout: int = Field(
-        default=300,
+        default=600,
         description="Timeout seconds for launch actions.",
     )
     task_id: str = Field(

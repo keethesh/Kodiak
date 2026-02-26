@@ -27,7 +27,7 @@ class CommandTask:
     """A single shell command to execute in the Docker sandbox."""
     command: str
     rationale: str
-    timeout: int = 300
+    timeout: int = 600
     task_id: str = field(default_factory=lambda: uuid4().hex[:12])
 
 
@@ -42,7 +42,7 @@ class CommandResult:
     exit_code: int
     duration_seconds: float
     timed_out: bool = False
-    timeout_limit: int = 300
+    timeout_limit: int = 600
 
     def to_prompt_text(self) -> str:
         """Format for inclusion in the next LLM iteration as context."""
@@ -94,45 +94,86 @@ async def execute_command(
 
     Uses the existing DockerExecutor infrastructure, caching the executor
     to avoid re-running image availability checks for every task.
+
+    On timeout, captures and returns whatever partial stdout/stderr the
+    process produced before being killed — this is critical for long-running
+    tools like nmap, nuclei, and sqlmap that emit results incrementally.
     """
     t0 = time.monotonic()
 
     try:
         executor = await _get_cached_executor()
 
+        # We need direct subprocess control to capture partial output on
+        # timeout.  Replicate the executor's docker command construction
+        # but manage the process lifecycle ourselves.
+        import os
+        work_dir = os.getcwd()
+        docker_cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{work_dir}:/workspace",
+            "-w", "/workspace",
+            executor.image,
+            "bash", "-c", task.command,
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *docker_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
         try:
-            result = await asyncio.wait_for(
-                executor.run_command(["bash", "-c", task.command]),
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(),
                 timeout=task.timeout,
             )
-        except asyncio.TimeoutError:
             elapsed = time.monotonic() - t0
-            logger.warning(
-                f"⏱️  Command timed out after {elapsed:.1f}s: {task.command[:80]}"
-            )
             return CommandResult(
                 task_id=task.task_id,
                 command=task.command,
                 rationale=task.rationale,
-                stdout="",
-                stderr="Command timed out",
+                stdout=(stdout_bytes or b"").decode(errors="replace").strip(),
+                stderr=(stderr_bytes or b"").decode(errors="replace").strip(),
+                exit_code=process.returncode or 0,
+                duration_seconds=round(elapsed, 2),
+                timeout_limit=task.timeout,
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            # Kill the process but harvest whatever output was buffered
+            partial_stdout = ""
+            partial_stderr = ""
+            try:
+                process.kill()
+                # After kill, communicate() returns remaining buffered data
+                remaining_stdout, remaining_stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=5,
+                )
+                partial_stdout = (remaining_stdout or b"").decode(errors="replace").strip()
+                partial_stderr = (remaining_stderr or b"").decode(errors="replace").strip()
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
+            elapsed = time.monotonic() - t0
+            logger.warning(
+                f"⏱️  Command timed out after {elapsed:.1f}s (captured {len(partial_stdout)} chars): "
+                f"{task.command[:80]}"
+            )
+            timeout_note = f"[TIMED OUT after {int(elapsed)}s — partial output below]\n"
+            return CommandResult(
+                task_id=task.task_id,
+                command=task.command,
+                rationale=task.rationale,
+                stdout=timeout_note + partial_stdout if partial_stdout else "",
+                stderr=partial_stderr or "Command timed out",
                 exit_code=-1,
                 duration_seconds=round(elapsed, 2),
                 timed_out=True,
                 timeout_limit=task.timeout,
             )
-
-        elapsed = time.monotonic() - t0
-        return CommandResult(
-            task_id=task.task_id,
-            command=task.command,
-            rationale=task.rationale,
-            stdout=getattr(result, "stdout", "") or "",
-            stderr=getattr(result, "stderr", "") or "",
-            exit_code=getattr(result, "exit_code", -1),
-            duration_seconds=round(elapsed, 2),
-            timeout_limit=task.timeout,
-        )
 
     except Exception as exc:
         logger.warning(f"Command execution failed: {exc} — {task.command[:80]}")

@@ -665,7 +665,7 @@ class ManagerAgent:
                     CommandTask(
                         command=action.command.strip(),
                         rationale=action.rationale or "Action-driven launch",
-                        timeout=max(1, int(action.timeout or 300)),
+                        timeout=max(1, int(action.timeout or 600)),
                     )
                 )
             elif action.type == ActionType.CANCEL and action.task_id.strip():
@@ -1003,7 +1003,12 @@ class ManagerAgent:
             "- Never repeat a command with identical arguments.",
             "- Prefer `actions[]` over `commands[]` for event-driven orchestration.",
             "- If a task is clearly low-value and better leads exist, emit a `cancel` action.",
-            "- Timed-out commands: retry once with reduced scope. If it times out again, record a dead_end note.",
+            "- Timed-out commands: partial output is preserved — review it before retrying.",
+            "  Retry once with reduced scope or higher timeout. If it times out again, record a dead_end note.",
+            "  Set timeout values appropriate to the tool:",
+            "    Quick tools (curl, httpx, whatweb, wafw00f): 60-120s",
+            "    Medium tools (subfinder, katana, ffuf, gau, waybackurls, nmap targeted): 300-600s",
+            "    Heavy tools (nmap -p-, nuclei full scan, sqlmap, commix, hydra): 900-1800s",
             "- Failed commands (non-zero exit, NOT timeout): diagnose the error message, fix the syntax/flags, and retry.",
             "  Do NOT ignore failed commands — they often indicate a misconfigured flag or quoting issue.",
             "- Phase order: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING.",
