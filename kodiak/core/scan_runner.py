@@ -135,28 +135,47 @@ class ScanRunner:
                     f"Tool preflight: {len(allowed_tools)} enabled, {len(missing_tools)} disabled"
                 )
 
-                # 3. Create and run Manager
-                manager = ManagerAgent(
-                    event_manager=self.event_manager,
-                    tool_inventory=tool_inventory,
-                )
+                # 3. Create and run Manager (or Multi-Agent Pipeline)
+                if settings.multi_agent:
+                    from kodiak.core.multi_agent_orchestrator import MultiAgentOrchestrator
 
-                scheduler_mode = settings.event_scheduler_enabled if event_scheduler is None else bool(event_scheduler)
-                logger.info(
-                    f"Starting Manager with {max_iterations} max iterations "
-                    f"(event_scheduler={'on' if scheduler_mode else 'off'})"
-                )
+                    orchestrator = MultiAgentOrchestrator(
+                        event_manager=self.event_manager,
+                        num_workers=settings.multi_agent_workers,
+                        max_scan_duration=float(settings.multi_agent_max_duration),
+                    )
+                    logger.info(
+                        f"Starting Multi-Agent Pipeline with "
+                        f"{settings.multi_agent_workers} workers"
+                    )
+                    manager_result = await orchestrator.run(
+                        target=target,
+                        instructions=instructions,
+                        project_id=project.id,
+                        scan_id=scan_job.id,
+                    )
+                else:
+                    manager = ManagerAgent(
+                        event_manager=self.event_manager,
+                        tool_inventory=tool_inventory,
+                    )
 
-                manager_result = await manager.run(
-                    target=target,
-                    instructions=instructions,
-                    session=session,
-                    project_id=project.id,
-                    scan_id=scan_job.id,
-                    max_iterations=max_iterations,
-                    allowed_tools=allowed_tools,
-                    event_scheduler=event_scheduler,
-                )
+                    scheduler_mode = settings.event_scheduler_enabled if event_scheduler is None else bool(event_scheduler)
+                    logger.info(
+                        f"Starting Manager with {max_iterations} max iterations "
+                        f"(event_scheduler={'on' if scheduler_mode else 'off'})"
+                    )
+
+                    manager_result = await manager.run(
+                        target=target,
+                        instructions=instructions,
+                        session=session,
+                        project_id=project.id,
+                        scan_id=scan_job.id,
+                        max_iterations=max_iterations,
+                        allowed_tools=allowed_tools,
+                        event_scheduler=event_scheduler,
+                    )
                 
                 # 4. Finalize
                 final_status = (

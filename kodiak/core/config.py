@@ -59,6 +59,11 @@ class KodiakSettings(BaseSettings):
     gemini_thinking_level: str = Field(default="high", alias="KODIAK_GEMINI_THINKING_LEVEL")
     max_tools_in_prompt: int = Field(default=16, alias="KODIAK_MAX_TOOLS_IN_PROMPT")
 
+    # Multi-agent pipeline
+    multi_agent: bool = Field(default=False, alias="KODIAK_MULTI_AGENT")
+    multi_agent_workers: int = Field(default=4, alias="KODIAK_MULTI_AGENT_WORKERS")
+    multi_agent_max_duration: int = Field(default=3600, alias="KODIAK_MULTI_AGENT_MAX_DURATION")
+
     # Security/runtime
     enable_safety_checks: bool = Field(default=True, alias="KODIAK_ENABLE_SAFETY")
     max_concurrent_agents: int = Field(default=5, alias="KODIAK_MAX_AGENTS")

@@ -42,6 +42,24 @@ class VerificationQueueStatus(StrEnum):
     IGNORED = "ignored"
 
 
+class WorkUnitStatus(StrEnum):
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class DirectiveType(StrEnum):
+    RATE_LIMIT = "rate_limit"
+    SKIP_TARGET = "skip_target"
+    PRIORITIZE_TARGET = "prioritize_target"
+    ATTACK_HINT = "attack_hint"
+    ESCALATE = "escalate"
+    PHASE_ADVANCE = "phase_advance"
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
@@ -217,3 +235,45 @@ class EngagementNote(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
     project: Project = Relationship(back_populates="notes")
+
+
+class WorkUnit(SQLModel, table=True):
+    """A discrete unit of work for the multi-agent pipeline."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    scan_id: UUID = Field(foreign_key="scanjob.id", index=True)
+    project_id: UUID = Field(foreign_key="project.id")
+
+    technique: str = Field(index=True)  # e.g. "nuclei_drupal", "ffuf_dirbrute"
+    targets_json: str  # JSON array of target hostnames/URLs
+    targets_hash: str = Field(index=True)  # SHA256 of sorted targets for dedup
+    context: str = ""  # Extra context for the worker (e.g. "Laravel detected")
+    command_template: str = ""  # Shell command template with {target} placeholder
+    priority: int = Field(default=50)  # 0=highest, 100=lowest
+    phase: str = Field(default="recon")  # recon, enumeration, vuln_scan, exploitation
+
+    status: WorkUnitStatus = Field(default=WorkUnitStatus.PENDING, index=True)
+    claimed_by: Optional[str] = None  # Worker ID that claimed this unit
+    result_stdout: Optional[str] = None  # Raw stdout from execution
+    result_stderr: Optional[str] = None  # Raw stderr from execution
+    exit_code: Optional[int] = None
+    analyzed: bool = Field(default=False, index=True)  # Has the Analyst reviewed this?
+
+    created_at: datetime = Field(default_factory=utc_now)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    __table_args__ = (
+        UniqueConstraint("scan_id", "technique", "targets_hash", name="uq_work_unit_dedup"),
+    )
+
+
+class Directive(SQLModel, table=True):
+    """Analyst-to-Planner communication: strategic instructions."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    scan_id: UUID = Field(foreign_key="scanjob.id", index=True)
+
+    type: DirectiveType = Field(index=True)
+    content: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    consumed: bool = Field(default=False, index=True)
+
+    created_at: datetime = Field(default_factory=utc_now)
