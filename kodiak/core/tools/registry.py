@@ -35,9 +35,12 @@ class ToolEntry:
     description: str      # Short description used in AVAILABLE_TOOLS & brief prompt entries
     prompt_usage: str = ""  # Example command(s) for the <tool_catalog>; CORE only
     prompt_category: str = ""  # Section header in <tool_catalog>; CORE only
+    gated: bool | None = None  # Override gating. None = derive from tier (CORE=gated). Set False for CORE tools without a KodiakTool class.
 
     @property
     def is_gated(self) -> bool:
+        if self.gated is not None:
+            return self.gated
         return self.tier == ToolTier.CORE
 
     @property
@@ -65,6 +68,7 @@ TOOL_REGISTRY: List[ToolEntry] = [
         name="gau",
         binary="gau",
         tier=ToolTier.CORE,
+        gated=False,  # No KodiakTool class — executed as shell command
         description="GetAllUrls — fetch known URLs from AlienVault, Wayback, Common Crawl",
         prompt_usage=(
             "`gau <domain> --subs` — Passive URL harvesting from public archives. "
@@ -76,6 +80,7 @@ TOOL_REGISTRY: List[ToolEntry] = [
         name="waybackurls",
         binary="waybackurls",
         tier=ToolTier.CORE,
+        gated=False,  # No KodiakTool class — executed as shell command
         description="Fetch URLs from the Wayback Machine for a domain",
         prompt_usage=(
             "`echo <domain> | waybackurls` — Fetch historical URLs from the Wayback Machine. "
