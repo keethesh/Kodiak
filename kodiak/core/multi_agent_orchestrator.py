@@ -210,7 +210,6 @@ class MultiAgentOrchestrator:
 
         analyst = AnalystAgent(
             store=store,
-            target=target,
             event_manager=self.event_manager,
         )
 
