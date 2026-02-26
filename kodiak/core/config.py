@@ -60,7 +60,7 @@ class KodiakSettings(BaseSettings):
     max_tools_in_prompt: int = Field(default=16, alias="KODIAK_MAX_TOOLS_IN_PROMPT")
 
     # Multi-agent pipeline
-    multi_agent: bool = Field(default=False, alias="KODIAK_MULTI_AGENT")
+    multi_agent: bool = Field(default=True, alias="KODIAK_MULTI_AGENT")
     multi_agent_workers: int = Field(default=4, alias="KODIAK_MULTI_AGENT_WORKERS")
     multi_agent_max_duration: int = Field(default=3600, alias="KODIAK_MULTI_AGENT_MAX_DURATION")
 

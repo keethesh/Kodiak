@@ -133,23 +133,7 @@ async def _worker_loop(
                 status=status,
             )
 
-        # Emit tool completion event
-        if event_manager:
-            try:
-                await event_manager.emit_tool_complete(
-                    scan_id=scan_id_str,
-                    tool_name=tool_name,
-                    agent_id=worker_id,
-                    target=command[:80],
-                    result={
-                        "exit_code": result.exit_code,
-                        "duration": result.duration_seconds,
-                        "timed_out": result.timed_out,
-                        "stdout_len": len(result.stdout),
-                    },
-                )
-            except Exception:
-                pass
+        # Note: emit_tool_complete expects a different result shape; skip it here.
 
     return stats
 
