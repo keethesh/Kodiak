@@ -198,6 +198,9 @@ class MultiAgentOrchestrator:
         start = time.monotonic()
         scan_id_str = str(scan_id)
 
+        from kodiak.database.engine import init_db
+        await init_db()
+
         # 1. Create shared store
         store = SharedScanStore(project_id=project_id, scan_id=scan_id)
 
@@ -337,12 +340,12 @@ class MultiAgentOrchestrator:
         analyst_output = analyst_result.output_tokens if analyst_result else 0
         analyst_thinking = analyst_result.thinking_tokens if analyst_result else 0
 
-        from kodiak.services.llm import estimate_cost
-        total_cost = estimate_cost(
+        from kodiak.services.llm import calculate_cost
+        total_cost = calculate_cost(
             model="gemini/gemini-3-flash-preview",
             input_tokens=planner_input,
             output_tokens=planner_output,
-        ) + estimate_cost(
+        ) + calculate_cost(
             model="gemini/gemini-3.1-pro-preview",
             input_tokens=analyst_input,
             output_tokens=analyst_output,
