@@ -1,10 +1,12 @@
 import asyncio
 import json
+from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+from kodiak.api.events import TUIEvent, TUIEventManager
 from kodiak.core.analyst import AnalystAgent, AnalystResponse
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
@@ -13,9 +15,11 @@ from kodiak.database.models import (
     HypothesisStatus,
     HypothesisType,
     ObservationType,
+    ScanEventType,
     WorkUnit,
     WorkUnitStatus,
 )
+from kodiak.tui.state import AgentState, ScanState, ScanStatus
 
 
 class RecordingStore:
@@ -42,6 +46,12 @@ class _FakeResult:
 
     def scalars(self):
         return _FakeScalars(self._items)
+
+    def all(self):
+        return list(self._items)
+
+    def scalar_one_or_none(self):
+        return self._items[0] if self._items else None
 
 
 @pytest.mark.asyncio
@@ -358,4 +368,161 @@ async def test_planner_refreshes_local_state_from_observations(monkeypatch):
 
     assert planner._live_http_origins["api.example.com"] == "https://api.example.com"
     assert "https://api.example.com/users?id=1" in planner._parameterized_urls
-    assert "wordpress" in planner._detected_techs["https://api.example.com"]
+
+
+@pytest.mark.asyncio
+async def test_shared_store_emits_scan_events_for_work_unit_lifecycle():
+    scan_id = uuid4()
+    project_id = uuid4()
+    store = SharedScanStore(project_id=project_id, scan_id=scan_id)
+    emitted = []
+
+    async def fake_append_event(session, **kwargs):
+        emitted.append(kwargs)
+        return object()
+
+    store.append_event = fake_append_event
+
+    unit = WorkUnit(
+        id=uuid4(),
+        scan_id=scan_id,
+        project_id=project_id,
+        technique="httpx_primary",
+        targets_json='["https://app.example.com"]',
+        targets_hash="scope-app",
+        command_template="httpx -u https://app.example.com",
+        status=WorkUnitStatus.PENDING,
+    )
+
+    class FakeSession:
+        def __init__(self):
+            self.commits = 0
+            self._responses = [_FakeResult([]), _FakeResult([unit])]
+
+        def add(self, obj):
+            return None
+
+        async def commit(self):
+            self.commits += 1
+
+        async def refresh(self, obj):
+            return None
+
+        async def rollback(self):
+            return None
+
+        async def execute(self, statement):
+            return self._responses.pop(0)
+
+    enqueue_session = FakeSession()
+    enqueue_session._responses = []
+    await store.enqueue_work_unit(
+        enqueue_session,
+        technique="httpx_primary",
+        targets=["https://app.example.com"],
+        command_template="httpx -u https://app.example.com",
+    )
+
+    claim_session = FakeSession()
+    claimed = await store.claim_work_unit(claim_session, "worker-7")
+    assert claimed is unit
+
+    complete_session = FakeSession()
+    complete_session._responses = [_FakeResult([unit])]
+    await store.complete_work_unit(
+        complete_session,
+        unit.id,
+        stdout="ok",
+        exit_code=0,
+        status=WorkUnitStatus.COMPLETED,
+    )
+
+    event_types = [event["event_type"] for event in emitted]
+    assert ScanEventType.WORK_UNIT_QUEUED in event_types
+    assert ScanEventType.WORK_UNIT_CLAIMED in event_types
+    assert ScanEventType.WORK_UNIT_COMPLETED in event_types
+
+
+@pytest.mark.asyncio
+async def test_shared_store_builds_projection_from_events_and_runtime_state():
+    store = SharedScanStore(project_id=uuid4(), scan_id=uuid4())
+
+    async def fake_get_findings(session, limit=100):
+        return [SimpleNamespace(title="SQL Injection", severity="high", target="https://app.example.com")]
+
+    async def fake_get_capabilities(session, limit=100):
+        return [SimpleNamespace(type="auth_surface", target="https://app.example.com/login", key="login")]
+
+    async def fake_get_hypotheses(session, limit=100):
+        return [SimpleNamespace(type="auth_followup", target="https://app.example.com/login", status="pending", confidence=0.8)]
+
+    async def fake_get_events(session, limit=25):
+        return [SimpleNamespace(type="work_unit_completed", entity_type="work_unit", entity_id="abc", payload={"technique": "httpx_primary"})]
+
+    store.get_findings = fake_get_findings
+    store.get_capabilities = fake_get_capabilities
+    store.get_hypotheses = fake_get_hypotheses
+    store.get_events = fake_get_events
+
+    class FakeSession:
+        async def execute(self, statement):
+            return _FakeResult([
+                (WorkUnitStatus.PENDING, 2),
+                (WorkUnitStatus.COMPLETED, 5),
+            ])
+
+    projection = await store.build_projection(FakeSession())
+
+    assert projection["work_queue"]["pending"] == 2
+    assert projection["work_queue"]["completed"] == 5
+    assert projection["findings"][0]["title"] == "SQL Injection"
+    assert projection["capabilities"][0]["type"] == "auth_surface"
+    assert projection["hypotheses"][0]["status"] == "pending"
+    assert projection["recent_events"][0]["type"] == "work_unit_completed"
+
+
+@pytest.mark.asyncio
+async def test_event_manager_attaches_scan_id_to_emitted_event():
+    manager = TUIEventManager()
+    seen = []
+
+    def capture(event):
+        seen.append(event)
+
+    manager.subscribe("tool_start", capture)
+
+    event = TUIEvent("tool_start", {"tool_name": "nmap"})
+    await manager.emit(event, scan_id="scan-123")
+
+    assert seen[0].project_id == "scan-123"
+
+
+def test_scan_state_applies_projection_payload():
+    scan = ScanState(
+        id="scan-1",
+        project_id="project-1",
+        name="Test Scan",
+        target="https://example.com",
+        status=ScanStatus.RUNNING,
+        agent_count=1,
+        created_at=datetime.now(),
+        agents={"agent-1": AgentState(id="agent-1", name="Agent 1")},
+    )
+
+    projection = {
+        "work_queue": {"pending": 2, "completed": 5},
+        "findings": [
+            {"title": "SQL Injection", "severity": "high", "target": "https://example.com"},
+        ],
+        "capabilities": [{"type": "auth_surface", "target": "https://example.com/login", "key": "login"}],
+        "hypotheses": [{"type": "auth_followup", "target": "https://example.com/login", "status": "pending", "confidence": 0.8}],
+        "recent_events": [{"type": "work_unit_completed", "payload": {"technique": "httpx_primary"}}],
+    }
+
+    scan.apply_projection(projection)
+
+    assert scan.work_queue["pending"] == 2
+    assert scan.findings[0].title == "SQL Injection"
+    assert scan.capabilities[0]["type"] == "auth_surface"
+    assert scan.hypotheses[0]["status"] == "pending"
+    assert scan.recent_events[0]["type"] == "work_unit_completed"

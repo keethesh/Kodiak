@@ -4,25 +4,28 @@ from kodiak.core.tools.base import KodiakTool
 
 
 class ToolInventory:
+    _tools: Dict[str, KodiakTool] = {}
+
     def __init__(self):
         """Initialize ToolInventory"""
-        self._tools: Dict[str, KodiakTool] = {}
+        self._tools = type(self)._tools
 
     def register(self, tool: KodiakTool):
         """Register a tool with the inventory"""
-        self._tools[tool.name] = tool
+        type(self)._tools[tool.name] = tool
+        self._tools = type(self)._tools
 
     def get(self, name: str) -> Optional[KodiakTool]:
         """Get a tool by name"""
-        return self._tools.get(name)
+        return type(self)._tools.get(name)
 
     def list_tools(self) -> Dict[str, str]:
         """List all registered tools"""
-        return {name: tool.description for name, tool in self._tools.items()}
+        return {name: tool.description for name, tool in type(self)._tools.items()}
 
     def get_all_tools(self) -> Dict[str, KodiakTool]:
         """Get all registered tool instances"""
-        return self._tools.copy()
+        return type(self)._tools.copy()
 
     def initialize_tools(self):
         """Initialize and register all available tools"""
@@ -43,6 +46,9 @@ class ToolInventory:
         )
         from kodiak.core.tools.definitions.python_runtime import (
             PythonStartTool, PythonExecuteTool, PythonHistoryTool, PythonStopTool,
+        )
+        from kodiak.core.tools.definitions.engagement_memory import (
+            SaveFindingTool, SaveNoteTool,
         )
         from kodiak.core.tools.definitions.complete_scan import CompleteScanTool
 
@@ -83,6 +89,10 @@ class ToolInventory:
         self.register(PythonExecuteTool())
         self.register(PythonHistoryTool())
         self.register(PythonStopTool())
+
+        # Engagement memory
+        self.register(SaveNoteTool())
+        self.register(SaveFindingTool())
 
         # Scan control
         self.register(CompleteScanTool())

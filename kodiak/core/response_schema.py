@@ -16,9 +16,9 @@ Use typed list-of-objects instead of maps.
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +76,8 @@ class Command(BaseModel):
         )
     )
     timeout: int = Field(
-        default=600,
-        description="Max seconds before the command is killed (default 600)",
+        default=300,
+        description="Max seconds before the command is killed (default 300)",
     )
 
 
@@ -187,6 +187,26 @@ class Discovery(BaseModel):
         default_factory=list,
         description="Interesting URLs discovered (login pages, admin panels, API endpoints)",
     )
+
+    @field_validator("ports", mode="before")
+    @classmethod
+    def _coerce_ports(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return [
+                {"host": host, "ports": ports}
+                for host, ports in value.items()
+            ]
+        return value
+
+    @field_validator("technologies", mode="before")
+    @classmethod
+    def _coerce_technologies(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return [
+                {"host": host, "technologies": technologies}
+                for host, technologies in value.items()
+            ]
+        return value
 
 
 # ---------------------------------------------------------------------------

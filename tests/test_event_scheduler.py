@@ -93,13 +93,13 @@ def test_manager_extract_runtime_actions_supports_actions_and_filters_tools():
         phase_action=PhaseAction.CONTINUE,
     )
 
-    tasks, cancel_ids, phase_action = manager._extract_runtime_actions(
+    write_tasks, tasks, cancel_ids, phase_action = manager._extract_runtime_actions(
         kodiak_resp=resp,
         allowed_tools=["nmap"],
     )
 
+    assert write_tasks == []
     assert len(tasks) == 1
     assert tasks[0].command.startswith("nmap")
     assert cancel_ids == ["abc123"]
     assert phase_action == PhaseAction.COMPLETE
-

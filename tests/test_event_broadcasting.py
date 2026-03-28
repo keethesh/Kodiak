@@ -17,16 +17,16 @@ class TestEventBroadcastingProperties:
 
     def create_test_fixtures(self):
         """Create test fixtures for each test run."""
-        # Create event manager (no arguments needed)
-        event_manager = TUIEventManager()
-        
-        # Mock TUI bridge for verification (not used currently, but kept for reference)
+        # Mock TUI bridge for verification.
         mock_tui_bridge = MagicMock()
         mock_tui_bridge.send_tool_update = AsyncMock()
         mock_tui_bridge.send_agent_update = AsyncMock()
         mock_tui_bridge.send_finding_update = AsyncMock()
         mock_tui_bridge.broadcast = AsyncMock()
         mock_tui_bridge.broadcast_global = AsyncMock()
+
+        # Create event manager wired to the compatibility bridge.
+        event_manager = TUIEventManager(mock_tui_bridge)
         
         # Sample tool result class
         
@@ -222,5 +222,5 @@ class TestEventBroadcastingProperties:
         # Verify all events were broadcast (2 events per tool = 6 total)
         assert mock_tui_bridge.send_tool_update.call_count == 6
         
-        # Verify all agent updates were sent (1 per tool = 3 total)
-        assert mock_tui_bridge.send_agent_update.call_count == 3
+        # Direct tool start/complete events should not emit separate agent-thinking updates.
+        mock_tui_bridge.send_agent_update.assert_not_called()

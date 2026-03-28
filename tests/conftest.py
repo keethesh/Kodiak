@@ -1,9 +1,6 @@
 """Pytest configuration and shared fixtures for Kodiak tests."""
 
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
-from typing import Dict, Any
 
 from kodiak.api.events import TUIEventManager
 
@@ -25,11 +22,3 @@ def sample_tool_result():
             self.data = data or {}
     
     return MockToolResult
-
-
-@pytest.fixture
-def event_loop():
-    """Create an event loop for async tests."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()

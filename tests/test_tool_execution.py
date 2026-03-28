@@ -178,7 +178,14 @@ class TestToolExecutionProperties:
         assert result.success == True
         assert result.output == "dict result"
         # The data should contain the converted dict result
-        assert result.data == {"output": "dict result", "data": {'target': 'test.com'}}
+        assert result.data == {
+            "output": "dict result",
+            "data": {
+                "target": "test.com",
+                "agent_id": "agent_003",
+                "scan_id": "scan_456",
+            },
+        }
         assert result.error is None
 
     @pytest.mark.asyncio
@@ -207,7 +214,7 @@ class TestToolExecutionProperties:
         # Verify error result structure
         assert isinstance(result, ToolResult)
         assert result.success == False
-        assert "Mock tool failure" in result.output  # Error message should be in output
+        assert result.output == ""
         assert result.error == "Mock tool failure"
         
         # Verify error events were emitted

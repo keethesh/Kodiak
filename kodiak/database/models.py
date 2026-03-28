@@ -93,6 +93,21 @@ class HypothesisStatus(StrEnum):
     DISMISSED = "dismissed"
 
 
+class ScanEventType(StrEnum):
+    WORK_UNIT_QUEUED = "work_unit_queued"
+    WORK_UNIT_CLAIMED = "work_unit_claimed"
+    WORK_UNIT_COMPLETED = "work_unit_completed"
+    WORK_UNIT_FAILED = "work_unit_failed"
+    DIRECTIVE_ADDED = "directive_added"
+    OBSERVATION_ADDED = "observation_added"
+    CAPABILITY_ADDED = "capability_added"
+    HYPOTHESIS_ADDED = "hypothesis_added"
+    HYPOTHESIS_UPDATED = "hypothesis_updated"
+    FINDING_ADDED = "finding_added"
+    NOTE_ADDED = "note_added"
+    ATTEMPT_RECORDED = "attempt_recorded"
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
@@ -369,3 +384,17 @@ class Hypothesis(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("scan_id", "type", "target", "key", name="uq_hypothesis_dedup"),
     )
+
+
+class ScanEvent(SQLModel, table=True):
+    """Append-only event log for scan execution and reasoning state."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    scan_id: UUID = Field(foreign_key="scanjob.id", index=True)
+    project_id: UUID = Field(foreign_key="project.id")
+
+    type: ScanEventType = Field(index=True)
+    payload: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    entity_type: Optional[str] = Field(default=None, index=True)
+    entity_id: Optional[str] = Field(default=None, index=True)
+
+    created_at: datetime = Field(default_factory=utc_now, index=True)

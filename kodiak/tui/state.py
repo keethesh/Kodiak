@@ -84,6 +84,11 @@ class ScanState:
     agents: Dict[str, AgentState] = field(default_factory=dict)
     findings: List[Finding] = field(default_factory=list)
     nodes: List[Node] = field(default_factory=list)
+    work_queue: Dict[str, int] = field(default_factory=dict)
+    capabilities: List[Dict[str, Any]] = field(default_factory=list)
+    hypotheses: List[Dict[str, Any]] = field(default_factory=list)
+    recent_events: List[Dict[str, Any]] = field(default_factory=list)
+    projection: Dict[str, Any] = field(default_factory=dict)
     
     def get_agent_by_id(self, agent_id: str) -> Optional[AgentState]:
         """Get agent by ID"""
@@ -105,6 +110,25 @@ class ScanState:
     def add_node(self, node: Node):
         """Add a node to the scan"""
         self.nodes.append(node)
+
+    def apply_projection(self, projection: Dict[str, Any]):
+        """Update scan state from the canonical projection payload."""
+        self.projection = dict(projection or {})
+        self.work_queue = dict(self.projection.get("work_queue", {}))
+        self.capabilities = list(self.projection.get("capabilities", []))
+        self.hypotheses = list(self.projection.get("hypotheses", []))
+        self.recent_events = list(self.projection.get("recent_events", []))
+
+        projected_findings = self.projection.get("findings", [])
+        self.findings = [
+            Finding(
+                title=finding.get("title", "Untitled Finding"),
+                description=finding.get("description", ""),
+                severity=finding.get("severity", "info"),
+                target=finding.get("target"),
+            )
+            for finding in projected_findings
+        ]
 
 
 class StateChangeEvent:
@@ -269,6 +293,17 @@ class AppState:
                 "old_status": old_status,
                 "new_status": status,
                 "scan_state": scan_state
+            })
+
+    def update_scan_projection(self, scan_id: str, projection: Dict[str, Any]):
+        """Apply a canonical scan projection to an existing scan."""
+        if scan_id in self.scans:
+            scan_state = self.scans[scan_id]
+            scan_state.apply_projection(projection)
+            self.emit("scan_projection_updated", {
+                "scan_id": scan_id,
+                "projection": projection,
+                "scan_state": scan_state,
             })
     
     def get_scan(self, scan_id: str) -> Optional[ScanState]:

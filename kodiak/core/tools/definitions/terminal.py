@@ -412,13 +412,16 @@ class TerminalExecuteTool(KodiakTool):
                 # Shell command
                 full_command = [session.shell_type, "-c", command]
             
+            run_kwargs = {
+                "cwd": session.working_directory,
+                "env": session.environment,
+            }
+            cap_add = self._caps_for_command(command)
+            if cap_add:
+                run_kwargs["cap_add"] = cap_add
+
             result = await asyncio.wait_for(
-                executor.run_command(
-                    full_command,
-                    cwd=session.working_directory,
-                    env=session.environment,
-                    cap_add=self._caps_for_command(command),
-                ),
+                executor.run_command(full_command, **run_kwargs),
                 timeout=timeout
             )
             

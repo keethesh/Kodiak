@@ -324,7 +324,7 @@ class TestDatabaseModelConsistencyProperties:
         assert error_session.rolled_back == True
         
         # Test error handling in get operation
-        with pytest.raises(RuntimeError, match="Failed to get node"):
+        with pytest.raises(DatabaseError, match="Query execution failed"):
             await node.get(error_session, test_nodes[0].id)
 
     @pytest.mark.asyncio

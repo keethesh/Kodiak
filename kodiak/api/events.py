@@ -40,10 +40,48 @@ class TUIEventManager:
     Event manager for TUI interface.
     Manages event broadcasting to TUI components.
     """
-    def __init__(self):
+    def __init__(self, tui_bridge: Any = None):
         self.event_handlers: Dict[str, List[Callable]] = {}
         self.scan_handlers: Dict[str, List[Callable]] = {}
+        self.tui_bridge = tui_bridge
         logger.info("TUIEventManager initialized")
+
+    async def _send_bridge_tool_update(
+        self,
+        scan_id: str | None,
+        tool_name: str,
+        status: str,
+        data: Dict[str, Any] | None = None,
+    ) -> None:
+        if not scan_id or not self.tui_bridge or not hasattr(self.tui_bridge, "send_tool_update"):
+            return
+        await self.tui_bridge.send_tool_update(
+            scan_id=scan_id,
+            tool_name=tool_name,
+            status=status,
+            data=data or {},
+        )
+
+    async def _send_bridge_agent_update(
+        self,
+        scan_id: str | None,
+        agent_id: str,
+        message: str,
+        data: Dict[str, Any] | None = None,
+    ) -> None:
+        if not scan_id or not self.tui_bridge or not hasattr(self.tui_bridge, "send_agent_update"):
+            return
+        await self.tui_bridge.send_agent_update(
+            scan_id=scan_id,
+            agent_id=agent_id,
+            message=message,
+            data=data or {},
+        )
+
+    async def _send_bridge_finding_update(self, scan_id: str | None, finding: Dict[str, Any]) -> None:
+        if not scan_id or not self.tui_bridge or not hasattr(self.tui_bridge, "send_finding_update"):
+            return
+        await self.tui_bridge.send_finding_update(scan_id=scan_id, finding=finding)
     
     def subscribe(self, event_type: str, handler: Callable):
         """Subscribe to global events"""
@@ -72,6 +110,9 @@ class TUIEventManager:
     async def emit(self, event: TUIEvent, scan_id: str = None):
         """Emit an event to subscribers"""
         try:
+            if scan_id and event.project_id is None:
+                event.project_id = scan_id
+
             # Emit to global handlers
             if event.type in self.event_handlers:
                 for handler in self.event_handlers[event.type]:
@@ -110,6 +151,12 @@ class TUIEventManager:
                 "status": "started"
             })
             
+            await self._send_bridge_tool_update(
+                scan_id,
+                tool_name,
+                "started",
+                {"target": target, "agent_id": agent_id},
+            )
             await self.emit(event, scan_id)
                 
         except Exception as e:
@@ -170,6 +217,17 @@ class TUIEventManager:
                 "data": result.data if hasattr(result, 'data') else None
             })
             
+            await self._send_bridge_tool_update(
+                scan_id,
+                tool_name,
+                status,
+                {
+                    "success": getattr(result, "success", None),
+                    "output": getattr(result, "output", None),
+                    "error": getattr(result, "error", None),
+                    "data": getattr(result, "data", None),
+                },
+            )
             await self.emit(event, scan_id)
                 
         except Exception as e:
@@ -196,6 +254,12 @@ class TUIEventManager:
                 "status": "thinking"
             })
             
+            await self._send_bridge_agent_update(
+                scan_id,
+                agent_id,
+                message,
+                {"status": "thinking"},
+            )
             await self.emit(event, scan_id)
                 
         except Exception as e:
@@ -342,6 +406,7 @@ class TUIEventManager:
                 }
             })
             
+            await self._send_bridge_finding_update(scan_id, finding)
             await self.emit(event, scan_id)
             
         except Exception as e:
@@ -371,6 +436,20 @@ class TUIEventManager:
         except Exception as e:
             # Don't create recursive error handling for error events
             logger.error(f"Failed to emit error event: {e}")
+
+    @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
+    async def emit_discovery(self, discovery: Dict[str, Any], scan_id: str = None):
+        """Broadcast a discovery/finding payload."""
+        try:
+            await self._send_bridge_finding_update(scan_id, discovery)
+            event = TUIEvent("discovery", {"discovery": discovery})
+            await self.emit(event, scan_id)
+        except Exception as e:
+            raise EventBroadcastingError(
+                message="Failed to emit discovery event",
+                event_type="discovery",
+                details={"scan_id": scan_id, "original_error": str(e)},
+            )
 
     @handle_errors(ErrorCategory.EVENT_BROADCASTING, reraise=False)
     async def emit_note_saved(self, category: str, target: str, preview: str, scan_id: str = None):

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Type, Optional
 
@@ -17,9 +18,9 @@ class BaseTool(ABC):
     Base class for all Kodiak tools with EventManager integration.
     """
     
-    def __init__(self):
+    def __init__(self, event_manager: Any = None):
         """Initialize tool."""
-        pass
+        self.event_manager = event_manager
     
     @property
     @abstractmethod
@@ -60,21 +61,29 @@ class BaseTool(ABC):
         """
         # Extract context information
         target = kwargs.get('target', 'unknown')
+        agent_id = kwargs.get("agent_id", "unknown")
+        scan_id = kwargs.get("scan_id")
         
         try:
+            if self.event_manager:
+                await self._emit_agent_update(agent_id, "executing", scan_id)
+                await self._emit_tool_start(target, agent_id, scan_id)
+
             # Validate required parameters if args_schema is defined
             if self.args_schema:
                 try:
                     # Validate arguments against schema
                     validated_args = self.args_schema(**kwargs)
                     # Update kwargs with validated data
-                    kwargs.update(validated_args.dict())
+                    kwargs.update(validated_args.model_dump())
                 except Exception as validation_error:
-                    return ToolResult(
+                    result = ToolResult(
                         success=False,
-                        output=f"Parameter validation failed: {str(validation_error)}",
+                        output="",
                         error=f"Invalid parameters: {str(validation_error)}"
                     )
+                    await self._emit_tool_complete(result, scan_id)
+                    return result
             
             # Execute the actual tool logic with timeout
             try:
@@ -84,13 +93,15 @@ class BaseTool(ABC):
                 # Convert kwargs to args dict for tool execution.
                 # Keep full runtime context (agent_id/scan_id/project_id) for stateful tools.
                 args_dict = dict(kwargs)
-                result = await asyncio.wait_for(self._execute(args_dict), timeout=tool_timeout)
+                result = await asyncio.wait_for(self._invoke_execute(args_dict), timeout=tool_timeout)
             except asyncio.TimeoutError:
-                return ToolResult(
+                result = ToolResult(
                     success=False,
-                    output=f"Tool execution timed out after {tool_timeout} seconds",
+                    output="",
                     error="Tool execution timeout"
                 )
+                await self._emit_tool_complete(result, scan_id)
+                return result
             
             # Ensure we have a ToolResult
             if not isinstance(result, ToolResult):
@@ -116,14 +127,54 @@ class BaseTool(ABC):
                     error="Invalid ToolResult structure"
                 )
             
+            await self._emit_tool_complete(result, scan_id)
             return result
             
         except Exception as e:
-            return ToolResult(
+            result = ToolResult(
                 success=False, 
-                output=f"Tool execution failed: {str(e)}", 
+                output="",
                 error=str(e)
             )
+            await self._emit_tool_complete(result, scan_id)
+            return result
+
+    async def _invoke_execute(self, args_dict: Dict[str, Any]) -> Any:
+        """Invoke `_execute` while supporting both args-dict and kwargs legacy signatures."""
+        method = self._execute
+        signature = inspect.signature(method)
+        params = list(signature.parameters.values())
+
+        accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params)
+        if accepts_kwargs:
+            result = method(**args_dict)
+        else:
+            result = method(args_dict)
+
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    async def _emit_tool_start(self, target: str, agent_id: str, scan_id: Optional[str]) -> None:
+        if not self.event_manager:
+            return
+        emitter = getattr(self.event_manager, "emit_tool_start", None)
+        if emitter:
+            await emitter(self.name, target, agent_id, scan_id)
+
+    async def _emit_tool_complete(self, result: ToolResult, scan_id: Optional[str]) -> None:
+        if not self.event_manager:
+            return
+        emitter = getattr(self.event_manager, "emit_tool_complete", None)
+        if emitter:
+            await emitter(self.name, result, scan_id)
+
+    async def _emit_agent_update(self, agent_id: str, message: str, scan_id: Optional[str]) -> None:
+        if not self.event_manager:
+            return
+        emitter = getattr(self.event_manager, "emit_agent_thinking", None)
+        if emitter:
+            await emitter(agent_id, message, scan_id)
 
     @abstractmethod
     async def _execute(self, args: Dict[str, Any]) -> ToolResult:

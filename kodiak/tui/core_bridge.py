@@ -8,12 +8,14 @@ It handles database initialization, orchestrator integration, and event conversi
 import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+from uuid import UUID
 from loguru import logger
 
 from kodiak.database.engine import init_db, get_session
 from kodiak.database.crud import project as crud_project, scan_job as crud_scan
 from kodiak.database.models import Project, ScanJob, Finding, Node
 from kodiak.core.orchestrator import orchestrator
+from kodiak.core.shared_store import SharedScanStore
 from kodiak.core.config import settings
 from kodiak.core.error_handling import (
     ErrorHandler, DatabaseError, KodiakError, ErrorCategory, ErrorSeverity,
@@ -356,11 +358,12 @@ class CoreBridge:
             tool_name = data.get("tool_name")
             target = data.get("target")
             agent_id = data.get("agent_id")
-            scan_id = data.get("scan_id")
+            scan_id = data.get("scan_id") or event.project_id
             
             # Update state
             if scan_id and agent_id:
                 app_state.update_agent_status(scan_id, agent_id, AgentStatus.EXECUTING, f"Running {tool_name}")
+                await self._refresh_scan_projection(scan_id)
             
             # Send TUI message
             message = ToolStarted(
@@ -381,7 +384,7 @@ class CoreBridge:
             tool_name = data.get("tool_name")
             success = data.get("success", False)
             agent_id = data.get("agent_id")
-            scan_id = data.get("scan_id")
+            scan_id = data.get("scan_id") or event.project_id
             output = data.get("output")
             error = data.get("error")
             
@@ -389,6 +392,7 @@ class CoreBridge:
             if scan_id and agent_id:
                 status = AgentStatus.IDLE if success else AgentStatus.FAILED
                 app_state.update_agent_status(scan_id, agent_id, status)
+                await self._refresh_scan_projection(scan_id)
             
             # Send TUI message
             message = ToolCompleted(
@@ -410,7 +414,7 @@ class CoreBridge:
             data = event.data
             agent_id = data.get("agent_id")
             message_text = data.get("message")
-            scan_id = data.get("scan_id")
+            scan_id = data.get("scan_id") or event.project_id
             
             # Update state
             if scan_id and agent_id:
@@ -431,11 +435,12 @@ class CoreBridge:
         """Handle scan started event from core"""
         try:
             data = event.data
-            scan_id = data.get("scan_id")
+            scan_id = data.get("scan_id") or event.project_id
             
             # Update state
             if scan_id:
                 app_state.update_scan_status(scan_id, ScanStatus.RUNNING)
+                await self._refresh_scan_projection(scan_id)
             
             # Send TUI message
             message = ScanStatusChanged(
@@ -452,11 +457,12 @@ class CoreBridge:
         """Handle scan completed event from core"""
         try:
             data = event.data
-            scan_id = data.get("scan_id")
+            scan_id = data.get("scan_id") or event.project_id
             
             # Update state
             if scan_id:
                 app_state.update_scan_status(scan_id, ScanStatus.COMPLETED)
+                await self._refresh_scan_projection(scan_id)
             
             # Send TUI message
             message = ScanStatusChanged(
@@ -473,12 +479,13 @@ class CoreBridge:
         """Handle scan failed event from core"""
         try:
             data = event.data
-            scan_id = data.get("scan_id")
+            scan_id = data.get("scan_id") or event.project_id
             error = data.get("error")
             
             # Update state
             if scan_id:
                 app_state.update_scan_status(scan_id, ScanStatus.FAILED)
+                await self._refresh_scan_projection(scan_id)
             
             # Send TUI message
             message = ScanStatusChanged(
@@ -503,9 +510,12 @@ class CoreBridge:
         """Handle finding discovered event from core"""
         try:
             data = event.data
-            scan_id = data.get("scan_id")
+            scan_id = data.get("scan_id") or event.project_id
             finding_data = data.get("finding", {})
             agent_id = data.get("agent_id")
+
+            if scan_id:
+                await self._refresh_scan_projection(scan_id)
             
             # Send TUI message
             message = FindingCreated(
@@ -522,6 +532,31 @@ class CoreBridge:
             
         except Exception as e:
             logger.error(f"Error handling finding discovered event: {e}")
+
+    async def get_scan_projection(self, scan_id: str) -> Dict[str, Any]:
+        """Return the canonical projection for a scan from the shared store."""
+        try:
+            scan_uuid = UUID(scan_id)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Invalid scan_id: {scan_id}") from e
+
+        async for session in get_session():
+            scan = await crud_scan.get(session, scan_uuid)
+            if not scan:
+                raise ValueError(f"Unknown scan_id: {scan_id}")
+            store = SharedScanStore(project_id=scan.project_id, scan_id=scan.id)
+            return await store.build_projection(session)
+
+        return {}
+
+    async def _refresh_scan_projection(self, scan_id: str) -> None:
+        """Hydrate TUI state from the canonical scan projection."""
+        try:
+            projection = await self.get_scan_projection(scan_id)
+        except Exception as e:
+            logger.debug(f"Projection refresh skipped for {scan_id}: {e}")
+            return
+        app_state.update_scan_projection(scan_id, projection)
     
     async def _on_error(self, event):
         """Handle error event from core"""
