@@ -12,10 +12,9 @@ All three share state via SharedScanStore (DB-backed).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -32,6 +31,19 @@ from kodiak.database.engine import get_session
 from kodiak.database.models import WorkUnit, WorkUnitStatus
 
 
+_HEAVY_TOOLS = frozenset({
+    "nuclei", "ffuf", "katana", "gau", "sqlmap",
+    "nmap", "commix", "wpscan", "hydra", "nikto",
+})
+
+
+def _tool_name_for_unit(unit: WorkUnit) -> str:
+    command = (unit.command_template or "").strip()
+    if command:
+        return command.split()[0].lower()
+    return unit.technique.split("_", 1)[0].lower()
+
+
 # ---------------------------------------------------------------------------
 # Worker loop (no LLM — just claims and executes)
 # ---------------------------------------------------------------------------
@@ -40,6 +52,7 @@ async def _worker_loop(
     worker_id: str,
     store: SharedScanStore,
     semaphore: asyncio.Semaphore,
+    heavy_semaphore: asyncio.Semaphore,
     event_manager: Optional[TUIEventManager] = None,
     idle_timeout: float = 30.0,
     scan_id_str: str = "",
@@ -94,8 +107,9 @@ async def _worker_loop(
         except Exception:
             pass
 
+        tool_name = _tool_name_for_unit(unit)
+
         # Emit tool start event
-        tool_name = unit.technique.split("_")[0]
         if event_manager:
             try:
                 await event_manager.emit_tool_start(
@@ -114,7 +128,26 @@ async def _worker_loop(
             rationale=unit.context or unit.technique,
             timeout=timeout,
         )
-        result: CommandResult = await execute_command(task, semaphore)
+
+        async for session in get_session():
+            await store.record_attempt(
+                session,
+                tool=tool_name,
+                target=(json.loads(unit.targets_json)[0] if unit.targets_json else ""),
+                status="started",
+                reason=unit.context or unit.technique,
+                properties={
+                    "work_unit_id": str(unit.id),
+                    "phase": unit.phase,
+                    "worker_id": worker_id,
+                    "command": command,
+                },
+            )
+
+        heavy_ctx = heavy_semaphore if tool_name in _HEAVY_TOOLS else contextlib.nullcontext()
+        async with heavy_ctx:
+            async with semaphore:
+                result = await execute_command(task, semaphore)
         stats["executed"] += 1
         if result.timed_out:
             stats["timed_out"] += 1
@@ -131,6 +164,21 @@ async def _worker_loop(
                 stderr=result.stderr,
                 exit_code=result.exit_code,
                 status=status,
+            )
+            await store.record_attempt(
+                session,
+                tool=tool_name,
+                target=(json.loads(unit.targets_json)[0] if unit.targets_json else ""),
+                status=("timeout" if result.timed_out else "success" if result.exit_code == 0 else "failed"),
+                reason=unit.context or unit.technique,
+                properties={
+                    "work_unit_id": str(unit.id),
+                    "phase": unit.phase,
+                    "worker_id": worker_id,
+                    "exit_code": result.exit_code,
+                    "timed_out": result.timed_out,
+                    "duration_seconds": result.duration_seconds,
+                },
             )
 
         # Note: emit_tool_complete expects a different result shape; skip it here.
@@ -200,17 +248,29 @@ class MultiAgentOrchestrator:
             event_manager=self.event_manager,
         )
 
-        # 3. Shared concurrency semaphore for all workers
+        # 3. Shared concurrency controls for all workers
         semaphore = asyncio.Semaphore(settings.global_tool_concurrency)
+        heavy_semaphore = asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit))
+        planner_done = asyncio.Event()
+
+        async def _run_planner() -> Dict[str, Any]:
+            try:
+                return await planner.run(cycle_interval=8.0, max_cycles=200)
+            finally:
+                planner_done.set()
 
         # 4. Build async tasks
         planner_task = asyncio.create_task(
-            planner.run(cycle_interval=8.0, max_cycles=200),
+            _run_planner(),
             name="planner",
         )
 
         analyst_task = asyncio.create_task(
-            analyst.run(poll_interval=15.0, max_cycles=100),
+            analyst.run(
+                poll_interval=15.0,
+                max_cycles=100,
+                planner_done_event=planner_done,
+            ),
             name="analyst",
         )
 
@@ -220,6 +280,7 @@ class MultiAgentOrchestrator:
                     worker_id=f"worker-{i}",
                     store=store,
                     semaphore=semaphore,
+                    heavy_semaphore=heavy_semaphore,
                     event_manager=self.event_manager,
                     idle_timeout=self.worker_idle_timeout,
                     scan_id_str=scan_id_str,
@@ -237,31 +298,23 @@ class MultiAgentOrchestrator:
         # 5. Run until completion or timeout
         all_tasks = [planner_task, analyst_task] + worker_tasks
 
+        status = "completed"
         try:
-            # Wait for the analyst to signal completion, or planner to exhaust,
-            # or timeout. The analyst is the "brain" — it decides when done.
-            done, pending = await asyncio.wait(
-                [planner_task, analyst_task],
+            await asyncio.wait_for(
+                asyncio.gather(*all_tasks, return_exceptions=True),
                 timeout=self.max_scan_duration,
-                return_when=asyncio.FIRST_COMPLETED,
             )
-
-            # Give workers time to finish current work
-            if pending:
-                logger.info("🔧 Waiting for agents to wind down...")
-                for task in pending:
+        except asyncio.TimeoutError:
+            status = "max_duration"
+            logger.warning("⏱️ Multi-agent pipeline hit max_scan_duration; cancelling remaining tasks")
+            for task in all_tasks:
+                if not task.done():
                     task.cancel()
-
-            # Signal all workers to stop (they'll exit on next idle check)
-            for wt in worker_tasks:
-                if not wt.done():
-                    wt.cancel()
-
-            # Wait for everything to settle
             await asyncio.gather(*all_tasks, return_exceptions=True)
 
         except asyncio.CancelledError:
             logger.info("🛑 Multi-agent pipeline cancelled")
+            status = "cancelled"
             for task in all_tasks:
                 if not task.done():
                     task.cancel()
@@ -303,9 +356,6 @@ class MultiAgentOrchestrator:
 
         # 8. Build summary
         analyst_cycles = analyst._cycle_count
-        status = "completed"
-        if elapsed >= self.max_scan_duration:
-            status = "max_duration"
 
         summary = (
             f"Multi-agent scan completed in {elapsed:.0f}s. "

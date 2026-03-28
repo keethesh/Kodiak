@@ -134,6 +134,8 @@ class AnalystAgent:
         poll_interval: float = 10.0,
         max_cycles: int = 100,
         min_results_per_batch: int = 1,
+        planner_done_event: Optional[asyncio.Event] = None,
+        settle_cycles: int = 2,
     ) -> AnalystResult:
         """
         Main Analyst loop. Polls for unanalyzed results and processes them.
@@ -141,6 +143,7 @@ class AnalystAgent:
         """
         last_recommendation = "continue"
         scan_summary = None
+        idle_cycles = 0
 
         while self._cycle_count < max_cycles and not self._stop_requested:
             async for session in get_session():
@@ -151,12 +154,21 @@ class AnalystAgent:
 
             if len(unanalyzed) < min_results_per_batch and pending > 0:
                 # Wait for more results to accumulate
+                idle_cycles = 0
                 await self._sleep(poll_interval)
                 continue
 
             if not unanalyzed and pending == 0:
-                # Nothing to analyze and no work in flight
-                if self._cycle_count > 0:
+                planner_done = planner_done_event.is_set() if planner_done_event else True
+                if planner_done:
+                    idle_cycles += 1
+                else:
+                    idle_cycles = 0
+
+                # Nothing to analyze and no work in flight. Wait for the
+                # Planner to finish and for the system to stay idle across
+                # multiple polls before declaring completion.
+                if planner_done and idle_cycles >= settle_cycles:
                     logger.info("🧠 Analyst: no more work — signaling completion")
                     last_recommendation = "complete"
                     break
@@ -164,18 +176,22 @@ class AnalystAgent:
                 continue
 
             if not unanalyzed:
+                idle_cycles = 0
                 await self._sleep(poll_interval)
                 continue
 
             # Process batch
             result = await self._analyze_batch(unanalyzed)
             self._cycle_count += 1
+            idle_cycles = 0
 
             if result:
                 last_recommendation = result.phase_recommendation
                 scan_summary = result.scan_summary
 
-            if last_recommendation == "complete":
+            if last_recommendation == "complete" and (
+                planner_done_event is None or planner_done_event.is_set()
+            ):
                 break
 
         return AnalystResult(

@@ -15,16 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+import re
 from typing import Any, Dict, List, Optional, Set
-from uuid import UUID
+from urllib.parse import urlparse
 
 from loguru import logger
 
 from kodiak.api.events import TUIEventManager
-from kodiak.core.config import settings
 from kodiak.core.methodology import (
-    ALL_RULES,
     MethodologyRule,
     TriggerType,
     get_rules_for_phase,
@@ -32,15 +30,10 @@ from kodiak.core.methodology import (
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.engine import get_session
 from kodiak.database.models import (
-    Directive,
     DirectiveType,
-    EngagementNote,
-    NoteCategory,
     WorkUnit,
     WorkUnitStatus,
 )
-from kodiak.services import llm
-from kodiak.services.gemini_client import GeminiClient
 
 
 class PlannerAgent:
@@ -60,23 +53,28 @@ class PlannerAgent:
         self.store = store
         self.target = target
         self.event_manager = event_manager
-        self._gemini = GeminiClient()
 
         # Track state for rule triggering
-        self._known_hosts: Set[str] = {target}
+        self._known_hosts: Set[str] = {self._extract_host(target)}
         self._live_http_hosts: Set[str] = set()
-        self._detected_techs: Dict[str, Set[str]] = {}  # host → {tech, ...}
+        self._live_http_origins: Dict[str, str] = {}
+        self._detected_techs: Dict[str, Set[str]] = {}
         self._parameterized_urls: List[str] = []
         self._completed_techniques: Set[str] = set()
+        self._processed_result_ids: Set[str] = set()
         self._skip_targets: Set[str] = set()
         self._rate_limit: Optional[Dict[str, Any]] = None
         self._current_phase: str = "recon"
         self._cycle_count: int = 0
+        self._idle_cycles: int = 0
         self._stop_requested: bool = False
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
         self._total_thinking_tokens: int = 0
         self._total_cached_tokens: int = 0
+
+        if "://" in target:
+            self._remember_live_http_target(target)
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -110,20 +108,33 @@ class PlannerAgent:
             # Generate new work units from methodology
             generated = await self._generate_work_units()
 
-            # Check if work queue is empty and no more rules apply
+            # Check if the system has actually settled before auto-advancing.
             async for session in get_session():
                 pending = await self.store.get_pending_count(session)
+                unanalyzed = await self.store.get_unanalyzed_count(session)
+                waiting_directives = await self.store.get_unconsumed_directive_count(session)
+
+            if pending == 0 and generated == 0:
+                if unanalyzed == 0 and waiting_directives == 0:
+                    self._idle_cycles += 1
+                else:
+                    self._idle_cycles = 0
+            else:
+                self._idle_cycles = 0
 
             if pending == 0 and generated == 0 and self._cycle_count > 3:
-                # Try to advance phase
+                if unanalyzed > 0 or waiting_directives > 0 or self._idle_cycles < 2:
+                    await self._sleep(cycle_interval)
+                    continue
+
+                # Try to advance phase once we've been idle across multiple cycles.
                 advanced = self._try_advance_phase()
+                self._idle_cycles = 0
                 if not advanced:
                     logger.info("📋 Planner: no more work — all phases exhausted")
                     break
-                # Generate work for new phase
+                # Generate work for new phase immediately.
                 generated = await self._generate_work_units()
-                if generated == 0:
-                    break
 
             if self.event_manager and generated > 0:
                 try:
@@ -170,22 +181,7 @@ class PlannerAgent:
                 targets = self._resolve_targets(rule, domain)
                 if not targets:
                     continue
-
-                cmd = rule.command_template.format(
-                    target=targets[0],
-                    domain=domain,
-                )
-
-                unit = await self.store.enqueue_work_unit(
-                    session,
-                    technique=rule.technique,
-                    targets=targets,
-                    command_template=cmd,
-                    priority=rule.priority,
-                    phase=rule.phase,
-                )
-                if unit:
-                    count += 1
+                count += await self._enqueue_rule_targets(session, rule, targets, domain)
 
         logger.info(f"📋 Planner: seeded {count} initial RECON work units")
 
@@ -204,13 +200,13 @@ class PlannerAgent:
                 target = content.get("target", "")
                 if target:
                     self._skip_targets.add(target)
+                    self._skip_targets.add(self._extract_host(target))
                     logger.info(f"📋 Planner: skipping target {target}")
 
             elif d.type == DirectiveType.PRIORITIZE_TARGET:
                 target = content.get("target", "")
                 if target:
-                    self._known_hosts.add(target)
-                    self._live_http_hosts.add(target)
+                    self._remember_target(target, assume_live_http=True)
                     logger.info(f"📋 Planner: prioritizing target {target}")
 
             elif d.type == DirectiveType.RATE_LIMIT:
@@ -247,15 +243,37 @@ class PlannerAgent:
             return
 
         async for session in get_session():
-            await self.store.enqueue_work_unit(
-                session,
-                technique=f"hint_{technique}",
-                targets=targets[:20],
-                command_template=command,
-                context=context,
-                priority=15,  # High priority
-                phase=self._current_phase,
-            )
+            if "{target}" in command or len(targets) == 1:
+                for target in self._dedupe_preserve_order(targets)[:20]:
+                    resolved_target = self._canonical_hint_target(target)
+                    cmd = command.format(
+                        target=resolved_target,
+                        domain=self._extract_domain(resolved_target),
+                    )
+                    await self.store.enqueue_work_unit(
+                        session,
+                        technique=f"hint_{technique}",
+                        targets=[resolved_target],
+                        command_template=cmd,
+                        context=context,
+                        priority=15,
+                        phase=self._current_phase,
+                    )
+            else:
+                logger.warning(
+                    "Planner received multi-target attack_hint without '{target}' placeholder; "
+                    "enqueueing only the first target to avoid incorrect command reuse."
+                )
+                first_target = self._canonical_hint_target(targets[0])
+                await self.store.enqueue_work_unit(
+                    session,
+                    technique=f"hint_{technique}",
+                    targets=[first_target],
+                    command_template=command,
+                    context=context,
+                    priority=15,
+                    phase=self._current_phase,
+                )
 
     async def _process_escalation(self, content: Dict[str, Any]) -> None:
         """Convert an Analyst escalation into an urgent work unit."""
@@ -282,11 +300,10 @@ class PlannerAgent:
 
     async def _update_state_from_results(self) -> None:
         """
-        Scan recent completed results to extract new hosts, technologies, etc.
-        Uses Flash model for quick extraction when output is complex.
+        Scan completed results to extract new hosts, URLs, technologies, etc.
+        State extraction is deterministic so repeated runs behave consistently.
         """
         async for session in get_session():
-            # Get recently completed but check their technique for state updates
             from sqlmodel import select
             stmt = (
                 select(WorkUnit)
@@ -294,15 +311,25 @@ class PlannerAgent:
                     WorkUnit.scan_id == self.store.scan_id,
                     WorkUnit.status == WorkUnitStatus.COMPLETED,
                 )
-                .order_by(WorkUnit.completed_at.desc())
-                .limit(20)
+                .order_by(WorkUnit.completed_at.asc(), WorkUnit.created_at.asc())
             )
             result = await session.execute(stmt)
-            recent = list(result.scalars().all())
+            completed_units = list(result.scalars().all())
 
-        for unit in recent:
+        for unit in completed_units:
+            unit_id = str(unit.id)
+            if unit_id in self._processed_result_ids:
+                continue
+            self._processed_result_ids.add(unit_id)
             self._completed_techniques.add(unit.technique)
+
+            targets = json.loads(unit.targets_json) if unit.targets_json else []
+            for target in targets:
+                self._remember_target(target)
+
             stdout = unit.result_stdout or ""
+            stderr = unit.result_stderr or ""
+            combined_output = f"{stdout}\n{stderr}".strip()
 
             # Extract hosts from subdomain tools
             if unit.technique in ("subfinder", "httpx_subdomains", "dnsx_subdomains"):
@@ -313,12 +340,13 @@ class PlannerAgent:
                 self._extract_live_hosts_from_httpx(stdout)
 
             # Extract technologies from whatweb/httpx output
-            if unit.technique in ("whatweb_primary", "httpx_primary"):
+            if unit.technique in ("whatweb_primary", "httpx_primary", "httpx_subdomains"):
                 self._extract_techs_from_output(stdout, unit.targets_json)
+
+            self._extract_parameterized_urls(combined_output)
 
     def _extract_hosts_from_output(self, stdout: str) -> None:
         """Extract hostnames from tool output."""
-        import re
         pattern = re.compile(r'([a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}')
         for match in pattern.finditer(stdout):
             host = match.group(0).lower()
@@ -327,25 +355,24 @@ class PlannerAgent:
                 self._known_hosts.add(host)
 
     def _extract_live_hosts_from_httpx(self, stdout: str) -> None:
-        """Extract hosts that returned HTTP responses."""
-        for line in stdout.split("\n"):
+        """Extract live origins and hostnames from httpx output."""
+        for line in stdout.splitlines():
             line = line.strip()
             if not line:
                 continue
-            # httpx output format: https://host [status] [title]
-            if "://" in line:
-                import re
-                match = re.search(r'https?://([^\s/\[\]]+)', line)
-                if match:
-                    host = match.group(1).lower()
-                    self._live_http_hosts.add(host)
-            elif "." in line and " " not in line:
-                self._live_http_hosts.add(line.lower())
+            match = re.search(r'https?://[^\s\[\]]+', line)
+            if match:
+                self._remember_live_http_target(match.group(0))
+                continue
+
+            token = line.split()[0]
+            if "." in token:
+                self._remember_live_http_target(token.lower())
 
     def _extract_techs_from_output(self, stdout: str, targets_json: str) -> None:
         """Extract technology names from whatweb/httpx output."""
         targets = json.loads(targets_json) if targets_json else []
-        host = targets[0] if targets else self.target
+        host = self._canonical_hint_target(targets[0]) if targets else self._canonical_hint_target(self.target)
 
         tech_keywords = [
             "wordpress", "drupal", "joomla", "laravel", "django", "rails",
@@ -361,6 +388,21 @@ class PlannerAgent:
         if detected:
             self._detected_techs.setdefault(host, set()).update(detected)
 
+    def _extract_parameterized_urls(self, output: str) -> None:
+        """Persist discovered parameterized URLs in stable order."""
+        urls: List[str] = []
+        for match in re.finditer(r'https?://[^\s"\'<>]+', output):
+            url = match.group(0).rstrip(").,;")
+            parsed = urlparse(url)
+            if parsed.query and "=" in parsed.query:
+                urls.append(url)
+
+        if not urls:
+            return
+
+        merged = self._parameterized_urls + urls
+        self._parameterized_urls = self._dedupe_preserve_order(merged)
+
     # ------------------------------------------------------------------
     # Work unit generation
     # ------------------------------------------------------------------
@@ -372,47 +414,15 @@ class PlannerAgent:
         count = 0
 
         async for session in get_session():
-            # Get already-queued techniques for dedup
-            existing = await self.store.get_completed_techniques(session)
-            existing_set = set(existing)
-
             for rule in rules:
-                if rule.technique in existing_set:
-                    continue
-
                 if not self._trigger_satisfied(rule):
                     continue
 
                 targets = self._resolve_targets(rule, domain)
-                targets = [t for t in targets if t not in self._skip_targets]
                 if not targets:
                     continue
 
-                # Build command from template
-                if len(targets) == 1:
-                    cmd = rule.command_template.format(
-                        target=targets[0], domain=domain,
-                    )
-                else:
-                    # For multi-target rules, use the first target in template
-                    cmd = rule.command_template.format(
-                        target=targets[0], domain=domain,
-                    )
-
-                # Apply rate limiting from Analyst directives
-                if self._rate_limit:
-                    cmd = self._apply_rate_limit(cmd, rule)
-
-                unit = await self.store.enqueue_work_unit(
-                    session,
-                    technique=rule.technique,
-                    targets=targets[:rule.max_targets],
-                    command_template=cmd,
-                    priority=rule.priority,
-                    phase=rule.phase,
-                )
-                if unit:
-                    count += 1
+                count += await self._enqueue_rule_targets(session, rule, targets, domain)
 
         return count
 
@@ -445,30 +455,71 @@ class PlannerAgent:
         selector = rule.target_selector
 
         if selector == "primary":
-            return [self.target]
+            return [self._canonical_hint_target(self.target)]
         if selector == "primary_domain":
             return [domain]
         if selector == "all_hosts":
-            return sorted(self._known_hosts - self._skip_targets)[:rule.max_targets]
+            hosts = [
+                host for host in sorted(self._known_hosts)
+                if not self._is_target_skipped(host)
+            ]
+            return hosts[:rule.max_targets]
         if selector == "live_http":
-            hosts = self._live_http_hosts - self._skip_targets
+            hosts = [
+                host for host in sorted(self._live_http_hosts)
+                if not self._is_target_skipped(host)
+            ]
             if not hosts:
-                hosts = {self.target}
-            return sorted(hosts)[:rule.max_targets]
+                fallback = self._extract_host(self.target)
+                hosts = [fallback] if fallback else []
+            return [
+                self._format_live_http_target(rule, host)
+                for host in hosts[:rule.max_targets]
+            ]
         if selector == "with_tech":
             if not rule.tech_filter:
                 return []
             result = []
             for host, techs in self._detected_techs.items():
-                if host in self._skip_targets:
+                if self._is_target_skipped(host):
                     continue
                 if any(rule.tech_filter.lower() in t.lower() for t in techs):
                     result.append(host)
-            return result[:rule.max_targets]
+            return self._dedupe_preserve_order(result)[:rule.max_targets]
         if selector == "parameterized_urls":
-            return self._parameterized_urls[:rule.max_targets]
+            urls = [
+                url for url in self._parameterized_urls
+                if not self._is_target_skipped(url)
+            ]
+            return urls[:rule.max_targets]
 
-        return [self.target]
+        return [self._canonical_hint_target(self.target)]
+
+    async def _enqueue_rule_targets(
+        self,
+        session,
+        rule: MethodologyRule,
+        targets: List[str],
+        domain: str,
+    ) -> int:
+        """Enqueue one concrete work unit per target scope."""
+        count = 0
+        for target in self._dedupe_preserve_order(targets)[:rule.max_targets]:
+            cmd = rule.command_template.format(target=target, domain=domain)
+            if self._rate_limit:
+                cmd = self._apply_rate_limit(cmd, rule)
+
+            unit = await self.store.enqueue_work_unit(
+                session,
+                technique=rule.technique,
+                targets=[target],
+                command_template=cmd,
+                priority=rule.priority,
+                phase=rule.phase,
+            )
+            if unit:
+                count += 1
+        return count
 
     def _apply_rate_limit(self, cmd: str, rule: MethodologyRule) -> str:
         """Apply Analyst-directed rate limiting to a command."""
@@ -476,7 +527,6 @@ class PlannerAgent:
             return cmd
         max_threads = self._rate_limit.get("max_threads")
         if max_threads and "-t " in cmd:
-            import re
             cmd = re.sub(r'-t\s+\d+', f'-t {max_threads}', cmd)
         return cmd
 
@@ -503,7 +553,70 @@ class PlannerAgent:
     @staticmethod
     def _extract_domain(target: str) -> str:
         """Extract the base domain from a URL or hostname."""
-        import re
         target = re.sub(r'^https?://', '', target)
         target = target.split('/')[0].split(':')[0]
-        return target
+        return target.lower()
+
+    @staticmethod
+    def _extract_host(target: str) -> str:
+        """Extract a hostname from a URL, host, or host:port string."""
+        if "://" in target:
+            parsed = urlparse(target)
+            return (parsed.hostname or "").lower()
+        return target.split("/")[0].split(":")[0].lower()
+
+    def _canonical_hint_target(self, target: str) -> str:
+        """Prefer a full origin for known web targets; otherwise keep the raw scope."""
+        host = self._extract_host(target)
+        if not host:
+            return target
+        if "://" in target:
+            parsed = urlparse(target)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+        return self._live_http_origins.get(host, target)
+
+    def _remember_target(self, target: str, assume_live_http: bool = False) -> None:
+        """Track a discovered target in host and origin form."""
+        host = self._extract_host(target)
+        if host:
+            self._known_hosts.add(host)
+        if assume_live_http or "://" in target:
+            self._remember_live_http_target(target)
+
+    def _remember_live_http_target(self, target: str) -> None:
+        """Track a live HTTP origin plus its hostname."""
+        normalized = target.strip().rstrip("/")
+        if not normalized:
+            return
+        if "://" not in normalized:
+            normalized = f"https://{normalized}"
+        parsed = urlparse(normalized)
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        self._known_hosts.add(host)
+        self._live_http_hosts.add(host)
+        self._live_http_origins[host] = origin
+
+    def _format_live_http_target(self, rule: MethodologyRule, host: str) -> str:
+        """Return the right target shape for a live HTTP rule."""
+        if rule.technique == "ssl_check":
+            return host
+        return self._live_http_origins.get(host, f"https://{host}")
+
+    def _is_target_skipped(self, target: str) -> bool:
+        host = self._extract_host(target)
+        return target in self._skip_targets or host in self._skip_targets
+
+    @staticmethod
+    def _dedupe_preserve_order(values: List[str]) -> List[str]:
+        seen: Set[str] = set()
+        result: List[str] = []
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result

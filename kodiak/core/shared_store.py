@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 from uuid import UUID, uuid4
@@ -35,6 +36,24 @@ def _targets_hash(targets: List[str]) -> str:
     """Deterministic hash for a set of targets (order-independent)."""
     canonical = json.dumps(sorted(targets), separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
+_SERIALIZED_TOOL_FAMILIES = frozenset({
+    "nuclei", "ffuf", "katana", "gau", "sqlmap",
+    "nmap", "commix", "wpscan", "hydra", "nikto",
+})
+
+
+def _tool_family(technique: str, command_template: str = "") -> str:
+    """Best-effort tool family used for concurrency-aware claiming."""
+    if command_template:
+        try:
+            parts = shlex.split(command_template, posix=True)
+        except ValueError:
+            parts = command_template.strip().split()
+        if parts:
+            return parts[0].lower()
+    return technique.split("_", 1)[0].lower()
 
 
 class SharedScanStore:
@@ -96,6 +115,22 @@ class SharedScanStore:
     ) -> Optional[WorkUnit]:
         """Atomically claim the highest-priority pending work unit."""
         try:
+            active_stmt = (
+                select(WorkUnit)
+                .where(
+                    WorkUnit.scan_id == self.scan_id,
+                    WorkUnit.status.in_([
+                        WorkUnitStatus.CLAIMED,
+                        WorkUnitStatus.RUNNING,
+                    ]),
+                )
+            )
+            active_result = await session.execute(active_stmt)
+            active_locks = {
+                (_tool_family(unit.technique, unit.command_template or ""), unit.targets_hash)
+                for unit in active_result.scalars().all()
+            }
+
             stmt = (
                 select(WorkUnit)
                 .where(
@@ -103,11 +138,20 @@ class SharedScanStore:
                     WorkUnit.status == WorkUnitStatus.PENDING,
                 )
                 .order_by(WorkUnit.priority.asc(), WorkUnit.created_at.asc())
-                .limit(1)
+                .limit(50)
                 .with_for_update(skip_locked=True)
             )
             result = await session.execute(stmt)
-            unit = result.scalar_one_or_none()
+            unit = None
+            for candidate in result.scalars().all():
+                family = _tool_family(candidate.technique, candidate.command_template or "")
+                if (
+                    family in _SERIALIZED_TOOL_FAMILIES
+                    and (family, candidate.targets_hash) in active_locks
+                ):
+                    continue
+                unit = candidate
+                break
             if unit is None:
                 return None
 
@@ -233,6 +277,23 @@ class SharedScanStore:
         except SQLAlchemyError:
             return 0
 
+    async def get_unanalyzed_count(self, session: AsyncSession) -> int:
+        """Count completed work units the Analyst has not reviewed yet."""
+        try:
+            from sqlalchemy import func
+            stmt = (
+                select(func.count(WorkUnit.id))
+                .where(
+                    WorkUnit.scan_id == self.scan_id,
+                    WorkUnit.status == WorkUnitStatus.COMPLETED,
+                    WorkUnit.analyzed == False,
+                )
+            )
+            result = await session.execute(stmt)
+            return result.scalar() or 0
+        except SQLAlchemyError:
+            return 0
+
     # ------------------------------------------------------------------
     # Directives (Analyst → Planner)
     # ------------------------------------------------------------------
@@ -286,6 +347,22 @@ class SharedScanStore:
             await session.rollback()
             logger.error(f"Failed to consume directives: {e}")
             return []
+
+    async def get_unconsumed_directive_count(self, session: AsyncSession) -> int:
+        """Count unconsumed directives waiting for the Planner."""
+        try:
+            from sqlalchemy import func
+            stmt = (
+                select(func.count(Directive.id))
+                .where(
+                    Directive.scan_id == self.scan_id,
+                    Directive.consumed == False,
+                )
+            )
+            result = await session.execute(stmt)
+            return result.scalar() or 0
+        except SQLAlchemyError:
+            return 0
 
     # ------------------------------------------------------------------
     # Findings (both Analyst and legacy Manager can write)
