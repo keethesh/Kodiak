@@ -142,6 +142,7 @@ class MissionControlScreen(Screen):
         app_state.subscribe("agent_status_changed", self._on_agent_changed)
         app_state.subscribe("finding_added", self._on_finding_added)
         app_state.subscribe("node_added", self._on_node_added)
+        app_state.subscribe("scan_projection_updated", self._on_scan_projection_updated)
         
         # Log that we're on mission control
         activity_log = self.query_one("#activity-log", ActivityLog)
@@ -173,13 +174,17 @@ class MissionControlScreen(Screen):
         agent_count = len(current_scan.agents)
         finding_count = len(current_scan.findings)
         node_count = len(current_scan.nodes)
+        queue = getattr(current_scan, "work_queue", {}) or {}
+        running_jobs = queue.get("running", 0) + queue.get("claimed", 0)
+        pending_jobs = queue.get("pending", 0)
         
         info_text = (
             f"{status_icon} {current_project.name} → {current_scan.name} | "
             f"Status: {status.value.title()} | "
             f"Agents: {agent_count} | "
             f"Findings: {finding_count} | "
-            f"Nodes: {node_count}"
+            f"Nodes: {node_count} | "
+            f"Jobs: {running_jobs} active / {pending_jobs} queued"
         )
         
         scan_status.update(info_text)
@@ -226,6 +231,28 @@ class MissionControlScreen(Screen):
     def _on_node_added(self, event):
         """Handle new nodes"""
         self._update_scan_info()
+
+    def _on_scan_projection_updated(self, event):
+        """Handle canonical scan projection updates."""
+        self._update_scan_info()
+
+        current_scan = app_state.get_current_scan()
+        if not current_scan or event.data.get("scan_id") != current_scan.id:
+            return
+
+        activity_log = self.query_one("#activity-log", ActivityLog)
+        for entry in (getattr(current_scan, "recent_events", []) or [])[:5]:
+            event_type = str(entry.get("type", "")).replace("_", " ")
+            payload = entry.get("payload", {}) or {}
+            detail = (
+                payload.get("technique")
+                or payload.get("title")
+                or payload.get("tool")
+                or payload.get("target")
+                or entry.get("entity_type")
+                or "event"
+            )
+            activity_log.add_log("INFO", f"{event_type}: {detail}", source="Projection")
     
     def _focus_panel(self, index: int):
         """Focus a specific panel"""

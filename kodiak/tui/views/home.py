@@ -195,6 +195,7 @@ class HomeScreen(Screen):
         app_state.subscribe("project_updated", self._on_project_changed)
         app_state.subscribe("project_removed", self._on_project_changed)
         app_state.subscribe("scan_status_changed", self._on_scan_changed)
+        app_state.subscribe("scan_projection_updated", self._on_scan_changed)
     
     def _setup_projects_table(self):
         """Set up the projects DataTable"""
@@ -232,9 +233,13 @@ class HomeScreen(Screen):
             if latest_scan:
                 status = latest_scan.status.value.title()
                 finding_count = len(latest_scan.findings)
+                queue = getattr(latest_scan, "work_queue", {}) or {}
+                pending_jobs = queue.get("pending", 0)
                 
                 if latest_scan.status == ScanStatus.RUNNING:
                     status = f"🔄 {status}"
+                    if pending_jobs:
+                        status += f" ({pending_jobs}q)"
                     status_class = "status-running"
                 elif latest_scan.status == ScanStatus.COMPLETED:
                     status = f"✅ {status}"
@@ -298,8 +303,16 @@ class HomeScreen(Screen):
             }.get(scan.status, "❓")
             
             time_str = scan.created_at.strftime("%H:%M")
+            queue = getattr(scan, "work_queue", {}) or {}
+            queue_suffix = ""
+            if queue:
+                queue_suffix = (
+                    f" | jobs {queue.get('running', 0) + queue.get('claimed', 0)}"
+                    f"/{queue.get('pending', 0)}q"
+                )
             activity_lines.append(
-                f"{status_icon} [{time_str}] {project_name}: {scan.name} - {scan.status.value}"
+                f"{status_icon} [{time_str}] {project_name}: {scan.name} - "
+                f"{scan.status.value} ({len(scan.findings)} findings){queue_suffix}"
             )
         
         activity_content.update("\n".join(activity_lines))

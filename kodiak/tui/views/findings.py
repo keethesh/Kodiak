@@ -148,6 +148,7 @@ class FindingsScreen(Screen):
         
         # Subscribe to finding changes
         app_state.subscribe("finding_added", self._on_finding_added)
+        app_state.subscribe("scan_projection_updated", self._on_projection_updated)
     
     def _update_available_filters(self):
         """Update the list of available agents and types for filtering"""
@@ -160,16 +161,17 @@ class FindingsScreen(Screen):
         for finding in findings:
             # Get agent from evidence or properties
             agent = None
-            if finding.evidence and isinstance(finding.evidence, dict):
-                agent = finding.evidence.get("discovered_by") or finding.evidence.get("agent")
+            evidence = self._finding_evidence(finding)
+            if evidence:
+                agent = evidence.get("discovered_by") or evidence.get("agent")
             if agent:
                 agents.add(agent)
             
             # Get finding type from node or properties
-            if finding.node and hasattr(finding.node, 'type'):
+            if getattr(finding, "node", None) and hasattr(finding.node, 'type'):
                 types.add(finding.node.type)
-            elif finding.evidence and isinstance(finding.evidence, dict):
-                finding_type = finding.evidence.get("type") or finding.evidence.get("vulnerability_type")
+            elif evidence:
+                finding_type = evidence.get("type") or evidence.get("vulnerability_type")
                 if finding_type:
                     types.add(finding_type)
         
@@ -222,6 +224,13 @@ class FindingsScreen(Screen):
         """Handle new findings"""
         self._update_available_filters()
         self._update_summary()
+
+    def _on_projection_updated(self, event):
+        """Refresh filter metadata and summary from canonical scan projection changes."""
+        current_scan = app_state.get_current_scan()
+        if current_scan and event.data.get("scan_id") == current_scan.id:
+            self._update_available_filters()
+            self._update_summary()
     
     def action_quit(self) -> None:
         """Quit the application (Global shortcut)"""
@@ -402,7 +411,7 @@ class FindingsScreen(Screen):
                 "severity": finding.severity,
                 "target": target,
                 "description": finding.description,
-                "evidence": finding.evidence,
+                "evidence": self._finding_evidence(finding),
                 "discovered_by": agent,
                 "created_at": finding.created_at.isoformat() if finding.created_at else None,
             })
@@ -421,17 +430,31 @@ class FindingsScreen(Screen):
         """Get target from finding, node, or evidence"""
         if hasattr(finding, 'target') and finding.target:
             return finding.target
-        if finding.node and hasattr(finding.node, 'name'):
+        if getattr(finding, "node", None) and hasattr(finding.node, 'name'):
             return finding.node.name
-        if finding.evidence and isinstance(finding.evidence, dict):
-            return finding.evidence.get("target") or finding.evidence.get("url") or "N/A"
+        evidence = self._finding_evidence(finding)
+        if evidence:
+            return evidence.get("target") or evidence.get("url") or "N/A"
         return "N/A"
     
     def _get_finding_agent(self, finding) -> str:
         """Get discovering agent from finding evidence"""
-        if finding.evidence and isinstance(finding.evidence, dict):
-            return finding.evidence.get("discovered_by") or finding.evidence.get("agent") or "Unknown"
+        evidence = self._finding_evidence(finding)
+        if evidence:
+            return evidence.get("discovered_by") or evidence.get("agent") or "Unknown"
         return "Unknown"
+
+    def _finding_evidence(self, finding) -> dict:
+        """Best-effort evidence accessor for ORM and projection-backed findings."""
+        evidence = getattr(finding, "evidence", None)
+        if isinstance(evidence, dict):
+            return evidence
+        properties = getattr(finding, "properties", None)
+        if isinstance(properties, dict):
+            nested = properties.get("evidence")
+            if isinstance(nested, dict):
+                return nested
+        return {}
     
     def _export_markdown(self):
         """Export findings to Markdown"""
@@ -467,8 +490,9 @@ class FindingsScreen(Screen):
                     lines.append(f"- **Discovered By:** {agent}")
                     lines.append(f"- **Timestamp:** {timestamp}")
                     lines.append(f"- **Description:** {finding.description or 'N/A'}")
-                    if finding.evidence:
-                        lines.append(f"- **Evidence:** {finding.evidence}")
+                    evidence = self._finding_evidence(finding)
+                    if evidence:
+                        lines.append(f"- **Evidence:** {evidence}")
                     lines.append("")
         
         # Save to file

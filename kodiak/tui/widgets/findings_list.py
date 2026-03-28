@@ -17,6 +17,19 @@ from kodiak.tui.state import app_state, ScanState
 from kodiak.database.models import Finding
 
 
+def _finding_evidence(finding: Finding) -> Dict[str, object]:
+    """Best-effort evidence accessor for both ORM and projection-backed findings."""
+    evidence = getattr(finding, "evidence", None)
+    if isinstance(evidence, dict):
+        return evidence
+    properties = getattr(finding, "properties", None)
+    if isinstance(properties, dict):
+        nested = properties.get("evidence")
+        if isinstance(nested, dict):
+            return nested
+    return {}
+
+
 class FindingSelected(Message):
     """Message sent when a finding is selected"""
     
@@ -43,15 +56,17 @@ class FindingItem(ListItem):
         target = "Unknown Target"
         if hasattr(self.finding, 'target') and self.finding.target:
             target = self.finding.target
-        elif self.finding.node and hasattr(self.finding.node, 'name'):
+        elif getattr(self.finding, "node", None) and hasattr(self.finding.node, 'name'):
             target = self.finding.node.name
-        elif self.finding.evidence and isinstance(self.finding.evidence, dict):
-            target = self.finding.evidence.get("target") or self.finding.evidence.get("url") or "Unknown Target"
+        elif _finding_evidence(self.finding):
+            evidence = _finding_evidence(self.finding)
+            target = evidence.get("target") or evidence.get("url") or "Unknown Target"
         
         # Get agent info from evidence (Requirement 9.3)
         agent = "Unknown"
-        if self.finding.evidence and isinstance(self.finding.evidence, dict):
-            agent = self.finding.evidence.get("discovered_by") or self.finding.evidence.get("agent") or "Unknown"
+        evidence = _finding_evidence(self.finding)
+        if evidence:
+            agent = evidence.get("discovered_by") or evidence.get("agent") or "Unknown"
         
         # Get timestamp (Requirement 9.3)
         timestamp = ""
@@ -253,6 +268,7 @@ class FindingsList(Widget):
         # Subscribe to state changes
         app_state.subscribe("current_scan_changed", self._on_scan_changed)
         app_state.subscribe("finding_added", self._on_finding_added)
+        app_state.subscribe("scan_projection_updated", self._on_scan_projection_updated)
     
     def compose(self) -> ComposeResult:
         """Compose the findings list layout"""
@@ -278,6 +294,12 @@ class FindingsList(Widget):
             finding = data.get("finding")
             if finding:
                 self._add_finding(finding)
+
+    def _on_scan_projection_updated(self, event):
+        """Refresh when the current scan projection changes."""
+        if self.current_scan and event.data.get("scan_id") == self.current_scan.id:
+            self.current_scan = event.data.get("scan_state", self.current_scan)
+            self._refresh_findings()
     
     def _refresh_findings(self):
         """Refresh the entire findings list"""
@@ -332,8 +354,9 @@ class FindingsList(Widget):
         # Filter by agent
         if self.filter_agent:
             def matches_agent(finding: Finding) -> bool:
-                if finding.evidence and isinstance(finding.evidence, dict):
-                    agent = finding.evidence.get("discovered_by") or finding.evidence.get("agent")
+                evidence = _finding_evidence(finding)
+                if evidence:
+                    agent = evidence.get("discovered_by") or evidence.get("agent")
                     return agent == self.filter_agent
                 return False
             filtered = [f for f in filtered if matches_agent(f)]
@@ -342,11 +365,12 @@ class FindingsList(Widget):
         if self.filter_type:
             def matches_type(finding: Finding) -> bool:
                 # Check node type
-                if finding.node and hasattr(finding.node, 'type') and finding.node.type == self.filter_type:
+                if getattr(finding, "node", None) and hasattr(finding.node, 'type') and finding.node.type == self.filter_type:
                     return True
                 # Check evidence type
-                if finding.evidence and isinstance(finding.evidence, dict):
-                    finding_type = finding.evidence.get("type") or finding.evidence.get("vulnerability_type")
+                evidence = _finding_evidence(finding)
+                if evidence:
+                    finding_type = evidence.get("type") or evidence.get("vulnerability_type")
                     return finding_type == self.filter_type
                 return False
             filtered = [f for f in filtered if matches_type(f)]

@@ -171,6 +171,7 @@ class DashboardView(Static):
         app_state.subscribe("project_removed",    lambda _: self._refresh_all())
         app_state.subscribe("scan_status_changed",lambda _: self._refresh_all())
         app_state.subscribe("finding_added",      lambda _: self._refresh_findings())
+        app_state.subscribe("scan_projection_updated", lambda _: self._refresh_all())
 
     # ── Setup ─────────────────────────────────────────────────────────────────
 
@@ -219,9 +220,16 @@ class DashboardView(Static):
             a = next(iter(scan.agents.values()))
             agent_info = f"  🤖 {a.name}  {a.current_task or 'idle'}"
 
+        queue = getattr(scan, "work_queue", {}) or {}
+        queue_info = ""
+        if queue:
+            running = queue.get("running", 0) + queue.get("claimed", 0)
+            pending = queue.get("pending", 0)
+            queue_info = f"  📋 {running} active / {pending} queued"
+
         w.update(
             f"{icon} [bold]{project.name}[/bold]  →  {scan.name}  "
-            f"[dim]|[/dim]  {scan.status.value.title()}{elapsed}{agent_info}"
+            f"[dim]|[/dim]  {scan.status.value.title()}{elapsed}{agent_info}{queue_info}"
         )
         w.remove_class("running", "paused", "failed", "completed", "pending")
         if css_cls:
@@ -232,10 +240,9 @@ class DashboardView(Static):
 
         findings = len(scan.findings) if scan else 0
         nodes    = len(scan.nodes)    if scan else 0
-        tools    = len(getattr(scan, "tools_run", [])) if scan else 0
-        phase    = getattr(scan, "phase", "—") if scan else "—"
-        if hasattr(phase, "value"):
-            phase = phase.value
+        queue    = getattr(scan, "work_queue", {}) if scan else {}
+        tools    = (queue.get("completed", 0) + queue.get("failed", 0)) if scan else 0
+        phase    = self._current_phase(scan) if scan else "—"
 
         self.query_one("#stat-findings", Static).update(
             f"[bold cyan]{findings}[/bold cyan]\n[dim]Findings[/dim]"
@@ -272,6 +279,23 @@ class DashboardView(Static):
 
     def _refresh_activity(self) -> None:
         w = self.query_one("#activity-content", Static)
+        scan = app_state.get_current_scan()
+        if scan and getattr(scan, "recent_events", None):
+            lines = []
+            for entry in scan.recent_events[:12]:
+                event_type = str(entry.get("type", "")).replace("_", " ")
+                payload = entry.get("payload", {}) or {}
+                if "technique" in payload:
+                    detail = payload["technique"]
+                elif "title" in payload:
+                    detail = payload["title"]
+                elif "tool" in payload:
+                    detail = payload["tool"]
+                else:
+                    detail = entry.get("entity_type") or "event"
+                lines.append(f"• {event_type}: {detail}")
+            w.update("\n".join(lines))
+            return
         all_scans: List[ScanState] = []
         for p in app_state.get_all_projects():
             all_scans.extend(app_state.get_scans_for_project(p.id))
@@ -282,8 +306,8 @@ class DashboardView(Static):
 
         lines = []
         all_scans.sort(key=lambda s: s.created_at, reverse=True)
-        for scan in all_scans[:15]:
-            p = app_state.get_project(scan.project_id)
+        for historic_scan in all_scans[:15]:
+            p = app_state.get_project(historic_scan.project_id)
             pname = p.name if p else "?"
             icon = {
                 ScanStatus.RUNNING:   "🟢",
@@ -291,9 +315,9 @@ class DashboardView(Static):
                 ScanStatus.FAILED:    "🔴",
                 ScanStatus.PAUSED:    "🟡",
                 ScanStatus.PENDING:   "⏳",
-            }.get(scan.status, "  ")
-            ts = scan.created_at.strftime("%m-%d %H:%M")
-            lines.append(f"{icon} [dim]{ts}[/dim]  [bold]{pname}[/bold] — {scan.name}")
+            }.get(historic_scan.status, "  ")
+            ts = historic_scan.created_at.strftime("%m-%d %H:%M")
+            lines.append(f"{icon} [dim]{ts}[/dim]  [bold]{pname}[/bold] — {historic_scan.name}")
 
         w.update("\n".join(lines))
 
@@ -328,6 +352,19 @@ class DashboardView(Static):
                 upd,
                 key=p.id,
             )
+
+    def _current_phase(self, scan: ScanState) -> str:
+        """Infer the visible scan phase from recent events."""
+        for entry in getattr(scan, "recent_events", []) or []:
+            event_type = entry.get("type")
+            payload = entry.get("payload", {}) or {}
+            if event_type == "directive_added" and payload.get("type") == "DirectiveType.PHASE_ADVANCE":
+                content = payload.get("content", {}) or {}
+                return content.get("new_phase") or content.get("phase") or "—"
+            phase = payload.get("phase")
+            if phase:
+                return str(phase)
+        return getattr(scan, "phase", "—")
 
     def action_refresh(self) -> None:
         self._refresh_all()

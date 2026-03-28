@@ -128,6 +128,7 @@ class FindingsView(Static):
         self._setup_table()
         self._refresh_all()
         app_state.subscribe("finding_added", lambda _: self._refresh_all())
+        app_state.subscribe("scan_projection_updated", lambda _: self._refresh_all())
 
     def _setup_table(self) -> None:
         t = self.query_one("#findings-table", DataTable)

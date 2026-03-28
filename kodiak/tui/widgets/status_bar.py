@@ -80,6 +80,7 @@ class StatusBar(Widget):
         app_state.subscribe("current_project_changed", self._on_project_changed)
         app_state.subscribe("current_scan_changed", self._on_scan_changed)
         app_state.subscribe("scan_status_changed", self._on_scan_status_changed)
+        app_state.subscribe("scan_projection_updated", self._on_scan_projection_updated)
     
     def compose(self) -> ComposeResult:
         """Compose the status bar layout"""
@@ -106,6 +107,12 @@ class StatusBar(Widget):
     
     def _on_scan_status_changed(self, event):
         """Handle scan status change events"""
+        if self.current_scan and event.data.get("scan_id") == self.current_scan.id:
+            self.current_scan = event.data.get("scan_state", self.current_scan)
+            self._update_display()
+
+    def _on_scan_projection_updated(self, event):
+        """Handle projection refresh events for the current scan."""
         if self.current_scan and event.data.get("scan_id") == self.current_scan.id:
             self.current_scan = event.data.get("scan_state", self.current_scan)
             self._update_display()
@@ -144,11 +151,18 @@ class StatusBar(Widget):
         status = self.current_scan.status
         agent_count = len(self.current_scan.agents)
         finding_count = len(self.current_scan.findings)
+        queue = getattr(self.current_scan, "work_queue", {}) or {}
         
         if status == ScanStatus.RUNNING:
             active_agents = sum(1 for agent in self.current_scan.agents.values() 
                               if agent.status.value in ["executing", "thinking"])
-            return f"🔄 Running ({active_agents}/{agent_count} agents, {finding_count} findings)", "status-running"
+            pending = queue.get("pending", 0)
+            running = queue.get("running", 0) + queue.get("claimed", 0)
+            return (
+                f"🔄 Running ({active_agents}/{agent_count} agents, "
+                f"{running} active jobs, {pending} queued, {finding_count} findings)",
+                "status-running",
+            )
         
         elif status == ScanStatus.COMPLETED:
             return f"✅ Completed ({finding_count} findings)", "status-completed"
