@@ -60,6 +60,39 @@ class DirectiveType(StrEnum):
     PHASE_ADVANCE = "phase_advance"
 
 
+class ObservationType(StrEnum):
+    LIVE_HTTP = "live_http"
+    TECHNOLOGY = "technology"
+    PARAMETERIZED_URL = "parameterized_url"
+    LOGIN_SURFACE = "login_surface"
+    ADMIN_SURFACE = "admin_surface"
+    API_SURFACE = "api_surface"
+
+
+class CapabilityType(StrEnum):
+    WEB_SURFACE = "web_surface"
+    INPUT_SURFACE = "input_surface"
+    AUTH_SURFACE = "auth_surface"
+    ADMIN_SURFACE = "admin_surface"
+    API_SURFACE = "api_surface"
+    TECH_STACK = "tech_stack"
+
+
+class HypothesisType(StrEnum):
+    INJECTION_FOLLOWUP = "injection_followup"
+    AUTH_FOLLOWUP = "auth_followup"
+    ADMIN_FOLLOWUP = "admin_followup"
+    API_LOGIC_FOLLOWUP = "api_logic_followup"
+    TECH_FOLLOWUP = "tech_followup"
+
+
+class HypothesisStatus(StrEnum):
+    PENDING = "pending"
+    QUEUED = "queued"
+    RESOLVED = "resolved"
+    DISMISSED = "dismissed"
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
@@ -277,3 +310,62 @@ class Directive(SQLModel, table=True):
     consumed: bool = Field(default=False, index=True)
 
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class Observation(SQLModel, table=True):
+    """Typed facts extracted from tool output or analysis."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    scan_id: UUID = Field(foreign_key="scanjob.id", index=True)
+    project_id: UUID = Field(foreign_key="project.id")
+
+    type: ObservationType = Field(index=True)
+    target: str = Field(index=True)
+    key: str = Field(index=True)
+    value: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+
+    created_at: datetime = Field(default_factory=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("scan_id", "type", "target", "key", name="uq_observation_dedup"),
+    )
+
+
+class Capability(SQLModel, table=True):
+    """Reusable offensive assets or attack surfaces inferred from observations."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    scan_id: UUID = Field(foreign_key="scanjob.id", index=True)
+    project_id: UUID = Field(foreign_key="project.id")
+
+    type: CapabilityType = Field(index=True)
+    target: str = Field(index=True)
+    key: str = Field(index=True)
+    details: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("scan_id", "type", "target", "key", name="uq_capability_dedup"),
+    )
+
+
+class Hypothesis(SQLModel, table=True):
+    """Concrete follow-up ideas generated from evidence and capabilities."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    scan_id: UUID = Field(foreign_key="scanjob.id", index=True)
+    project_id: UUID = Field(foreign_key="project.id")
+
+    type: HypothesisType = Field(index=True)
+    target: str = Field(index=True)
+    key: str = Field(index=True)
+    rationale: str
+    confidence: float = Field(default=0.5)
+    evidence: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    status: HypothesisStatus = Field(default=HypothesisStatus.PENDING, index=True)
+
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("scan_id", "type", "target", "key", name="uq_hypothesis_dedup"),
+    )

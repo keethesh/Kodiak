@@ -31,6 +31,10 @@ from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.engine import get_session
 from kodiak.database.models import (
     DirectiveType,
+    Hypothesis,
+    HypothesisStatus,
+    HypothesisType,
+    ObservationType,
     WorkUnit,
     WorkUnitStatus,
 )
@@ -104,6 +108,10 @@ class PlannerAgent:
 
             # Scan for new intelligence in completed results
             await self._update_state_from_results()
+            await self._refresh_state_from_store()
+
+            # Expand structured hypotheses into concrete follow-up work.
+            await self._process_hypotheses()
 
             # Generate new work units from methodology
             generated = await self._generate_work_units()
@@ -294,6 +302,35 @@ class PlannerAgent:
                 phase="exploitation",
             )
 
+    async def _process_hypotheses(self) -> None:
+        """Convert structured hypotheses into high-priority work units."""
+        async for session in get_session():
+            hypotheses = await self.store.get_hypotheses(
+                session,
+                statuses=[HypothesisStatus.PENDING],
+                limit=25,
+            )
+            queued_ids: List[Any] = []
+
+            for hypothesis in hypotheses:
+                work_item = self._work_item_for_hypothesis(hypothesis)
+                if work_item is None:
+                    continue
+
+                unit = await self.store.enqueue_work_unit(
+                    session,
+                    technique=work_item["technique"],
+                    targets=[work_item["target"]],
+                    command_template=work_item["command"],
+                    context=work_item["context"],
+                    priority=work_item["priority"],
+                    phase=work_item["phase"],
+                )
+                if unit:
+                    queued_ids.append(hypothesis.id)
+
+            await self.store.mark_hypothesis_status(session, queued_ids, HypothesisStatus.QUEUED)
+
     # ------------------------------------------------------------------
     # State updates from completed results
     # ------------------------------------------------------------------
@@ -344,6 +381,21 @@ class PlannerAgent:
                 self._extract_techs_from_output(stdout, unit.targets_json)
 
             self._extract_parameterized_urls(combined_output)
+
+    async def _refresh_state_from_store(self) -> None:
+        """Hydrate planner state from persisted observations for resumability."""
+        async for session in get_session():
+            observations = await self.store.get_observations(session, limit=250)
+
+        for observation in observations:
+            if observation.type == ObservationType.LIVE_HTTP:
+                self._remember_live_http_target(observation.target)
+            elif observation.type == ObservationType.PARAMETERIZED_URL:
+                self._parameterized_urls = self._dedupe_preserve_order(
+                    self._parameterized_urls + [observation.target]
+                )
+            elif observation.type == ObservationType.TECHNOLOGY:
+                self._detected_techs.setdefault(observation.target, set()).add(observation.key)
 
     def _extract_hosts_from_output(self, stdout: str) -> None:
         """Extract hostnames from tool output."""
@@ -447,6 +499,76 @@ class PlannerAgent:
         if rule.trigger == TriggerType.ANALYST_HINT:
             return False  # Handled via directives, not methodology rules
         return False
+
+    def _work_item_for_hypothesis(self, hypothesis: Hypothesis) -> Optional[Dict[str, Any]]:
+        """Translate a hypothesis into one concrete follow-up command."""
+        target = hypothesis.target
+
+        if hypothesis.type == HypothesisType.INJECTION_FOLLOWUP:
+            if "?" not in target or "=" not in target:
+                return None
+            return {
+                "technique": "hypothesis_sqlmap_followup",
+                "target": target,
+                "command": f"sqlmap -u '{target}' --batch --random-agent --level 2 --risk 2 --threads 3",
+                "context": hypothesis.rationale,
+                "priority": 18,
+                "phase": "vuln_scan",
+            }
+
+        if hypothesis.type == HypothesisType.AUTH_FOLLOWUP:
+            return {
+                "technique": "hypothesis_auth_panel_followup",
+                "target": target,
+                "command": f"nuclei -u {target} -tags default-login,auth-bypass,exposed-panels -rl 10 -silent",
+                "context": hypothesis.rationale,
+                "priority": 16,
+                "phase": "vuln_scan",
+            }
+
+        if hypothesis.type == HypothesisType.ADMIN_FOLLOWUP:
+            return {
+                "technique": "hypothesis_admin_surface_followup",
+                "target": target,
+                "command": f"nuclei -u {target} -tags exposed-panels,default-login,auth-bypass -rl 10 -silent",
+                "context": hypothesis.rationale,
+                "priority": 14,
+                "phase": "vuln_scan",
+            }
+
+        if hypothesis.type == HypothesisType.API_LOGIC_FOLLOWUP:
+            return {
+                "technique": "hypothesis_api_surface_followup",
+                "target": target,
+                "command": f"nuclei -u {target} -tags api,swagger,graphql,cors -rl 10 -silent",
+                "context": hypothesis.rationale,
+                "priority": 17,
+                "phase": "vuln_scan",
+            }
+
+        if hypothesis.type == HypothesisType.TECH_FOLLOWUP:
+            tech = str((hypothesis.evidence or {}).get("tech", "")).lower()
+            if "wordpress" in tech:
+                return {
+                    "technique": "hypothesis_wordpress_followup",
+                    "target": self._canonical_hint_target(target),
+                    "command": f"wpscan --url {self._canonical_hint_target(target)} --enumerate vp,vt,u --random-user-agent --throttle 500",
+                    "context": hypothesis.rationale,
+                    "priority": 20,
+                    "phase": "enumeration",
+                }
+            if tech:
+                web_target = self._canonical_hint_target(target)
+                return {
+                    "technique": f"hypothesis_{tech}_followup",
+                    "target": web_target,
+                    "command": f"nuclei -u {web_target} -tags cve,{tech} -rl 10 -silent",
+                    "context": hypothesis.rationale,
+                    "priority": 19,
+                    "phase": "vuln_scan",
+                }
+
+        return None
 
     def _resolve_targets(
         self, rule: MethodologyRule, domain: str

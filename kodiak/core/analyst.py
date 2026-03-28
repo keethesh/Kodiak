@@ -13,11 +13,10 @@ Uses the powerful model (Gemini Pro) with high thinking for thorough analysis.
 from __future__ import annotations
 
 import json
-import time
+import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from urllib.parse import urlparse
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -27,9 +26,13 @@ from kodiak.core.config import settings
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.engine import get_session
 from kodiak.database.models import (
+    CapabilityType,
     DirectiveType,
     FindingSeverity,
+    HypothesisStatus,
+    HypothesisType,
     NoteCategory,
+    ObservationType,
     WorkUnit,
 )
 from kodiak.services import llm
@@ -331,6 +334,8 @@ class AnalystAgent:
     ) -> None:
         """Write findings, notes, directives to shared store and mark analyzed."""
         async for session in get_session():
+            await self._persist_structured_state(session, parsed, work_units)
+
             # Findings
             for f in parsed.findings:
                 severity_map = {
@@ -391,6 +396,277 @@ class AnalystAgent:
             await self.store.mark_analyzed(
                 session, [u.id for u in work_units]
             )
+
+    async def _persist_structured_state(
+        self,
+        session,
+        parsed: AnalystResponse,
+        work_units: List[WorkUnit],
+    ) -> None:
+        """Persist deterministic observations, capabilities, and hypotheses."""
+        for unit in work_units:
+            targets = json.loads(unit.targets_json) if unit.targets_json else []
+            combined_output = "\n".join(
+                part for part in [unit.result_stdout or "", unit.result_stderr or ""] if part
+            )
+
+            for target in targets:
+                normalized_target = self._normalize_target(target)
+                if "://" in normalized_target:
+                    await self.store.add_observation(
+                        session,
+                        observation_type=ObservationType.LIVE_HTTP,
+                        target=normalized_target,
+                        key=normalized_target,
+                        value={"source": unit.technique},
+                    )
+                    await self.store.add_capability(
+                        session,
+                        capability_type=CapabilityType.WEB_SURFACE,
+                        target=normalized_target,
+                        key=normalized_target,
+                        details={"source": unit.technique},
+                    )
+
+            for url in self._extract_urls(combined_output):
+                await self._persist_url_state(session, url, unit.technique)
+
+            primary_target = self._normalize_target(targets[0]) if targets else ""
+            for tech in self._extract_technologies(combined_output):
+                tech_target = primary_target or self._extract_host(primary_target)
+                if not tech_target:
+                    continue
+                await self.store.add_observation(
+                    session,
+                    observation_type=ObservationType.TECHNOLOGY,
+                    target=tech_target,
+                    key=tech,
+                    value={"tech": tech, "source": unit.technique},
+                )
+                await self.store.add_capability(
+                    session,
+                    capability_type=CapabilityType.TECH_STACK,
+                    target=tech_target,
+                    key=tech,
+                    details={"tech": tech, "source": unit.technique},
+                )
+                followup = self._technology_followup(tech, tech_target)
+                if followup:
+                    await self.store.add_hypothesis(
+                        session,
+                        hypothesis_type=HypothesisType.TECH_FOLLOWUP,
+                        target=followup["target"],
+                        key=followup["key"],
+                        rationale=followup["rationale"],
+                        confidence=0.78,
+                        evidence={"tech": tech, "source": unit.technique},
+                    )
+
+        for finding in parsed.findings:
+            finding_target = self._normalize_target(finding.target)
+            lower = " ".join(
+                [finding.title.lower(), finding.description.lower(), finding.evidence.lower()]
+            )
+            if "login" in lower or "auth" in lower:
+                await self.store.add_capability(
+                    session,
+                    capability_type=CapabilityType.AUTH_SURFACE,
+                    target=finding_target,
+                    key=finding_target,
+                    details={"source": "finding", "title": finding.title},
+                )
+            if "admin" in lower:
+                await self.store.add_capability(
+                    session,
+                    capability_type=CapabilityType.ADMIN_SURFACE,
+                    target=finding_target,
+                    key=finding_target,
+                    details={"source": "finding", "title": finding.title},
+                )
+
+    async def _persist_url_state(self, session, url: str, source: str) -> None:
+        normalized_url = self._normalize_target(url)
+        parsed = urlparse(normalized_url)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.lower()
+
+        if parsed.scheme and parsed.netloc:
+            await self.store.add_observation(
+                session,
+                observation_type=ObservationType.LIVE_HTTP,
+                target=normalized_url,
+                key=normalized_url,
+                value={"source": source},
+            )
+            await self.store.add_capability(
+                session,
+                capability_type=CapabilityType.WEB_SURFACE,
+                target=normalized_url,
+                key=normalized_url,
+                details={"source": source},
+            )
+
+        if parsed.query and "=" in parsed.query:
+            await self.store.add_observation(
+                session,
+                observation_type=ObservationType.PARAMETERIZED_URL,
+                target=normalized_url,
+                key=normalized_url,
+                value={"source": source, "query": parsed.query},
+            )
+            await self.store.add_capability(
+                session,
+                capability_type=CapabilityType.INPUT_SURFACE,
+                target=normalized_url,
+                key=normalized_url,
+                details={"source": source},
+            )
+            await self.store.add_hypothesis(
+                session,
+                hypothesis_type=HypothesisType.INJECTION_FOLLOWUP,
+                target=normalized_url,
+                key=normalized_url,
+                rationale="Discovered parameterized URL worth injection follow-up",
+                confidence=0.82,
+                evidence={"source": source},
+            )
+
+        if any(marker in path for marker in ("/login", "/signin", "/auth", "/session")):
+            await self.store.add_observation(
+                session,
+                observation_type=ObservationType.LOGIN_SURFACE,
+                target=normalized_url,
+                key=normalized_url,
+                value={"source": source},
+            )
+            await self.store.add_capability(
+                session,
+                capability_type=CapabilityType.AUTH_SURFACE,
+                target=normalized_url,
+                key=normalized_url,
+                details={"source": source},
+            )
+            await self.store.add_hypothesis(
+                session,
+                hypothesis_type=HypothesisType.AUTH_FOLLOWUP,
+                target=normalized_url,
+                key=normalized_url,
+                rationale="Discovered authentication surface worth default-login and auth-bypass testing",
+                confidence=0.74,
+                evidence={"source": source},
+            )
+
+        if any(marker in path for marker in ("/admin", "/wp-admin", "/administrator", "/console", "/manage")):
+            await self.store.add_observation(
+                session,
+                observation_type=ObservationType.ADMIN_SURFACE,
+                target=normalized_url,
+                key=normalized_url,
+                value={"source": source},
+            )
+            await self.store.add_capability(
+                session,
+                capability_type=CapabilityType.ADMIN_SURFACE,
+                target=normalized_url,
+                key=normalized_url,
+                details={"source": source},
+            )
+            await self.store.add_hypothesis(
+                session,
+                hypothesis_type=HypothesisType.ADMIN_FOLLOWUP,
+                target=normalized_url,
+                key=normalized_url,
+                rationale="Admin surface discovered and should be checked for exposed panels and auth bypass",
+                confidence=0.86,
+                evidence={"source": source},
+            )
+
+        if "/api" in path or any(marker in normalized_url.lower() for marker in ("swagger", "graphql", "openapi")):
+            api_target = normalized_url if parsed.scheme and parsed.netloc else host
+            await self.store.add_observation(
+                session,
+                observation_type=ObservationType.API_SURFACE,
+                target=api_target,
+                key=api_target,
+                value={"source": source},
+            )
+            await self.store.add_capability(
+                session,
+                capability_type=CapabilityType.API_SURFACE,
+                target=api_target,
+                key=api_target,
+                details={"source": source},
+            )
+            await self.store.add_hypothesis(
+                session,
+                hypothesis_type=HypothesisType.API_LOGIC_FOLLOWUP,
+                target=api_target,
+                key=api_target,
+                rationale="API-like surface discovered and should receive targeted API/business-logic follow-up",
+                confidence=0.72,
+                evidence={"source": source},
+            )
+
+    @staticmethod
+    def _extract_urls(text: str) -> List[str]:
+        urls = [match.group(0).rstrip(").,;") for match in re.finditer(r'https?://[^\s"\'<>]+', text)]
+        seen = set()
+        ordered: List[str] = []
+        for url in urls:
+            if url in seen:
+                continue
+            seen.add(url)
+            ordered.append(url)
+        return ordered
+
+    @staticmethod
+    def _extract_technologies(text: str) -> List[str]:
+        corpus = text.lower()
+        known = [
+            "wordpress", "drupal", "joomla", "laravel", "django", "rails",
+            "nginx", "apache", "iis", "tomcat", "php", "react", "vue", "angular",
+        ]
+        detected = [tech for tech in known if tech in corpus]
+        seen = set()
+        ordered: List[str] = []
+        for tech in detected:
+            if tech in seen:
+                continue
+            seen.add(tech)
+            ordered.append(tech)
+        return ordered
+
+    @staticmethod
+    def _technology_followup(tech: str, target: str) -> Optional[Dict[str, str]]:
+        tech_lower = tech.lower()
+        if "wordpress" in tech_lower:
+            return {
+                "target": target,
+                "key": f"{target}:wordpress",
+                "rationale": "WordPress technology detected; run targeted WordPress follow-up",
+            }
+        if any(name in tech_lower for name in ("laravel", "django", "drupal", "joomla")):
+            return {
+                "target": target,
+                "key": f"{target}:{tech_lower}",
+                "rationale": f"{tech} detected; run targeted tech-specific CVE follow-up",
+            }
+        return None
+
+    @staticmethod
+    def _normalize_target(target: str) -> str:
+        if not target:
+            return target
+        return target.rstrip("/")
+
+    @staticmethod
+    def _extract_host(target: str) -> str:
+        if not target:
+            return ""
+        if "://" in target:
+            parsed = urlparse(target)
+            return (parsed.hostname or "").lower()
+        return target.split("/")[0].split(":")[0].lower()
 
     # ------------------------------------------------------------------
     # Prompt building

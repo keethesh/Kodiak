@@ -1,13 +1,21 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from kodiak.core.analyst import AnalystAgent
+from kodiak.core.analyst import AnalystAgent, AnalystResponse
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
-from kodiak.database.models import WorkUnit, WorkUnitStatus
+from kodiak.database.models import (
+    Hypothesis,
+    HypothesisStatus,
+    HypothesisType,
+    ObservationType,
+    WorkUnit,
+    WorkUnitStatus,
+)
 
 
 class RecordingStore:
@@ -213,3 +221,141 @@ async def test_claim_work_unit_serializes_same_scope_heavy_tool_families():
     assert claimed is allowed
     assert claimed.claimed_by == "worker-1"
     assert session.committed is True
+
+
+@pytest.mark.asyncio
+async def test_analyst_persists_structured_state_from_urls_and_tech():
+    calls = {"observations": [], "capabilities": [], "hypotheses": []}
+
+    class RecordingStructuredStore:
+        scan_id = uuid4()
+
+        async def add_observation(self, session, **kwargs):
+            calls["observations"].append(kwargs)
+
+        async def add_capability(self, session, **kwargs):
+            calls["capabilities"].append(kwargs)
+
+        async def add_hypothesis(self, session, **kwargs):
+            calls["hypotheses"].append(kwargs)
+
+    analyst = AnalystAgent(store=RecordingStructuredStore())
+    parsed = AnalystResponse(analysis="structured")
+    work_unit = WorkUnit(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        technique="httpx_primary",
+        targets_json=json.dumps(["https://app.example.com"]),
+        targets_hash="hash-1",
+        command_template="httpx ...",
+        status=WorkUnitStatus.COMPLETED,
+        result_stdout=(
+            "https://app.example.com/login [200]\n"
+            "https://app.example.com/admin [403]\n"
+            "https://app.example.com/api/users?id=7\n"
+            "WordPress Apache"
+        ),
+        result_stderr="",
+    )
+
+    await analyst._persist_structured_state(object(), parsed, [work_unit])
+
+    observation_types = {call["observation_type"] for call in calls["observations"]}
+    capability_types = {call["capability_type"] for call in calls["capabilities"]}
+    hypothesis_types = {call["hypothesis_type"] for call in calls["hypotheses"]}
+
+    assert ObservationType.PARAMETERIZED_URL in observation_types
+    assert ObservationType.LOGIN_SURFACE in observation_types
+    assert ObservationType.ADMIN_SURFACE in observation_types
+    assert ObservationType.API_SURFACE in observation_types
+    assert ObservationType.TECHNOLOGY in observation_types
+    assert hypothesis_types >= {
+        HypothesisType.INJECTION_FOLLOWUP,
+        HypothesisType.AUTH_FOLLOWUP,
+        HypothesisType.ADMIN_FOLLOWUP,
+        HypothesisType.API_LOGIC_FOLLOWUP,
+        HypothesisType.TECH_FOLLOWUP,
+    }
+    assert capability_types
+
+
+@pytest.mark.asyncio
+async def test_planner_processes_pending_hypotheses_into_followup_work(monkeypatch):
+    class HypothesisStore(RecordingStore):
+        def __init__(self):
+            super().__init__()
+            self.marked = []
+            self.hypotheses = [
+                Hypothesis(
+                    scan_id=self.scan_id,
+                    project_id=uuid4(),
+                    type=HypothesisType.INJECTION_FOLLOWUP,
+                    target="https://app.example.com/items?id=7",
+                    key="inj-1",
+                    rationale="parameterized URL",
+                    confidence=0.8,
+                    status=HypothesisStatus.PENDING,
+                ),
+                Hypothesis(
+                    scan_id=self.scan_id,
+                    project_id=uuid4(),
+                    type=HypothesisType.ADMIN_FOLLOWUP,
+                    target="https://app.example.com/admin",
+                    key="admin-1",
+                    rationale="admin surface",
+                    confidence=0.8,
+                    status=HypothesisStatus.PENDING,
+                ),
+            ]
+
+        async def get_hypotheses(self, session, statuses=None, limit=100):
+            return list(self.hypotheses)
+
+        async def mark_hypothesis_status(self, session, hypothesis_ids, status):
+            self.marked.append((tuple(hypothesis_ids), status))
+
+    store = HypothesisStore()
+    planner = PlannerAgent(store=store, target="https://example.com")
+
+    async def fake_get_session():
+        yield object()
+
+    monkeypatch.setattr("kodiak.core.planner.get_session", fake_get_session)
+
+    await planner._process_hypotheses()
+
+    techniques = {call["technique"] for call in store.enqueued}
+    assert "hypothesis_sqlmap_followup" in techniques
+    assert "hypothesis_admin_surface_followup" in techniques
+    assert store.marked[0][1] == HypothesisStatus.QUEUED
+
+
+@pytest.mark.asyncio
+async def test_planner_refreshes_local_state_from_observations(monkeypatch):
+    store = SimpleNamespace(
+        scan_id=uuid4(),
+        get_observations=None,
+    )
+    planner = PlannerAgent(store=store, target="https://example.com")
+
+    observations = [
+        SimpleNamespace(type=ObservationType.LIVE_HTTP, target="https://api.example.com", key="https://api.example.com"),
+        SimpleNamespace(type=ObservationType.PARAMETERIZED_URL, target="https://api.example.com/users?id=1", key="https://api.example.com/users?id=1"),
+        SimpleNamespace(type=ObservationType.TECHNOLOGY, target="https://api.example.com", key="wordpress"),
+    ]
+
+    async def get_observations(session, limit=250):
+        return observations
+
+    store.get_observations = get_observations
+
+    async def fake_get_session():
+        yield object()
+
+    monkeypatch.setattr("kodiak.core.planner.get_session", fake_get_session)
+
+    await planner._refresh_state_from_store()
+
+    assert planner._live_http_origins["api.example.com"] == "https://api.example.com"
+    assert "https://api.example.com/users?id=1" in planner._parameterized_urls
+    assert "wordpress" in planner._detected_techs["https://api.example.com"]

@@ -21,12 +21,19 @@ from sqlmodel import select
 
 from kodiak.database.models import (
     Attempt,
+    Capability,
+    CapabilityType,
     Directive,
     DirectiveType,
     EngagementNote,
     Finding,
     FindingSeverity,
+    Hypothesis,
+    HypothesisStatus,
+    HypothesisType,
     NoteCategory,
+    Observation,
+    ObservationType,
     WorkUnit,
     WorkUnitStatus,
 )
@@ -365,6 +372,254 @@ class SharedScanStore:
             return 0
 
     # ------------------------------------------------------------------
+    # Observations / Capabilities / Hypotheses
+    # ------------------------------------------------------------------
+
+    async def add_observation(
+        self,
+        session: AsyncSession,
+        *,
+        observation_type: ObservationType,
+        target: str,
+        key: str,
+        value: Dict[str, Any],
+    ) -> Optional[Observation]:
+        """Persist a typed observation if it does not already exist."""
+        observation = Observation(
+            scan_id=self.scan_id,
+            project_id=self.project_id,
+            type=observation_type,
+            target=target,
+            key=key,
+            value=value,
+        )
+        try:
+            session.add(observation)
+            await session.commit()
+            await session.refresh(observation)
+            return observation
+        except IntegrityError:
+            await session.rollback()
+            existing = (
+                await session.execute(
+                    select(Observation).where(
+                        Observation.scan_id == self.scan_id,
+                        Observation.type == observation_type,
+                        Observation.target == target,
+                        Observation.key == key,
+                    )
+                )
+            ).scalar_one_or_none()
+            return existing
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Failed to add observation: {e}")
+            return None
+
+    async def get_observations(
+        self,
+        session: AsyncSession,
+        *,
+        observation_type: ObservationType | None = None,
+        limit: int = 100,
+    ) -> List[Observation]:
+        try:
+            stmt = select(Observation).where(Observation.scan_id == self.scan_id)
+            if observation_type is not None:
+                stmt = stmt.where(Observation.type == observation_type)
+            stmt = stmt.order_by(Observation.created_at.desc()).limit(limit)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+        except SQLAlchemyError:
+            return []
+
+    async def add_capability(
+        self,
+        session: AsyncSession,
+        *,
+        capability_type: CapabilityType,
+        target: str,
+        key: str,
+        details: Dict[str, Any],
+    ) -> Optional[Capability]:
+        """Persist or update a capability."""
+        try:
+            existing = (
+                await session.execute(
+                    select(Capability).where(
+                        Capability.scan_id == self.scan_id,
+                        Capability.type == capability_type,
+                        Capability.target == target,
+                        Capability.key == key,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing:
+                existing.details = details
+                existing.updated_at = datetime.now(timezone.utc)
+                session.add(existing)
+                await session.commit()
+                await session.refresh(existing)
+                return existing
+        except SQLAlchemyError:
+            await session.rollback()
+
+        capability = Capability(
+            scan_id=self.scan_id,
+            project_id=self.project_id,
+            type=capability_type,
+            target=target,
+            key=key,
+            details=details,
+        )
+        try:
+            session.add(capability)
+            await session.commit()
+            await session.refresh(capability)
+            return capability
+        except IntegrityError:
+            await session.rollback()
+            return (
+                await session.execute(
+                    select(Capability).where(
+                        Capability.scan_id == self.scan_id,
+                        Capability.type == capability_type,
+                        Capability.target == target,
+                        Capability.key == key,
+                    )
+                )
+            ).scalar_one_or_none()
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Failed to add capability: {e}")
+            return None
+
+    async def get_capabilities(
+        self,
+        session: AsyncSession,
+        *,
+        capability_type: CapabilityType | None = None,
+        limit: int = 100,
+    ) -> List[Capability]:
+        try:
+            stmt = select(Capability).where(Capability.scan_id == self.scan_id)
+            if capability_type is not None:
+                stmt = stmt.where(Capability.type == capability_type)
+            stmt = stmt.order_by(Capability.updated_at.desc()).limit(limit)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+        except SQLAlchemyError:
+            return []
+
+    async def add_hypothesis(
+        self,
+        session: AsyncSession,
+        *,
+        hypothesis_type: HypothesisType,
+        target: str,
+        key: str,
+        rationale: str,
+        confidence: float = 0.5,
+        evidence: Dict[str, Any] | None = None,
+        status: HypothesisStatus = HypothesisStatus.PENDING,
+    ) -> Optional[Hypothesis]:
+        """Persist or update a hypothesis."""
+        try:
+            existing = (
+                await session.execute(
+                    select(Hypothesis).where(
+                        Hypothesis.scan_id == self.scan_id,
+                        Hypothesis.type == hypothesis_type,
+                        Hypothesis.target == target,
+                        Hypothesis.key == key,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing:
+                if existing.status in {HypothesisStatus.RESOLVED, HypothesisStatus.DISMISSED}:
+                    return existing
+                existing.rationale = rationale
+                existing.confidence = confidence
+                existing.evidence = evidence or {}
+                existing.updated_at = datetime.now(timezone.utc)
+                session.add(existing)
+                await session.commit()
+                await session.refresh(existing)
+                return existing
+        except SQLAlchemyError:
+            await session.rollback()
+
+        hypothesis = Hypothesis(
+            scan_id=self.scan_id,
+            project_id=self.project_id,
+            type=hypothesis_type,
+            target=target,
+            key=key,
+            rationale=rationale,
+            confidence=confidence,
+            evidence=evidence or {},
+            status=status,
+        )
+        try:
+            session.add(hypothesis)
+            await session.commit()
+            await session.refresh(hypothesis)
+            return hypothesis
+        except IntegrityError:
+            await session.rollback()
+            return (
+                await session.execute(
+                    select(Hypothesis).where(
+                        Hypothesis.scan_id == self.scan_id,
+                        Hypothesis.type == hypothesis_type,
+                        Hypothesis.target == target,
+                        Hypothesis.key == key,
+                    )
+                )
+            ).scalar_one_or_none()
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Failed to add hypothesis: {e}")
+            return None
+
+    async def get_hypotheses(
+        self,
+        session: AsyncSession,
+        *,
+        statuses: Sequence[HypothesisStatus] | None = None,
+        limit: int = 100,
+    ) -> List[Hypothesis]:
+        try:
+            stmt = select(Hypothesis).where(Hypothesis.scan_id == self.scan_id)
+            if statuses:
+                stmt = stmt.where(Hypothesis.status.in_(list(statuses)))
+            stmt = stmt.order_by(Hypothesis.confidence.desc(), Hypothesis.updated_at.desc()).limit(limit)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+        except SQLAlchemyError:
+            return []
+
+    async def mark_hypothesis_status(
+        self,
+        session: AsyncSession,
+        hypothesis_ids: List[UUID],
+        status: HypothesisStatus,
+    ) -> None:
+        if not hypothesis_ids:
+            return
+        try:
+            stmt = select(Hypothesis).where(Hypothesis.id.in_(hypothesis_ids))
+            result = await session.execute(stmt)
+            for hypothesis in result.scalars().all():
+                hypothesis.status = status
+                hypothesis.updated_at = datetime.now(timezone.utc)
+                session.add(hypothesis)
+            await session.commit()
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Failed to update hypothesis status: {e}")
+
+    # ------------------------------------------------------------------
     # Findings (both Analyst and legacy Manager can write)
     # ------------------------------------------------------------------
 
@@ -545,6 +800,12 @@ class SharedScanStore:
         """Build a compact summary of scan state for LLM prompts."""
         findings = await self.get_findings(session, limit=50)
         notes = await self.get_notes(session, limit=50)
+        capabilities = await self.get_capabilities(session, limit=25)
+        hypotheses = await self.get_hypotheses(
+            session,
+            statuses=[HypothesisStatus.PENDING, HypothesisStatus.QUEUED],
+            limit=25,
+        )
 
         # Count work units by status
         try:
@@ -583,6 +844,21 @@ class SharedScanStore:
             lines.append("  Recent intelligence:")
             for n in notes[:15]:
                 lines.append(f"    [{n.category}] ({n.target}) {n.content[:120]}")
+
+        if capabilities:
+            lines.append("  Capabilities:")
+            for capability in capabilities[:10]:
+                lines.append(
+                    f"    [{capability.type}] ({capability.target}) {capability.key}"
+                )
+
+        if hypotheses:
+            lines.append("  Active hypotheses:")
+            for hypothesis in hypotheses[:10]:
+                lines.append(
+                    f"    [{hypothesis.status}] {hypothesis.type} -> {hypothesis.target} "
+                    f"(confidence={hypothesis.confidence:.2f})"
+                )
 
         lines.append("</scan_state>")
         return "\n".join(lines)
