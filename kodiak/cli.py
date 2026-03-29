@@ -211,13 +211,21 @@ def scan(
         console.print(f"📋 [bold]Instructions:[/bold] {instructions}")
         if project:
             console.print(f"📁 [bold]Project:[/bold] {project} [dim](prior knowledge will be loaded if project exists)[/dim]")
-        console.print(f"👤 [bold]Architecture:[/bold] Manager-Worker (single brain, parallel tools)")
+        architecture_label = (
+            f"Multi-Agent Pipeline ({settings.multi_agent_workers} workers, planner + analyst)"
+            if settings.multi_agent
+            else "Manager-Worker (single brain, parallel tools)"
+        )
+        console.print(f"👤 [bold]Architecture:[/bold] {architecture_label}")
         scheduler_mode = bool(event_scheduler)
         console.print(f"📡 [bold]Event Scheduler:[/bold] {'enabled' if scheduler_mode else 'disabled'}")
         if agents is not None:
-            console.print("[yellow]Note: --agents is ignored in Manager-Worker mode.[/yellow]")
+            if settings.multi_agent:
+                console.print("[yellow]Note: --agents is currently ignored; worker count comes from KODIAK_MULTI_AGENT_WORKERS.[/yellow]")
+            else:
+                console.print("[yellow]Note: --agents is ignored in Manager-Worker mode.[/yellow]")
         if role_strategy != "role-hinted":
-            console.print("[yellow]Note: --role-strategy is ignored in Manager-Worker mode.[/yellow]")
+            console.print("[yellow]Note: --role-strategy is currently ignored by the active scan runtime.[/yellow]")
         console.print(f"📝 [bold]Report:[/bold] format={report_format} path={report_path or settings.report_output_path}")
         console.print("")
         

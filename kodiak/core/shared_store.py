@@ -216,6 +216,9 @@ class SharedScanStore:
             )
             result = await session.execute(stmt)
             unit = None
+            claimed_id: Optional[UUID] = None
+            claimed_targets: List[str] = []
+            claimed_technique = ""
             claim_started_at = datetime.now(timezone.utc)
             for candidate in result.scalars().all():
                 family = _tool_family(candidate.technique, candidate.command_template or "")
@@ -239,13 +242,16 @@ class SharedScanStore:
                 claim_result = await session.execute(claim_stmt)
                 if (claim_result.rowcount or 0) == 1:
                     unit = candidate
+                    claimed_id = candidate.id
+                    claimed_technique = candidate.technique
+                    claimed_targets = json.loads(candidate.targets_json or "[]")
                     break
                 await session.rollback()
             if unit is None:
                 return None
 
             await session.commit()
-            refresh_stmt = select(WorkUnit).where(WorkUnit.id == unit.id)
+            refresh_stmt = select(WorkUnit).where(WorkUnit.id == claimed_id)
             refreshed = await session.execute(refresh_stmt)
             unit = refreshed.scalar_one_or_none()
             if unit is None:
@@ -254,11 +260,11 @@ class SharedScanStore:
                 session,
                 event_type=ScanEventType.WORK_UNIT_CLAIMED,
                 entity_type="work_unit",
-                entity_id=str(unit.id),
+                entity_id=str(claimed_id),
                 payload={
-                    "technique": unit.technique,
+                    "technique": claimed_technique,
                     "worker_id": worker_id,
-                    "targets": json.loads(unit.targets_json),
+                    "targets": claimed_targets,
                 },
             )
             return unit
@@ -289,8 +295,11 @@ class SharedScanStore:
             unit.result_stderr = stderr
             unit.exit_code = exit_code
             unit.completed_at = datetime.now(timezone.utc)
+            completed_targets = json.loads(unit.targets_json or "[]")
+            completed_technique = unit.technique
             session.add(unit)
             await session.commit()
+            await session.refresh(unit)
             await self.append_event(
                 session,
                 event_type=(
@@ -301,10 +310,10 @@ class SharedScanStore:
                 entity_type="work_unit",
                 entity_id=str(unit.id),
                 payload={
-                    "technique": unit.technique,
+                    "technique": completed_technique,
                     "status": str(status),
                     "exit_code": exit_code,
-                    "targets": json.loads(unit.targets_json),
+                    "targets": completed_targets,
                 },
             )
         except SQLAlchemyError as e:

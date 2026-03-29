@@ -468,6 +468,51 @@ async def test_analyst_derives_waf_followup_directives():
 
 
 @pytest.mark.asyncio
+async def test_analyst_strips_ansi_sequences_from_discovered_urls():
+    calls = {"observations": []}
+
+    class StructuredStore:
+        scan_id = uuid4()
+
+        async def add_observation(self, session, **kwargs):
+            calls["observations"].append(kwargs)
+
+        async def add_capability(self, session, **kwargs):
+            return None
+
+        async def add_hypothesis(self, session, **kwargs):
+            return None
+
+        async def add_directive(self, session, **kwargs):
+            return None
+
+    analyst = AnalystAgent(store=StructuredStore())
+    parsed = AnalystResponse(analysis="ansi-safe")
+    work_unit = WorkUnit(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        technique="httpx_primary",
+        targets_json=json.dumps(["https://priceguru.mu"]),
+        targets_hash="hash-ansi",
+        command_template="httpx ...",
+        status=WorkUnitStatus.COMPLETED,
+        result_stdout="https://priceguru.mu\x1b[0m/login [403]",
+        result_stderr="",
+    )
+
+    await analyst._persist_structured_state(object(), parsed, [work_unit])
+
+    live_http_targets = {
+        call["target"]
+        for call in calls["observations"]
+        if call["observation_type"] == ObservationType.LIVE_HTTP
+    }
+
+    assert "https://priceguru.mu/login" in live_http_targets
+    assert all("\x1b" not in target for target in live_http_targets)
+
+
+@pytest.mark.asyncio
 async def test_planner_processes_pending_hypotheses_into_followup_work(monkeypatch):
     class HypothesisStore(RecordingStore):
         def __init__(self):

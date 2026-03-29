@@ -38,6 +38,9 @@ from kodiak.database.models import (
 from kodiak.services import llm
 from kodiak.services.gemini_client import GeminiClient
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
 
 # ---------------------------------------------------------------------------
 # Analyst-specific response schema
@@ -415,9 +418,9 @@ class AnalystAgent:
         """Persist deterministic observations, capabilities, and hypotheses."""
         for unit in work_units:
             targets = json.loads(unit.targets_json) if unit.targets_json else []
-            combined_output = "\n".join(
+            combined_output = self._clean_text("\n".join(
                 part for part in [unit.result_stdout or "", unit.result_stderr or ""] if part
-            )
+            ))
 
             for target in targets:
                 normalized_target = self._normalize_target(target)
@@ -756,7 +759,8 @@ class AnalystAgent:
 
     @staticmethod
     def _extract_urls(text: str) -> List[str]:
-        urls = [match.group(0).rstrip(").,;") for match in re.finditer(r'https?://[^\s"\'<>]+', text)]
+        cleaned_text = AnalystAgent._clean_text(text)
+        urls = [match.group(0).rstrip(").,;") for match in re.finditer(r'https?://[^\s"\'<>]+', cleaned_text)]
         seen = set()
         ordered: List[str] = []
         for url in urls:
@@ -804,7 +808,15 @@ class AnalystAgent:
     def _normalize_target(target: str) -> str:
         if not target:
             return target
-        return target.rstrip("/")
+        cleaned = AnalystAgent._clean_text(target).strip().strip("'\"")
+        return cleaned.rstrip("/")
+
+    @staticmethod
+    def _clean_text(value: str) -> str:
+        if not value:
+            return value
+        without_ansi = _ANSI_ESCAPE_RE.sub("", value)
+        return _CONTROL_CHAR_RE.sub("", without_ansi)
 
     @staticmethod
     def _extract_host(target: str) -> str:
