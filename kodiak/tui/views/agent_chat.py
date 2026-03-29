@@ -108,6 +108,8 @@ class AgentChatScreen(Screen):
         
         # Subscribe to agent status changes
         app_state.subscribe("agent_status_changed", self._on_agent_status_changed)
+        app_state.subscribe("current_scan_changed", lambda _: self._refresh_agent_context())
+        app_state.subscribe("scan_projection_updated", lambda _: self._refresh_agent_context())
     
     def _load_agent_list(self):
         """Load the list of agents for navigation"""
@@ -118,6 +120,13 @@ class AgentChatScreen(Screen):
             # Find current agent index
             if self.agent_id in self.agent_ids:
                 self.current_agent_index = self.agent_ids.index(self.agent_id)
+
+    def _refresh_agent_context(self):
+        """Reload available agents after scan/projection changes."""
+        self._load_agent_list()
+        if self.agent_ids and self.agent_id not in self.agent_ids:
+            self.agent_id = self.agent_ids[0]
+        self._update_agent_header()
     
     def _update_agent_header(self):
         """Update the agent header display"""

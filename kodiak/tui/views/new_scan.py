@@ -3,6 +3,7 @@ New Scan — Modal screen overlay for creating a new scan.
 """
 
 import re
+import asyncio
 from typing import Optional
 from datetime import datetime
 from uuid import uuid4
@@ -15,7 +16,7 @@ from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Static
 from textual.validation import Validator, ValidationResult
 from loguru import logger
 
-from kodiak.tui.state import app_state, ProjectState, ScanState, ScanStatus
+from kodiak.tui.state import app_state, ProjectState, ScanStatus
 
 
 class TargetValidator(Validator):
@@ -257,47 +258,90 @@ class NewScanModal(ModalScreen):
                 err.update("⚠ Project name is required")
                 self.query_one("#input-project-name", Input).focus()
                 return
-            # Create project in state (core_bridge will persist it)
-            from kodiak.database.models import Project
-            from datetime import timezone
-            new_proj = Project(name=project_name)
-            project_id = str(new_proj.id)
-            project_state = ProjectState(
-                id=project_id,
-                name=project_name,
-                description="",
-                target=target,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            )
-            app_state.add_project_state(project_state)
 
         # Kick off scan via core_bridge
         cb = self.app.core_bridge
         if cb:
-            self.app.call_later(
-                cb.create_scan,
-                project_id,
-                f"Scan {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                target,
-                1,      # Always 1 agent
-                instructions,
+            asyncio.create_task(
+                self._create_and_start_scan(
+                    cb=cb,
+                    project_id=project_id if use_existing else None,
+                    project_name=project_name,
+                    target=target,
+                    instructions=instructions,
+                )
             )
         else:
-            # Fallback: create scan in state only (no DB)
-            scan_id = str(uuid4())
-            from kodiak.tui.state import ScanState, ScanStatus, AgentState, AgentStatus
-            scan_state = ScanState(
-                id=scan_id,
-                project_id=str(project_id),
-                name=f"Scan {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                target=target,
-                status=ScanStatus.PENDING,
-                agent_count=1,
-                created_at=datetime.now(),
+            self._create_local_scan(
+                project_id,
             )
-            app_state.add_scan_state(scan_state)
-            app_state.set_current_scan(scan_id)
 
         self.notify("Scan queued — check Dashboard for status", timeout=4)
         self.dismiss()
+
+    async def _create_and_start_scan(
+        self,
+        cb,
+        project_id: Optional[str],
+        project_name: str,
+        target: str,
+        instructions: str,
+    ) -> None:
+        """Persist project/scan via the core bridge, then start the scan."""
+        try:
+            resolved_project_id = project_id
+            if not resolved_project_id:
+                resolved_project_id = await cb.create_project(project_name, target=target)
+            if not resolved_project_id:
+                self.notify("Project creation failed", severity="error", timeout=4)
+                return
+
+            scan_name = f"Scan {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            scan_id = await cb.create_scan(
+                resolved_project_id,
+                scan_name,
+                target,
+                1,
+                instructions,
+            )
+            if not scan_id:
+                self.notify("Scan creation failed", severity="error", timeout=4)
+                return
+
+            app_state.set_current_project(str(resolved_project_id))
+            app_state.set_current_scan(scan_id)
+            started = await cb.start_scan(scan_id)
+            if not started:
+                self.notify("Scan start failed", severity="error", timeout=4)
+        except Exception as exc:
+            logger.error(f"Failed to create/start scan from modal: {exc}")
+            self.notify("Scan setup failed", severity="error", timeout=4)
+
+    def _create_local_scan(self, project_id: str, target: str) -> None:
+        """Fallback path when the core bridge is unavailable."""
+        scan_id = str(uuid4())
+        from kodiak.tui.state import ScanState
+
+        if not app_state.get_project(str(project_id)):
+            project_state = ProjectState(
+                id=str(project_id),
+                name=f"Project {target}",
+                description="",
+                target=target,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+            app_state.add_project_state(project_state)
+
+        scan_state = ScanState(
+            id=scan_id,
+            project_id=str(project_id),
+            name=f"Scan {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            target=target,
+            status=ScanStatus.PENDING,
+            agent_count=1,
+            created_at=datetime.now(),
+        )
+        app_state.add_scan_state(scan_state)
+        app_state.set_current_project(str(project_id))
+        app_state.set_current_scan(scan_id)

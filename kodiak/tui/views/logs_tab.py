@@ -132,6 +132,7 @@ class LogsView(Static):
 
         app_state.subscribe("agent_status_changed", lambda _: self._refresh_agent_bar())
         app_state.subscribe("scan_status_changed",  lambda _: self._refresh_all())
+        app_state.subscribe("scan_projection_updated", lambda _: self._refresh_all())
 
     def _setup_tool_table(self) -> None:
         t = self.query_one("#tool-table", DataTable)
@@ -201,8 +202,11 @@ class LogsView(Static):
             log_widget.write("[dim]No scan running[/dim]")
             return
 
-        # Activity log entries stored on scan or fetched from DB-backed state
-        for entry in getattr(scan, "activity_log", []):
+        entries = list(getattr(scan, "activity_log", []) or [])
+        if not entries:
+            entries = self._entries_from_projection(scan)
+
+        for entry in entries:
             level = getattr(entry, "level", "INFO").upper()
             msg   = getattr(entry, "message", "")
             src   = getattr(entry, "source", "")
@@ -224,7 +228,9 @@ class LogsView(Static):
         if not scan:
             return
 
-        tools_run = getattr(scan, "tools_run", [])
+        tools_run = list(getattr(scan, "tools_run", []) or [])
+        if not tools_run:
+            tools_run = self._tool_rows_from_projection(scan)
         for rec in reversed(tools_run):  # most recent first
             tool   = getattr(rec, "tool",   "?")[:14]
             target = getattr(rec, "target", "?")[:18]
@@ -244,7 +250,9 @@ class LogsView(Static):
         if not scan:
             return
 
-        notes = getattr(scan, "engagement_notes", [])
+        notes = list(getattr(scan, "engagement_notes", []) or [])
+        if not notes:
+            notes = self._notes_from_projection(scan)
         if not notes:
             notes_widget.write("[dim]No engagement notes yet[/dim]")
             return
@@ -277,3 +285,63 @@ class LogsView(Static):
         log_widget.write(
             f"[dim]{ts_s}[/dim]  {mk}[{level.upper()}]{end}  {src_part}{message}"
         )
+
+    def _entries_from_projection(self, scan):
+        entries = []
+        for event in getattr(scan, "recent_events", []) or []:
+            payload = event.get("payload", {}) or {}
+            msg = payload.get("content") or payload.get("message") or payload.get("summary")
+            if not msg:
+                msg = f"{event.get('type', 'event').replace('_', ' ')}"
+            entries.append(
+                type(
+                    "ProjectionLogEntry",
+                    (),
+                    {
+                        "level": "INFO" if "failed" not in event.get("type", "") else "ERROR",
+                        "message": str(msg),
+                        "source": payload.get("tool") or event.get("entity_type", "scan"),
+                        "timestamp": None,
+                    },
+                )()
+            )
+        return entries
+
+    def _tool_rows_from_projection(self, scan):
+        rows = []
+        for event in getattr(scan, "recent_events", []) or []:
+            if event.get("type") != "attempt_recorded":
+                continue
+            payload = event.get("payload", {}) or {}
+            rows.append(
+                type(
+                    "ProjectionToolRow",
+                    (),
+                    {
+                        "tool": str(payload.get("tool", "?")),
+                        "target": str(payload.get("target", "?")),
+                        "status": str(payload.get("status", "?")),
+                        "timestamp": payload.get("created_at"),
+                    },
+                )()
+            )
+        return rows
+
+    def _notes_from_projection(self, scan):
+        rows = []
+        for event in getattr(scan, "recent_events", []) or []:
+            if event.get("type") != "note_added":
+                continue
+            payload = event.get("payload", {}) or {}
+            rows.append(
+                type(
+                    "ProjectionNote",
+                    (),
+                    {
+                        "category": payload.get("category", "general"),
+                        "content": payload.get("content", ""),
+                        "target": payload.get("target", ""),
+                    },
+                )()
+            )
+        return rows
