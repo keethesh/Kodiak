@@ -469,6 +469,16 @@ class ManagerAgent:
                     await self._persist_command_attempt(session, project_id, scan_id, event.result)
                     self._record_command_result_to_scan_state(event.result)
                     history.append({"role": "user", "content": self._format_command_results([event.result])})
+                    if event.result.exit_code == 137:
+                        history.append({
+                            "role": "user",
+                            "content": (
+                                "<oom_warning>A tool was OOM-killed (exit 137). "
+                                "Immediately reduce concurrency: add -c 5 -rl 10 to nuclei, "
+                                "-t 3 to ffuf, --threads 2 to gau. "
+                                "Do NOT launch additional heavy tools until memory pressure is relieved.</oom_warning>"
+                            ),
+                        })
                 else:
                     history.append({
                         "role": "user",
@@ -675,14 +685,11 @@ class ManagerAgent:
             elif action.type == ActionType.COMPLETE:
                 phase_action = PhaseAction.COMPLETE
             elif action.type == ActionType.WRITE_FILE and action.target_path.strip() and action.content:
-                import base64
-                import shlex
-                b64_content = base64.b64encode(action.content.encode("utf-8")).decode("utf-8")
-                target_path = shlex.quote(action.target_path.strip())
-                bash_cmd = f"echo {b64_content} | base64 -d > {target_path}"
+                target_path = action.target_path.strip()
                 write_tasks.append(
                     CommandTask(
-                        command=bash_cmd,
+                        command=f"cat > {target_path}",
+                        stdin=action.content,
                         rationale=action.rationale or f"Write file to {target_path}",
                         timeout=max(1, int(action.timeout or 30)),
                     )
@@ -994,7 +1001,7 @@ class ManagerAgent:
             "6. PERSIST: If a tool finds nothing, shift tactics — try a different tool, alternative technique, or manual probe.",
             "   Absence of automated findings ≠ absence of vulnerabilities.",
             "",
-            "If <prior_knowledge> is present, treat attack_hint targets as highest priority.",
+            "If prior knowledge is present, treat attack_hint targets as highest priority.",
             "Known hosts with attack_hints often have sibling vulnerabilities.",
             "</instructions>",
             "",

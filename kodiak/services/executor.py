@@ -141,9 +141,12 @@ class DockerExecutor(ServiceExecutor):
         work_dir = os.path.abspath(cwd) if cwd else os.getcwd()
         
         # Build docker run command
+        from kodiak.core.config import settings as kodiak_settings
         docker_cmd = [
             "docker", "run",
             "--rm",  # Remove container after execution
+            "--memory", kodiak_settings.docker_memory_limit,
+            "--cpus", str(kodiak_settings.docker_cpu_limit),
         ]
 
         # Add only the capabilities that are actually needed instead of --privileged.
@@ -221,9 +224,12 @@ class DockerExecutor(ServiceExecutor):
         """
         work_dir = os.path.abspath(cwd) if cwd else os.getcwd()
         
+        from kodiak.core.config import settings as kodiak_settings
         docker_cmd = [
             "docker", "run",
             "--rm",
+            "--memory", kodiak_settings.docker_memory_limit,
+            "--cpus", str(kodiak_settings.docker_cpu_limit),
             "-v", f"{work_dir}:/workspace",
             "-w", "/workspace",
         ]

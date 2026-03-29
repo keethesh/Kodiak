@@ -88,6 +88,8 @@ class KodiakSettings(BaseSettings):
     blackboard_context_max_chars: int = Field(default=2000, alias="KODIAK_BLACKBOARD_CONTEXT_MAX_CHARS")
     report_output_path: str = Field(default=str(Path.home() / ".kodiak" / "reports"), alias="KODIAK_REPORT_PATH")
     toolbox_image: str = Field(default="ghcr.io/keethesh/kodiak-toolbox:latest", alias="KODIAK_TOOLBOX_IMAGE")
+    docker_memory_limit: str = Field(default="2g", alias="KODIAK_DOCKER_MEMORY")
+    docker_cpu_limit: float = Field(default=2.0, alias="KODIAK_DOCKER_CPUS")
 
     model_config = SettingsConfigDict(
         env_file=[

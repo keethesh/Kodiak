@@ -8,6 +8,7 @@ arrive, while preserving bounded concurrency.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -16,6 +17,13 @@ from loguru import logger
 
 from kodiak.api.events import TUIEventManager
 from kodiak.core.worker import CommandResult, CommandTask, execute_command
+
+
+# Tools that are memory/CPU-intensive and must be capped separately.
+_HEAVY_TOOLS = frozenset({
+    "nuclei", "ffuf", "katana", "gau", "sqlmap",
+    "nmap", "commix", "wpscan", "hydra",
+})
 
 
 @dataclass
@@ -53,7 +61,9 @@ class EventDrivenScheduler:
         scan_id: Optional[str] = None,
         agent_id: str = "manager",
     ) -> None:
+        from kodiak.core.config import settings
         self._sem = asyncio.Semaphore(max(1, int(global_concurrency)))
+        self._heavy_sem = asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit))
         self._event_manager = event_manager
         self._scan_id = scan_id
         self._agent_id = agent_id
@@ -138,32 +148,34 @@ class EventDrivenScheduler:
         result: Optional[CommandResult] = None
 
         try:
-            async with self._sem:
-                started = True
-                self._states[task_id] = "running"
+            heavy_ctx = self._heavy_sem if tool in _HEAVY_TOOLS else contextlib.nullcontext()
+            async with heavy_ctx:
+                async with self._sem:
+                    started = True
+                    self._states[task_id] = "running"
 
-                if self._event_manager:
-                    try:
-                        await self._event_manager.emit_tool_start(
-                            tool_name=tool,
-                            target=task.command[:80],
-                            agent_id=self._agent_id,
-                            scan_id=self._scan_id,
+                    if self._event_manager:
+                        try:
+                            await self._event_manager.emit_tool_start(
+                                tool_name=tool,
+                                target=task.command[:80],
+                                agent_id=self._agent_id,
+                                scan_id=self._scan_id,
+                            )
+                        except Exception:
+                            pass
+
+                    await self._emit_event(
+                        SchedulerEvent(
+                            event_type="task_started",
+                            task_id=task_id,
+                            tool=tool,
+                            command=task.command,
+                            status="running",
                         )
-                    except Exception:
-                        pass
-
-                await self._emit_event(
-                    SchedulerEvent(
-                        event_type="task_started",
-                        task_id=task_id,
-                        tool=tool,
-                        command=task.command,
-                        status="running",
                     )
-                )
 
-                result = await execute_command(task, self._sem)
+                    result = await execute_command(task, self._sem)
 
             if result.timed_out:
                 event_type = "task_timeout"

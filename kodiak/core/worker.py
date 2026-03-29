@@ -29,6 +29,7 @@ class CommandTask:
     rationale: str
     timeout: int = 600
     task_id: str = field(default_factory=lambda: uuid4().hex[:12])
+    stdin: Optional[str] = None
 
 
 @dataclass
@@ -108,24 +109,32 @@ async def execute_command(
         # timeout.  Replicate the executor's docker command construction
         # but manage the process lifecycle ourselves.
         import os
+        from kodiak.core.config import settings
         work_dir = os.getcwd()
         docker_cmd = [
             "docker", "run", "--rm",
+            "--memory", settings.docker_memory_limit,
+            "--cpus", str(settings.docker_cpu_limit),
             "-v", f"{work_dir}:/workspace",
             "-w", "/workspace",
+        ]
+        if task.stdin is not None:
+            docker_cmd.append("-i")
+        docker_cmd.extend([
             executor.image,
             "bash", "-c", task.command,
-        ]
+        ])
 
         process = await asyncio.create_subprocess_exec(
             *docker_cmd,
+            stdin=asyncio.subprocess.PIPE if task.stdin is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
+                process.communicate(input=task.stdin.encode() if task.stdin is not None else None),
                 timeout=task.timeout,
             )
             elapsed = time.monotonic() - t0
