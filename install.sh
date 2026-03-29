@@ -15,6 +15,7 @@ DRY_RUN="${DRY_RUN:-false}"
 VERBOSE="${VERBOSE:-false}"
 INSTALL_LOG="${INSTALL_LOG:-/tmp/kodiak-install.log}"
 TOOLBOX_IMAGE="ghcr.io/keethesh/kodiak-toolbox:latest"
+INSTALL_STATE_FILE="$INSTALL_DIR/install-state.env"
 
 # Colors and text effects
 RED='\033[0;31m'
@@ -180,8 +181,51 @@ show_help() {
     print_item "$0"
     print_item "$0 --version v1.0"
     print_item "$0 --force"
+    print_item "$0 --update"
     print_item "$0 --dry-run"
     print_blank
+}
+
+save_install_state() {
+    local install_method="$1"
+    local source_dir="${2:-}"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        print_command "cat > \"$INSTALL_STATE_FILE\" <<'EOF' ... EOF"
+        return 0
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    cat > "$INSTALL_STATE_FILE" <<EOF
+INSTALL_METHOD="$install_method"
+SOURCE_DIR="$source_dir"
+KODIAK_VERSION="$KODIAK_VERSION"
+UPDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+EOF
+}
+
+load_install_state() {
+    if [[ -f "$INSTALL_STATE_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_STATE_FILE"
+    fi
+}
+
+prefer_source_install() {
+    if [[ -f "pyproject.toml" ]] && grep -q 'name = "kodiak-pentest"' pyproject.toml 2>/dev/null; then
+        return 0
+    fi
+
+    load_install_state
+    if [[ "${INSTALL_METHOD:-}" == "source" ]]; then
+        return 0
+    fi
+
+    if [[ -d "$INSTALL_DIR/source/.git" ]]; then
+        return 0
+    fi
+
+    return 1
 }
 
 cleanup_existing_kodiak_installations() {
@@ -416,6 +460,16 @@ install_kodiak() {
         print_status "Cleaning up existing installations..."
         cleanup_existing_kodiak_installations
     fi
+
+    if prefer_source_install; then
+        if [[ "$UPDATE_INSTALL" == "true" ]]; then
+            print_status "Detected existing source-based install. Preserving source update workflow."
+        else
+            print_status "Detected source checkout. Installing from source."
+        fi
+        install_from_source
+        return 0
+    fi
     
     # Try PyPI installation first
     print_status "Attempting PyPI installation..."
@@ -427,6 +481,7 @@ install_kodiak() {
     
     if run_cmd "Installing Kodiak from PyPI via uv" "${uv_install_args[@]}"; then
         print_success "Kodiak installed/updated from PyPI"
+        save_install_state "pypi"
         
         install_playwright --with kodiak-pentest
         
@@ -608,6 +663,7 @@ install_from_source() {
     
     # Install playwright browsers
     install_playwright --with ".[full]"
+    save_install_state "source" "$source_dir"
     
     print_success "Kodiak installed from source"
 }
@@ -812,6 +868,7 @@ show_next_steps() {
     echo -e "    ${CYAN}\$${NC}  kodiak config       ${DIM}Configure LLM & API key${NC}"
     echo -e "    ${CYAN}\$${NC}  kodiak init         ${DIM}Initialize the database${NC}"
     echo -e "    ${CYAN}\$${NC}  kodiak --target .   ${DIM}Start scanning${NC}"
+    echo -e "    ${CYAN}\$${NC}  ./install.sh --update ${DIM}Update an existing install${NC}"
     echo
     echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
     echo
