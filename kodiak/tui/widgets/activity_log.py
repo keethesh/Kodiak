@@ -148,6 +148,7 @@ class ActivityLog(Widget):
         app_state.subscribe("tool_completed", self._on_tool_completed)
         app_state.subscribe("finding_added", self._on_finding_added)
         app_state.subscribe("node_added", self._on_node_added)
+        app_state.subscribe("scan_projection_updated", self._on_scan_projection_updated)
     
     def compose(self) -> ComposeResult:
         """Compose the activity log layout"""
@@ -168,6 +169,7 @@ class ActivityLog(Widget):
         if old_scan != self.current_scan:
             if self.current_scan:
                 self._add_system_log("INFO", f"Switched to scan: {self.current_scan.name}")
+                self._seed_projection_activity()
             else:
                 self._add_system_log("INFO", "No scan selected")
     
@@ -236,6 +238,12 @@ class ActivityLog(Widget):
             if node:
                 message = f"Discovered {node.node_type.value}: {node.name or node.value}"
                 self._add_system_log("INFO", message)
+
+    def _on_scan_projection_updated(self, event):
+        """Translate recent projection events into activity log entries."""
+        if self.current_scan and event.data.get("scan_id") == self.current_scan.id:
+            self.current_scan = event.data.get("scan_state", self.current_scan)
+            self._seed_projection_activity()
     
     def _add_system_log(self, level: str, message: str, details: Optional[Dict[str, Any]] = None):
         """Add a system log entry"""
@@ -271,6 +279,60 @@ class ActivityLog(Widget):
         if self._passes_filter(entry):
             self.filtered_entries.append(entry)
             self._update_display(entry)
+
+    def _seed_projection_activity(self):
+        """Backfill recent projection events into the log once per unique signature."""
+        if not self.current_scan:
+            return
+
+        seen = {(
+            entry.level,
+            entry.message,
+            entry.agent_id,
+            entry.source,
+        ) for entry in self.entries}
+
+        for event in reversed(list(getattr(self.current_scan, "recent_events", []) or [])[:20]):
+            log_entry = self._projection_event_to_log(event)
+            if not log_entry:
+                continue
+            signature = (log_entry.level, log_entry.message, log_entry.agent_id, log_entry.source)
+            if signature in seen:
+                continue
+            self._add_entry(log_entry)
+            seen.add(signature)
+
+    def _projection_event_to_log(self, event: Dict[str, Any]) -> Optional[LogEntry]:
+        """Map a normalized projection event into a log entry."""
+        event_type = str(event.get("type", "event"))
+        payload = event.get("payload", {}) or {}
+
+        level = "INFO"
+        if "failed" in event_type:
+            level = "ERROR"
+        elif "completed" in event_type or "finding" in event_type:
+            level = "SUCCESS"
+
+        detail = (
+            payload.get("technique")
+            or payload.get("title")
+            or payload.get("tool")
+            or payload.get("target")
+            or payload.get("key")
+            or event.get("entity_type")
+            or "event"
+        )
+
+        agent_id = payload.get("worker_id") or payload.get("agent_id")
+        message = f"{event_type.replace('_', ' ')}: {detail}"
+        return LogEntry(
+            timestamp=datetime.now(),
+            level=level,
+            message=message,
+            source="Projection",
+            agent_id=agent_id,
+            details=payload,
+        )
     
     def _passes_filter(self, entry: LogEntry) -> bool:
         """Check if entry passes current filters"""

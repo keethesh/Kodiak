@@ -129,6 +129,7 @@ class AgentPanel(Widget):
         app_state.subscribe("current_scan_changed", self._on_scan_changed)
         app_state.subscribe("agent_added", self._on_agent_added)
         app_state.subscribe("agent_status_changed", self._on_agent_status_changed)
+        app_state.subscribe("scan_projection_updated", self._on_scan_projection_updated)
     
     def compose(self) -> ComposeResult:
         """Compose the agent panel layout"""
@@ -161,6 +162,12 @@ class AgentPanel(Widget):
             
             if agent_id in self.agent_items and agent:
                 self.agent_items[agent_id].update_agent(agent)
+
+    def _on_scan_projection_updated(self, event):
+        """Refresh the panel when the current scan projection changes."""
+        if self.current_scan and event.data.get("scan_id") == self.current_scan.id:
+            self.current_scan = event.data.get("scan_state", self.current_scan)
+            self._refresh_agents()
     
     def _refresh_agents(self):
         """Refresh the agent list"""

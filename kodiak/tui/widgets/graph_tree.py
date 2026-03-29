@@ -176,6 +176,7 @@ class GraphTree(Widget):
         # Subscribe to state changes
         app_state.subscribe("current_scan_changed", self._on_scan_changed)
         app_state.subscribe("node_added", self._on_node_added)
+        app_state.subscribe("scan_projection_updated", self._on_scan_projection_updated)
     
     def compose(self) -> ComposeResult:
         """Compose the graph tree layout"""
@@ -200,6 +201,12 @@ class GraphTree(Widget):
             node = data.get("node")
             if node:
                 self._add_node_to_tree(node)
+
+    def _on_scan_projection_updated(self, event):
+        """Refresh tree state when the current scan projection changes."""
+        if self.current_scan and event.data.get("scan_id") == self.current_scan.id:
+            self.current_scan = event.data.get("scan_state", self.current_scan)
+            self._refresh_tree()
     
     def _refresh_tree(self):
         """Refresh the entire tree"""
@@ -219,7 +226,8 @@ class GraphTree(Widget):
         self.nodes = nodes
         
         if not nodes:
-            tree.root.add("No nodes discovered yet")
+            if not self._populate_projection_fallback(tree):
+                tree.root.add("No nodes discovered yet")
             return
         
         # Build tree structure
@@ -246,6 +254,50 @@ class GraphTree(Widget):
         # Add root nodes and their children
         for root_node in self.root_nodes:
             self._add_tree_node_recursive(tree.root, root_node)
+
+    def _populate_projection_fallback(self, tree: Tree) -> bool:
+        """Render useful projection-backed structure when no graph nodes exist yet."""
+        capabilities = list(getattr(self.current_scan, "capabilities", []) or [])
+        hypotheses = list(getattr(self.current_scan, "hypotheses", []) or [])
+        events = list(getattr(self.current_scan, "recent_events", []) or [])
+
+        rendered = False
+
+        if capabilities:
+            rendered = True
+            capabilities_root = tree.root.add("Capabilities")
+            for capability in capabilities[:20]:
+                capabilities_root.add(
+                    f"{capability.get('type', 'capability')}: "
+                    f"{capability.get('target', capability.get('key', 'unknown'))}"
+                )
+
+        if hypotheses:
+            rendered = True
+            hypotheses_root = tree.root.add("Hypotheses")
+            for hypothesis in hypotheses[:20]:
+                hypotheses_root.add(
+                    f"{hypothesis.get('status', 'pending')} | "
+                    f"{hypothesis.get('type', 'hypothesis')} -> "
+                    f"{hypothesis.get('target', 'unknown')}"
+                )
+
+        if events:
+            rendered = True
+            events_root = tree.root.add("Recent Events")
+            for entry in events[:15]:
+                payload = entry.get("payload", {}) or {}
+                detail = (
+                    payload.get("technique")
+                    or payload.get("title")
+                    or payload.get("tool")
+                    or payload.get("target")
+                    or entry.get("entity_type")
+                    or "event"
+                )
+                events_root.add(f"{entry.get('type', 'event')}: {detail}")
+
+        return rendered
     
     def _add_tree_node_recursive(self, parent_tree_node, graph_node: GraphTreeNode):
         """Recursively add nodes to the tree widget"""
