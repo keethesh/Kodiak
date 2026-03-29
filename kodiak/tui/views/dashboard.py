@@ -239,7 +239,7 @@ class DashboardView(Static):
         scan = app_state.get_current_scan()
 
         findings = len(scan.findings) if scan else 0
-        nodes    = len(scan.nodes)    if scan else 0
+        nodes    = (getattr(scan, "node_count", 0) or len(scan.nodes)) if scan else 0
         queue    = getattr(scan, "work_queue", {}) if scan else {}
         tools    = (queue.get("completed", 0) + queue.get("failed", 0)) if scan else 0
         phase    = self._current_phase(scan) if scan else "—"

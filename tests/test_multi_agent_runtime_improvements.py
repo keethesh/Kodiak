@@ -293,6 +293,41 @@ async def test_analyst_persists_structured_state_from_urls_and_tech():
 
 
 @pytest.mark.asyncio
+async def test_analyst_derives_chain_hypotheses_from_capability_combinations():
+    calls = {"hypotheses": []}
+
+    class ChainStore:
+        scan_id = uuid4()
+
+        async def get_capabilities(self, session, limit=250):
+            host = "https://app.example.com"
+            return [
+                SimpleNamespace(type="auth_surface", target=f"{host}/login", key=f"{host}/login", details={}),
+                SimpleNamespace(type="admin_surface", target=f"{host}/admin", key=f"{host}/admin", details={}),
+                SimpleNamespace(type="api_surface", target=f"{host}/api", key=f"{host}/api", details={}),
+                SimpleNamespace(type="input_surface", target=f"{host}/api/users?id=7", key=f"{host}/api/users?id=7", details={}),
+                SimpleNamespace(type="tech_stack", target=host, key="wordpress", details={"tech": "wordpress"}),
+            ]
+
+        async def add_hypothesis(self, session, **kwargs):
+            calls["hypotheses"].append(kwargs)
+
+    analyst = AnalystAgent(store=ChainStore())
+
+    await analyst._derive_chain_hypotheses(object())
+
+    hypothesis_keys = {call["key"] for call in calls["hypotheses"]}
+    hypothesis_types = {call["hypothesis_type"] for call in calls["hypotheses"]}
+
+    assert "app.example.com:auth-admin-chain" in hypothesis_keys
+    assert "app.example.com:api-input-chain" in hypothesis_keys
+    assert "app.example.com:wordpress-admin-chain" in hypothesis_keys
+    assert HypothesisType.ADMIN_FOLLOWUP in hypothesis_types
+    assert HypothesisType.API_LOGIC_FOLLOWUP in hypothesis_types
+    assert HypothesisType.TECH_FOLLOWUP in hypothesis_types
+
+
+@pytest.mark.asyncio
 async def test_planner_processes_pending_hypotheses_into_followup_work(monkeypatch):
     class HypothesisStore(RecordingStore):
         def __init__(self):
@@ -462,9 +497,21 @@ async def test_shared_store_builds_projection_from_events_and_runtime_state():
     async def fake_get_events(session, limit=25):
         return [SimpleNamespace(type="work_unit_completed", entity_type="work_unit", entity_id="abc", payload={"technique": "httpx_primary"})]
 
+    async def fake_get_notes(session, limit=50):
+        return [SimpleNamespace(id=uuid4(), category="attack_hint", target="https://app.example.com", content="Try auth reuse")]
+
+    async def fake_get_attempts(session, limit=100):
+        return [SimpleNamespace(id=uuid4(), tool="nuclei", target="https://app.example.com", status="success", reason="baseline")]
+
+    async def fake_get_nodes(session, limit=100):
+        return [SimpleNamespace(id=uuid4(), name="https://app.example.com", type="url", label="Endpoint", properties={}, scanned=True)]
+
     store.get_findings = fake_get_findings
     store.get_capabilities = fake_get_capabilities
     store.get_hypotheses = fake_get_hypotheses
+    store.get_notes = fake_get_notes
+    store.get_attempts = fake_get_attempts
+    store._get_nodes = fake_get_nodes
     store.get_events = fake_get_events
 
     class FakeSession:
@@ -479,6 +526,10 @@ async def test_shared_store_builds_projection_from_events_and_runtime_state():
     assert projection["work_queue"]["pending"] == 2
     assert projection["work_queue"]["completed"] == 5
     assert projection["findings"][0]["title"] == "SQL Injection"
+    assert projection["node_count"] == 1
+    assert projection["nodes"][0]["type"] == "url"
+    assert projection["attempts"][0]["tool"] == "nuclei"
+    assert projection["notes"][0]["content"] == "Try auth reuse"
     assert projection["capabilities"][0]["type"] == "auth_surface"
     assert projection["hypotheses"][0]["status"] == "pending"
     assert projection["recent_events"][0]["type"] == "work_unit_completed"
@@ -514,9 +565,15 @@ def test_scan_state_applies_projection_payload():
 
     projection = {
         "work_queue": {"pending": 2, "completed": 5},
+        "node_count": 1,
+        "nodes": [
+            {"id": str(uuid4()), "name": "https://example.com", "type": "url", "label": "Endpoint", "properties": {}, "scanned": True},
+        ],
         "findings": [
             {"title": "SQL Injection", "severity": "high", "target": "https://example.com"},
         ],
+        "attempts": [{"id": str(uuid4()), "tool": "nuclei", "target": "https://example.com", "status": "success", "reason": "baseline"}],
+        "notes": [{"id": str(uuid4()), "category": "attack_hint", "target": "https://example.com", "content": "Try auth reuse"}],
         "capabilities": [{"type": "auth_surface", "target": "https://example.com/login", "key": "login"}],
         "hypotheses": [{"type": "auth_followup", "target": "https://example.com/login", "status": "pending", "confidence": 0.8}],
         "recent_events": [{"type": "work_unit_completed", "payload": {"technique": "httpx_primary"}}],
@@ -525,7 +582,11 @@ def test_scan_state_applies_projection_payload():
     scan.apply_projection(projection)
 
     assert scan.work_queue["pending"] == 2
+    assert scan.node_count == 1
+    assert scan.nodes[0].type == "url"
     assert scan.findings[0].title == "SQL Injection"
+    assert scan.attempts[0]["tool"] == "nuclei"
+    assert scan.engagement_notes[0]["category"] == "attack_hint"
     assert scan.capabilities[0]["type"] == "auth_surface"
     assert scan.hypotheses[0]["status"] == "pending"
     assert scan.recent_events[0]["type"] == "work_unit_completed"

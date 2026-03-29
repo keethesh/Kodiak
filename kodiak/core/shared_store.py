@@ -31,6 +31,7 @@ from kodiak.database.models import (
     Hypothesis,
     HypothesisStatus,
     HypothesisType,
+    Node,
     NoteCategory,
     Observation,
     ObservationType,
@@ -974,7 +975,10 @@ class SharedScanStore:
         findings = await self.get_findings(session, limit=100)
         capabilities = await self.get_capabilities(session, limit=100)
         hypotheses = await self.get_hypotheses(session, limit=100)
+        notes = await self.get_notes(session, limit=50)
+        attempts = await self.get_attempts(session, limit=100)
         recent_events = await self.get_events(session, limit=25)
+        nodes = await self._get_nodes(session, limit=100)
 
         try:
             from sqlalchemy import func
@@ -992,9 +996,40 @@ class SharedScanStore:
             "scan_id": str(self.scan_id),
             "project_id": str(self.project_id),
             "work_queue": work_queue,
+            "node_count": len(nodes),
+            "nodes": [
+                {
+                    "id": str(node.id),
+                    "name": node.name,
+                    "type": node.type,
+                    "label": node.label,
+                    "properties": node.properties or {},
+                    "scanned": node.scanned,
+                }
+                for node in nodes
+            ],
             "findings": [
                 {"title": finding.title, "severity": str(finding.severity), "target": finding.target}
                 for finding in findings
+            ],
+            "attempts": [
+                {
+                    "id": str(attempt.id),
+                    "tool": attempt.tool,
+                    "target": attempt.target,
+                    "status": attempt.status,
+                    "reason": attempt.reason,
+                }
+                for attempt in attempts
+            ],
+            "notes": [
+                {
+                    "id": str(note.id),
+                    "category": str(note.category),
+                    "target": note.target,
+                    "content": note.content,
+                }
+                for note in notes
             ],
             "capabilities": [
                 {"type": str(capability.type), "target": capability.target, "key": capability.key}
@@ -1019,6 +1054,38 @@ class SharedScanStore:
                 for event in recent_events
             ],
         }
+
+    async def get_attempts(
+        self, session: AsyncSession, limit: int = 100
+    ) -> List[Attempt]:
+        """Get recent attempts for this scan."""
+        try:
+            stmt = (
+                select(Attempt)
+                .where(Attempt.scan_id == self.scan_id)
+                .order_by(Attempt.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+        except SQLAlchemyError:
+            return []
+
+    async def _get_nodes(
+        self, session: AsyncSession, limit: int = 100
+    ) -> List[Node]:
+        """Get nodes for this scan's project as a UI projection helper."""
+        try:
+            stmt = (
+                select(Node)
+                .where(Node.project_id == self.project_id)
+                .order_by(Node.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+        except SQLAlchemyError:
+            return []
 
     # ------------------------------------------------------------------
     # State summary (for LLM prompts)

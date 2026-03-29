@@ -129,22 +129,6 @@ class ReconView(Static):
             return
 
         if not scan.nodes:
-            projection_nodes = self._surface_nodes_from_projection(scan)
-            if projection_nodes:
-                tree.root.set_label("Target")
-                for group_name, nodes in projection_nodes.items():
-                    parent = tree.root.add(
-                        f"{self._TYPE_ICONS.get(group_name, '▸')} {group_name.upper()} ({len(nodes)})",
-                        data={"type": "group", "ntype": group_name},
-                        expand=True,
-                    )
-                    for node in nodes:
-                        parent.add_leaf(
-                            f"  {node['name']}",
-                            data={"type": "projection-node", "node": node},
-                        )
-                tree.root.expand()
-                return
             tree.root.set_label("[dim]No assets discovered yet[/dim]")
             return
 
@@ -179,11 +163,7 @@ class ReconView(Static):
         if not scan:
             return
 
-        # Attempts are stored in app_state or come from the DB via core_bridge
-        # We surface them through the scan's nodes or from a separate attempts list
         attempts = list(getattr(scan, "attempts", []) or [])
-        if not attempts:
-            attempts = self._attempts_from_projection(scan)
         for a in attempts:
             tool   = a.get("tool", "?") if isinstance(a, dict) else getattr(a, "tool", "?")
             target = a.get("target", "?") if isinstance(a, dict) else getattr(a, "target", "?")
@@ -200,7 +180,7 @@ class ReconView(Static):
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         data = event.node.data
-        if not data or data.get("type") not in {"node", "projection-node"}:
+        if not data or data.get("type") != "node":
             return
 
         node = data.get("node")
@@ -209,20 +189,12 @@ class ReconView(Static):
 
         detail = self.query_one("#node-detail-content", Static)
         lines = []
-        if isinstance(node, dict):
-            lines.append(f"[bold cyan]{node.get('name', '?')}[/bold cyan]")
-            lines.append(f"[dim]Type:[/dim]  {node.get('type', '?')}")
-            lines.append(f"[dim]Label:[/dim] {node.get('label', 'Derived from projection')}")
-            props = node.get("properties", {}) or {}
-            ts = None
-            scanned = bool(node.get("scanned", False))
-        else:
-            lines.append(f"[bold cyan]{getattr(node, 'name', '?')}[/bold cyan]")
-            lines.append(f"[dim]Type:[/dim]  {getattr(node, 'type', '?')}")
-            lines.append(f"[dim]Label:[/dim] {getattr(node, 'label', '?')}")
-            props = getattr(node, "properties", {}) or {}
-            ts = getattr(node, "created_at", None)
-            scanned = getattr(node, "scanned", False)
+        lines.append(f"[bold cyan]{getattr(node, 'name', '?')}[/bold cyan]")
+        lines.append(f"[dim]Type:[/dim]  {getattr(node, 'type', '?')}")
+        lines.append(f"[dim]Label:[/dim] {getattr(node, 'label', '?')}")
+        props = getattr(node, "properties", {}) or {}
+        ts = getattr(node, "created_at", None)
+        scanned = getattr(node, "scanned", False)
 
         if props:
             lines.append("")
@@ -243,40 +215,3 @@ class ReconView(Static):
 
     def action_refresh(self) -> None:
         self._refresh_all()
-
-    def _attempts_from_projection(self, scan):
-        rows = []
-        for event in getattr(scan, "recent_events", []) or []:
-            if event.get("type") != "attempt_recorded":
-                continue
-            payload = event.get("payload", {}) or {}
-            rows.append(
-                {
-                    "tool": str(payload.get("tool", "?")),
-                    "target": str(payload.get("target", "?")),
-                    "status": str(payload.get("status", "?")),
-                    "reason": str(payload.get("reason", "") or ""),
-                    "created_at": None,
-                    "id": event.get("entity_id"),
-                }
-            )
-        return rows
-
-    def _surface_nodes_from_projection(self, scan):
-        groups: Dict[str, list] = {}
-        for capability in getattr(scan, "capabilities", []) or []:
-            capability_type = capability.get("type", "capability")
-            target = capability.get("target")
-            if not target:
-                continue
-            node_type = "url" if "surface" in capability_type or target.startswith("http") else "service"
-            groups.setdefault(node_type, []).append(
-                {
-                    "name": target,
-                    "type": node_type,
-                    "label": capability_type.replace("_", " "),
-                    "properties": {"key": capability.get("key", "")},
-                    "scanned": True,
-                }
-            )
-        return groups

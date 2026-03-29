@@ -484,6 +484,8 @@ class AnalystAgent:
                     details={"source": "finding", "title": finding.title},
                 )
 
+        await self._derive_chain_hypotheses(session)
+
     async def _persist_url_state(self, session, url: str, source: str) -> None:
         normalized_url = self._normalize_target(url)
         parsed = urlparse(normalized_url)
@@ -606,6 +608,85 @@ class AnalystAgent:
                 confidence=0.72,
                 evidence={"source": source},
             )
+
+    async def _derive_chain_hypotheses(self, session) -> None:
+        """Create higher-value follow-up hypotheses from capability combinations."""
+        if not hasattr(self.store, "get_capabilities"):
+            return
+        capabilities = await self.store.get_capabilities(session, limit=250)
+        by_host: Dict[str, Dict[str, List[Capability]]] = {}
+
+        for capability in capabilities:
+            host = self._extract_host(capability.target)
+            if not host:
+                continue
+            bucket = by_host.setdefault(host, {})
+            bucket.setdefault(str(capability.type), []).append(capability)
+
+        for host, grouped in by_host.items():
+            auth_surfaces = grouped.get(str(CapabilityType.AUTH_SURFACE), [])
+            admin_surfaces = grouped.get(str(CapabilityType.ADMIN_SURFACE), [])
+            api_surfaces = grouped.get(str(CapabilityType.API_SURFACE), [])
+            input_surfaces = grouped.get(str(CapabilityType.INPUT_SURFACE), [])
+            tech_stack = grouped.get(str(CapabilityType.TECH_STACK), [])
+
+            if auth_surfaces and admin_surfaces:
+                admin_target = admin_surfaces[0].target
+                auth_target = auth_surfaces[0].target
+                await self.store.add_hypothesis(
+                    session,
+                    hypothesis_type=HypothesisType.ADMIN_FOLLOWUP,
+                    target=admin_target,
+                    key=f"{host}:auth-admin-chain",
+                    rationale="Authentication and admin surfaces coexist on the same host; test for default-login, panel exposure, and auth-bypass paths into admin functionality",
+                    confidence=0.91,
+                    evidence={
+                        "host": host,
+                        "auth_target": auth_target,
+                        "admin_target": admin_target,
+                        "chain": "auth_to_admin",
+                    },
+                )
+
+            if api_surfaces and input_surfaces:
+                api_target = api_surfaces[0].target
+                input_target = input_surfaces[0].target
+                await self.store.add_hypothesis(
+                    session,
+                    hypothesis_type=HypothesisType.API_LOGIC_FOLLOWUP,
+                    target=input_target,
+                    key=f"{host}:api-input-chain",
+                    rationale="API-like surface and parameterized input coexist on the same host; prioritize API-specific input abuse and business-logic checks on discovered endpoints",
+                    confidence=0.88,
+                    evidence={
+                        "host": host,
+                        "api_target": api_target,
+                        "input_target": input_target,
+                        "chain": "api_input_abuse",
+                    },
+                )
+
+            wordpress_targets = [
+                capability for capability in tech_stack
+                if "wordpress" in str(capability.key).lower()
+                or "wordpress" in str((capability.details or {}).get("tech", "")).lower()
+            ]
+            if wordpress_targets and admin_surfaces:
+                admin_target = admin_surfaces[0].target
+                await self.store.add_hypothesis(
+                    session,
+                    hypothesis_type=HypothesisType.TECH_FOLLOWUP,
+                    target=admin_target,
+                    key=f"{host}:wordpress-admin-chain",
+                    rationale="WordPress indicators and an admin surface coexist; prioritize targeted WordPress admin enumeration and known panel abuse checks",
+                    confidence=0.93,
+                    evidence={
+                        "host": host,
+                        "tech": "wordpress",
+                        "admin_target": admin_target,
+                        "chain": "wordpress_admin",
+                    },
+                )
 
     @staticmethod
     def _extract_urls(text: str) -> List[str]:

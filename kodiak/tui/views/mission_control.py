@@ -173,7 +173,7 @@ class MissionControlScreen(Screen):
         
         agent_count = len(current_scan.agents)
         finding_count = len(current_scan.findings)
-        node_count = len(current_scan.nodes)
+        node_count = getattr(current_scan, "node_count", 0) or len(current_scan.nodes)
         queue = getattr(current_scan, "work_queue", {}) or {}
         running_jobs = queue.get("running", 0) + queue.get("claimed", 0)
         pending_jobs = queue.get("pending", 0)

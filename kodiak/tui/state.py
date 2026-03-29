@@ -9,9 +9,18 @@ from dataclasses import dataclass, field
 from enum import Enum
 import asyncio
 from datetime import datetime
+from uuid import UUID, uuid4
 from loguru import logger
 
 from kodiak.database.models import Project, ScanJob, Finding, Node
+
+
+def _coerce_uuid(value: Any) -> UUID:
+    """Best-effort UUID coercion for projection-backed UI models."""
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return uuid4()
 
 
 class AgentStatus(str, Enum):
@@ -84,6 +93,9 @@ class ScanState:
     agents: Dict[str, AgentState] = field(default_factory=dict)
     findings: List[Finding] = field(default_factory=list)
     nodes: List[Node] = field(default_factory=list)
+    node_count: int = 0
+    attempts: List[Dict[str, Any]] = field(default_factory=list)
+    engagement_notes: List[Dict[str, Any]] = field(default_factory=list)
     work_queue: Dict[str, int] = field(default_factory=dict)
     capabilities: List[Dict[str, Any]] = field(default_factory=list)
     hypotheses: List[Dict[str, Any]] = field(default_factory=list)
@@ -115,9 +127,12 @@ class ScanState:
         """Update scan state from the canonical projection payload."""
         self.projection = dict(projection or {})
         self.work_queue = dict(self.projection.get("work_queue", {}))
+        self.node_count = int(self.projection.get("node_count", len(self.nodes) or 0))
         self.capabilities = list(self.projection.get("capabilities", []))
         self.hypotheses = list(self.projection.get("hypotheses", []))
         self.recent_events = list(self.projection.get("recent_events", []))
+        self.attempts = list(self.projection.get("attempts", []))
+        self.engagement_notes = list(self.projection.get("notes", []))
 
         projected_findings = self.projection.get("findings", [])
         self.findings = [
@@ -128,6 +143,19 @@ class ScanState:
                 target=finding.get("target"),
             )
             for finding in projected_findings
+        ]
+        projected_nodes = self.projection.get("nodes", [])
+        self.nodes = [
+            Node(
+                id=_coerce_uuid(node.get("id")),
+                project_id=_coerce_uuid(self.project_id),
+                label=node.get("label", ""),
+                type=node.get("type", "unknown"),
+                name=node.get("name", "?"),
+                properties=node.get("properties", {}) or {},
+                scanned=bool(node.get("scanned", False)),
+            )
+            for node in projected_nodes
         ]
 
 

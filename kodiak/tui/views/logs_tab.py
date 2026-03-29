@@ -202,16 +202,11 @@ class LogsView(Static):
             log_widget.write("[dim]No scan running[/dim]")
             return
 
-        entries = list(getattr(scan, "activity_log", []) or [])
-        if not entries:
-            entries = self._entries_from_projection(scan)
-
-        for entry in entries:
-            level = getattr(entry, "level", "INFO").upper()
-            msg   = getattr(entry, "message", "")
-            src   = getattr(entry, "source", "")
-            ts    = getattr(entry, "timestamp", None)
-            ts_s  = ts.strftime("%H:%M:%S") if ts else ""
+        for entry in self._entries_from_projection(scan):
+            level = entry["level"].upper()
+            msg = entry["message"]
+            src = entry["source"]
+            ts_s = entry["time"]
 
             mk = _LEVEL_MARKUP.get(level, "")
             end = mk.replace("[", "[/").rstrip("]") + "]" if mk else ""
@@ -228,15 +223,11 @@ class LogsView(Static):
         if not scan:
             return
 
-        tools_run = list(getattr(scan, "tools_run", []) or [])
-        if not tools_run:
-            tools_run = self._tool_rows_from_projection(scan)
-        for rec in reversed(tools_run):  # most recent first
-            tool   = getattr(rec, "tool",   "?")[:14]
-            target = getattr(rec, "target", "?")[:18]
-            status = getattr(rec, "status", "?")
-            ts     = getattr(rec, "timestamp", None)
-            ts_s   = ts[:8] if ts else "—"
+        for rec in reversed(list(getattr(scan, "attempts", []) or [])):  # most recent first
+            tool = str(rec.get("tool", "?"))[:14]
+            target = str(rec.get("target", "?"))[:18]
+            status = str(rec.get("status", "?"))
+            ts_s = "—"
 
             status_icons = {"success": "✅", "failed": "❌", "timeout": "⏱", "error": "🔴"}
             icon = status_icons.get(status, "")
@@ -252,18 +243,14 @@ class LogsView(Static):
 
         notes = list(getattr(scan, "engagement_notes", []) or [])
         if not notes:
-            notes = self._notes_from_projection(scan)
-        if not notes:
             notes_widget.write("[dim]No engagement notes yet[/dim]")
             return
 
         for note in notes:
-            cat = getattr(note, "category", "general")
-            if hasattr(cat, "value"):
-                cat = cat.value
+            cat = str(note.get("category", "general"))
             icon = _NOTE_CAT_ICONS.get(cat, "📌")
-            content = getattr(note, "content", "")
-            target = getattr(note, "target", "")
+            content = str(note.get("content", ""))
+            target = str(note.get("target", ""))
             target_part = f"[dim]({target})[/dim]  " if target and target != "*" else ""
             notes_widget.write(f"{icon} [bold]{cat.replace('_', ' ').title()}:[/bold]  {target_part}{content}")
 
@@ -293,55 +280,10 @@ class LogsView(Static):
             msg = payload.get("content") or payload.get("message") or payload.get("summary")
             if not msg:
                 msg = f"{event.get('type', 'event').replace('_', ' ')}"
-            entries.append(
-                type(
-                    "ProjectionLogEntry",
-                    (),
-                    {
-                        "level": "INFO" if "failed" not in event.get("type", "") else "ERROR",
-                        "message": str(msg),
-                        "source": payload.get("tool") or event.get("entity_type", "scan"),
-                        "timestamp": None,
-                    },
-                )()
-            )
+            entries.append({
+                "level": "INFO" if "failed" not in event.get("type", "") else "ERROR",
+                "message": str(msg),
+                "source": str(payload.get("tool") or event.get("entity_type", "scan")),
+                "time": "",
+            })
         return entries
-
-    def _tool_rows_from_projection(self, scan):
-        rows = []
-        for event in getattr(scan, "recent_events", []) or []:
-            if event.get("type") != "attempt_recorded":
-                continue
-            payload = event.get("payload", {}) or {}
-            rows.append(
-                type(
-                    "ProjectionToolRow",
-                    (),
-                    {
-                        "tool": str(payload.get("tool", "?")),
-                        "target": str(payload.get("target", "?")),
-                        "status": str(payload.get("status", "?")),
-                        "timestamp": payload.get("created_at"),
-                    },
-                )()
-            )
-        return rows
-
-    def _notes_from_projection(self, scan):
-        rows = []
-        for event in getattr(scan, "recent_events", []) or []:
-            if event.get("type") != "note_added":
-                continue
-            payload = event.get("payload", {}) or {}
-            rows.append(
-                type(
-                    "ProjectionNote",
-                    (),
-                    {
-                        "category": payload.get("category", "general"),
-                        "content": payload.get("content", ""),
-                        "target": payload.get("target", ""),
-                    },
-                )()
-            )
-        return rows
