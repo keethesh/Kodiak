@@ -65,6 +65,9 @@ class ScanRunner:
         target: str,
         instructions: str = "",
         project_name: Optional[str] = None,
+        project_id: Optional[str] = None,
+        scan_id: Optional[str] = None,
+        scan_name: Optional[str] = None,
         max_iterations: int = 30,
         agent_count: int = 1,
         role_strategy: str = "role_hinted",
@@ -93,9 +96,16 @@ class ScanRunner:
         async for session in get_session():
             try:
                 # 1. Get or create project (reuse existing for prior knowledge)
-                project = await self._get_or_create_project(session, project_name)
-                scan_job = await self._create_scan_job(
-                    session, project.id, target, instructions, report_format, report_path
+                project = await self._get_or_create_project(session, project_name, project_id)
+                scan_job = await self._prepare_scan_job(
+                    session=session,
+                    project_id=project.id,
+                    target=target,
+                    instructions=instructions,
+                    report_format=report_format,
+                    report_path=report_path,
+                    scan_id=scan_id,
+                    scan_name=scan_name,
                 )
                 
                 logger.info(f"🎯 Starting scan: {target}")
@@ -134,6 +144,10 @@ class ScanRunner:
                 logger.info(
                     f"Tool preflight: {len(allowed_tools)} enabled, {len(missing_tools)} disabled"
                 )
+
+                dns_warning = await self._preflight_dns_check()
+                if dns_warning:
+                    instructions = f"{instructions}\n\n[PREFLIGHT WARNING] {dns_warning}" if instructions else f"[PREFLIGHT WARNING] {dns_warning}"
 
                 # 3. Create and run Manager (or Multi-Agent Pipeline)
                 if settings.multi_agent:
@@ -269,16 +283,26 @@ class ScanRunner:
                     except Exception as unsubscribe_error:
                         logger.warning(f"Failed to unsubscribe finding capture: {unsubscribe_error}")
     
-    async def _get_or_create_project(self, session: AsyncSession, name: str) -> Project:
-        """Return an existing project by name, or create a new one."""
+    async def _get_or_create_project(
+        self,
+        session: AsyncSession,
+        name: str,
+        project_id: Optional[str] = None,
+    ) -> Project:
+        """Return an existing project by id or name, or create a new one."""
+        if project_id:
+            existing = await crud.project.get(session, UUID(str(project_id)))
+            if not existing:
+                raise ValueError(f"Unknown project_id: {project_id}")
+            return existing
         existing = await crud.project.get_by_name(session, name)
         if existing:
             logger.info(f"♻️  Reusing project '{name}' ({existing.id})")
             return existing
         project = Project(name=name, description=f"Security scan project: {name}")
         return await crud.project.create(session, project)
-    
-    async def _create_scan_job(
+
+    async def _prepare_scan_job(
         self,
         session: AsyncSession,
         project_id: UUID,
@@ -286,17 +310,34 @@ class ScanRunner:
         instructions: str,
         report_format: str,
         report_path: Optional[str],
+        scan_id: Optional[str] = None,
+        scan_name: Optional[str] = None,
     ) -> ScanJob:
+        config = {
+            "target": target,
+            "instructions": instructions,
+            "report_format": report_format,
+            "report_path": report_path,
+        }
+        if scan_id:
+            existing = await crud.scan_job.get(session, UUID(str(scan_id)))
+            if not existing:
+                raise ValueError(f"Unknown scan_id: {scan_id}")
+            existing.project_id = project_id
+            existing.name = scan_name or existing.name
+            existing.status = ScanStatus.RUNNING
+            existing.updated_at = datetime.now(timezone.utc)
+            existing.config = {**(existing.config or {}), **config}
+            session.add(existing)
+            await session.commit()
+            await session.refresh(existing)
+            return existing
+
         scan = ScanJob(
             project_id=project_id,
-            name=f"Scan_{target}",
+            name=scan_name or f"Scan_{target}",
             status=ScanStatus.RUNNING,
-            config={
-                "target": target,
-                "instructions": instructions,
-                "report_format": report_format,
-                "report_path": report_path,
-            }
+            config=config,
         )
         return await crud.scan_job.create(session, scan)
 
@@ -307,6 +348,34 @@ class ScanRunner:
         if self._manager_task and not self._manager_task.done():
             self._manager_task.cancel()
             await asyncio.gather(self._manager_task, return_exceptions=True)
+
+    async def _preflight_dns_check(self) -> str | None:
+        """
+        Verify that the Docker sandbox can resolve DNS.
+        Returns a warning string if DNS is unavailable, else None.
+        """
+        try:
+            executor = await get_docker_executor(
+                settings.toolbox_image,
+                fallback_image=settings.toolbox_image,
+                fallback_entrypoint="",
+            )
+            result = await executor.run_command(
+                ["/bin/bash", "-c", "getent hosts google.com >/dev/null 2>&1 && echo ok || echo fail"]
+            )
+            if result.stdout.strip() != "ok":
+                warning = (
+                    "Sandbox DNS resolution (UDP/53) appears to be BLOCKED. "
+                    "Direct hostname lookups will fail. Use numeric IPs where possible, "
+                    "or use DNS-over-HTTPS (e.g. curl --doh-url https://1.1.1.1/dns-query). "
+                    "Tool flags: nmap -n (skip DNS), nuclei --system-resolvers (or set --resolver), "
+                    "ffuf add -H 'Host:' header manually."
+                )
+                logger.warning(f"DNS preflight failed: {warning}")
+                return warning
+        except Exception as exc:
+            logger.debug(f"DNS preflight check skipped: {exc}")
+        return None
 
     async def _preflight_available_tools(self, inventory: ToolInventory) -> tuple[List[str], List[str]]:
         """

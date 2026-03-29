@@ -2,7 +2,7 @@
 Core Bridge for TUI
 
 This module provides the bridge between the TUI and the core Kodiak functionality.
-It handles database initialization, orchestrator integration, and event conversion.
+It handles database initialization, runtime integration, and event conversion.
 """
 
 import asyncio
@@ -14,7 +14,7 @@ from loguru import logger
 from kodiak.database.engine import init_db, get_session
 from kodiak.database.crud import project as crud_project, scan_job as crud_scan
 from kodiak.database.models import Project, ScanJob, Finding, Node
-from kodiak.core.orchestrator import orchestrator
+from kodiak.core.interface import CoreInterface
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.core.config import settings
 from kodiak.core.error_handling import (
@@ -36,7 +36,7 @@ class CoreBridge:
     
     Handles:
     - Database initialization and management
-    - Orchestrator integration
+    - Core runtime integration
     - Event conversion between core events and TUI messages
     - State synchronization
     """
@@ -48,6 +48,8 @@ class CoreBridge:
         self._event_subscriptions = []
         self._health_check_task = None
         self._health_check_interval = 30.0  # seconds
+        self._core_interface = CoreInterface(core_event_manager)
+        self._scan_runs: Dict[str, str] = {}
         logger.info("CoreBridge initialized")
     
     async def initialize(self):
@@ -105,8 +107,7 @@ class CoreBridge:
             # Clean up event subscriptions
             self._cleanup_event_subscriptions()
             
-            # Stop orchestrator if running
-            # TODO: Add orchestrator shutdown if needed
+            self._scan_runs.clear()
             
             self.initialized = False
             self.database_healthy = False
@@ -463,6 +464,7 @@ class CoreBridge:
             if scan_id:
                 app_state.update_scan_status(scan_id, ScanStatus.COMPLETED)
                 await self._refresh_scan_projection(scan_id)
+                self._scan_runs.pop(scan_id, None)
             
             # Send TUI message
             message = ScanStatusChanged(
@@ -486,6 +488,7 @@ class CoreBridge:
             if scan_id:
                 app_state.update_scan_status(scan_id, ScanStatus.FAILED)
                 await self._refresh_scan_projection(scan_id)
+                self._scan_runs.pop(scan_id, None)
             
             # Send TUI message
             message = ScanStatusChanged(
@@ -536,6 +539,11 @@ class CoreBridge:
     async def get_scan_projection(self, scan_id: str) -> Dict[str, Any]:
         """Return the canonical projection for a scan from the shared store."""
         try:
+            run_id = self._scan_runs.get(scan_id)
+            if run_id:
+                projection = await self._core_interface.get_scan_projection(run_id)
+                if projection:
+                    return projection
             scan_uuid = UUID(scan_id)
         except (TypeError, ValueError) as e:
             raise ValueError(f"Invalid scan_id: {scan_id}") from e
@@ -592,12 +600,11 @@ class CoreBridge:
                 return None
             
             async for session in get_session():
-                project = await crud_project.create(
-                    session,
+                project = Project(
                     name=name,
-                    description=description,
-                    target=target
+                    description=description or (f"Primary target: {target}" if target else ""),
                 )
+                project = await crud_project.create(session, project)
                 app_state.add_project(project)
                 logger.info(f"Created project: {project.name} (ID: {project.id})")
                 return str(project.id)
@@ -632,14 +639,17 @@ class CoreBridge:
                 return None
             
             async for session in get_session():
-                scan = await crud_scan.create(
-                    session,
-                    project_id=int(project_id),
+                scan = ScanJob(
+                    project_id=UUID(project_id),
                     name=name,
-                    target=target,
-                    agent_count=agent_count,
-                    instructions=instructions
+                    status=ScanStatus.PENDING,
+                    config={
+                        "target": target,
+                        "agent_count": agent_count,
+                        "instructions": instructions,
+                    },
                 )
+                scan = await crud_scan.create(session, scan)
                 app_state.add_scan(scan)
                 logger.info(f"Created scan: {scan.name} (ID: {scan.id})")
                 return str(scan.id)
@@ -666,10 +676,26 @@ class CoreBridge:
                 self.app.post_message(error_message)
                 return False
             
-            # TODO: Integrate with orchestrator to actually start the scan
+            scan_uuid = UUID(scan_id)
+            async for session in get_session():
+                scan = await crud_scan.get(session, scan_uuid)
+                if not scan:
+                    raise ValueError(f"Unknown scan_id: {scan_id}")
+                project = await crud_project.get(session, scan.project_id)
+                config = scan.config or {}
+                run_id = await self._core_interface.start_scan(
+                    target=str(config.get("target", "") or ""),
+                    instructions=str(config.get("instructions", "") or ""),
+                    agent_count=int(config.get("agent_count", 1) or 1),
+                    project_name=project.name if project else None,
+                    project_id=str(scan.project_id),
+                    scan_id=str(scan.id),
+                    scan_name=scan.name,
+                )
+                self._scan_runs[scan_id] = run_id
+                break
+
             logger.info(f"Starting scan: {scan_id}")
-            
-            # For now, just update the status
             app_state.update_scan_status(scan_id, ScanStatus.RUNNING)
             return True
         
@@ -684,10 +710,10 @@ class CoreBridge:
     async def stop_scan(self, scan_id: str) -> bool:
         """Stop a scan with error handling and non-blocking UI"""
         async def _stop_scan():
-            # TODO: Integrate with orchestrator to actually stop the scan
             logger.info(f"Stopping scan: {scan_id}")
-            
-            # For now, just update the status
+            run_id = self._scan_runs.get(scan_id)
+            if run_id:
+                await self._core_interface.stop_scan(run_id)
             app_state.update_scan_status(scan_id, ScanStatus.CANCELLED)
             return True
         
@@ -726,7 +752,7 @@ class CoreBridge:
                 return []
             
             async for session in get_session():
-                scans = await crud_scan.get_by_project_id(session, int(project_id))
+                scans = await crud_scan.get_by_project_id(session, UUID(project_id))
                 return scans
         
         try:
@@ -742,7 +768,8 @@ class CoreBridge:
         return {
             "initialized": self.initialized,
             "database_healthy": self.database_healthy,
-            "orchestrator_status": "ready",  # TODO: Add actual orchestrator status
+            "core_interface_status": "active" if self._scan_runs else "ready",
+            "active_runs": len(self._scan_runs),
             "event_subscriptions": len(self._event_subscriptions),
             "app_state_stats": app_state.get_stats(),
             "database_type": "sqlite" if settings.is_sqlite else "postgres",

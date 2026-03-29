@@ -162,6 +162,7 @@ class ChatHistory(Widget):
         # Subscribe to state changes
         app_state.subscribe("current_scan_changed", self._on_scan_changed)
         app_state.subscribe("agent_status_changed", self._on_agent_status_changed)
+        app_state.subscribe("scan_projection_updated", self._on_scan_projection_updated)
     
     def compose(self) -> ComposeResult:
         """Compose the chat history layout"""
@@ -190,6 +191,12 @@ class ChatHistory(Widget):
         if (self.current_scan and 
             data.get("scan_id") == self.current_scan.id and 
             data.get("agent_id") == self.agent_id):
+            self._update_agent_info()
+
+    def _on_scan_projection_updated(self, event):
+        """Refresh current scan/agent info from projection-backed state."""
+        if self.current_scan and event.data.get("scan_id") == self.current_scan.id:
+            self.current_scan = event.data.get("scan_state", self.current_scan)
             self._update_agent_info()
     
     def _update_agent_info(self):

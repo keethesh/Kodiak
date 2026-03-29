@@ -114,6 +114,30 @@ class CRUDScanJob:
             })
 
     @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_all(self, session: AsyncSession) -> Sequence[ScanJob]:
+        try:
+            statement = select(ScanJob).order_by(ScanJob.created_at.desc())
+            result = await session.execute(statement)
+            return result.scalars().all()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_all_scan_jobs", e)
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
+    async def get_by_project_id(self, session: AsyncSession, project_id: UUID) -> Sequence[ScanJob]:
+        try:
+            statement = (
+                select(ScanJob)
+                .where(ScanJob.project_id == project_id)
+                .order_by(ScanJob.created_at.desc())
+            )
+            result = await session.execute(statement)
+            return result.scalars().all()
+        except SQLAlchemyError as e:
+            raise ErrorHandler.handle_database_error("get_scan_jobs_by_project_id", e, {
+                "project_id": str(project_id),
+            })
+
+    @handle_errors(ErrorCategory.DATABASE, reraise=True)
     async def update_status(self, session: AsyncSession, scan_id: UUID, status: str) -> Optional[ScanJob]:
         try:
             scan = await self.get(session, scan_id)

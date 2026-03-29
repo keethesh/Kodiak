@@ -124,6 +124,7 @@ class GraphScreen(Screen):
         
         # Subscribe to node changes
         app_state.subscribe("node_added", self._on_node_added)
+        app_state.subscribe("scan_projection_updated", self._on_projection_updated)
     
     def _update_stats(self):
         """Update the graph statistics"""
@@ -149,6 +150,12 @@ class GraphScreen(Screen):
     def _on_node_added(self, event):
         """Handle new nodes"""
         self._update_stats()
+
+    def _on_projection_updated(self, event):
+        """Refresh stats when canonical projection data changes."""
+        current_scan = app_state.get_current_scan()
+        if current_scan and event.data.get("scan_id") == current_scan.id:
+            self._update_stats()
     
     def action_quit(self) -> None:
         """Quit the application (Global shortcut)"""

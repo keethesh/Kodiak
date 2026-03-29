@@ -8,18 +8,21 @@ import pytest
 
 from kodiak.api.events import TUIEvent, TUIEventManager
 from kodiak.core.analyst import AnalystAgent, AnalystResponse
+from kodiak.core.interface import CoreInterface
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.models import (
+    ScanStatus as DBScanStatus,
     Hypothesis,
     HypothesisStatus,
     HypothesisType,
     ObservationType,
+    ScanJob,
     ScanEventType,
     WorkUnit,
     WorkUnitStatus,
 )
-from kodiak.tui.state import AgentState, ScanState, ScanStatus
+from kodiak.tui.state import AgentState, AppState, ScanState, ScanStatus
 
 
 class RecordingStore:
@@ -526,3 +529,70 @@ def test_scan_state_applies_projection_payload():
     assert scan.capabilities[0]["type"] == "auth_surface"
     assert scan.hypotheses[0]["status"] == "pending"
     assert scan.recent_events[0]["type"] == "work_unit_completed"
+
+
+def test_app_state_add_scan_reads_target_and_agent_count_from_scan_config():
+    state = AppState()
+    project_id = uuid4()
+    state.add_project(
+        SimpleNamespace(
+            id=project_id,
+            name="Demo",
+            description="",
+            created_at=datetime.now(),
+        )
+    )
+    scan = ScanJob(
+        id=uuid4(),
+        project_id=project_id,
+        name="Projection-backed scan",
+        status=DBScanStatus.PENDING,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        config={
+            "target": "https://app.example.com",
+            "agent_count": 3,
+        },
+    )
+
+    state.add_scan(scan)
+
+    added = state.get_scan(str(scan.id))
+    assert added is not None
+    assert added.target == "https://app.example.com"
+    assert added.agent_count == 3
+    assert state.get_project(str(project_id)).target == "https://app.example.com"
+
+
+@pytest.mark.asyncio
+async def test_core_interface_returns_scan_projection(monkeypatch):
+    interface = CoreInterface()
+    run_id = "run-1"
+    scan_id = str(uuid4())
+    interface._runs[run_id] = SimpleNamespace(scan_id=scan_id)
+
+    fake_scan = SimpleNamespace(id=uuid4(), project_id=uuid4())
+    expected_projection = {"scan_id": scan_id, "work_queue": {"pending": 1}}
+
+    async def fake_get(scan_session, lookup_scan_id):
+        assert str(lookup_scan_id) == scan_id
+        return fake_scan
+
+    class FakeStore:
+        def __init__(self, project_id, scan_id):
+            self.project_id = project_id
+            self.scan_id = scan_id
+
+        async def build_projection(self, session):
+            return expected_projection
+
+    async def fake_get_session():
+        yield object()
+
+    monkeypatch.setattr("kodiak.core.interface.get_session", fake_get_session)
+    monkeypatch.setattr("kodiak.core.interface.crud_scan.get", fake_get)
+    monkeypatch.setattr("kodiak.core.interface.SharedScanStore", FakeStore)
+
+    projection = await interface.get_scan_projection(run_id)
+
+    assert projection == expected_projection

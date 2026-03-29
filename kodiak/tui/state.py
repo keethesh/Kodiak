@@ -257,18 +257,27 @@ class AppState:
     # Scan management
     def add_scan(self, scan: ScanJob):
         """Add a scan to state"""
+        config = scan.config or {}
+        target = str(config.get("target", "") or "")
+        agent_count = int(config.get("agent_count", 1) or 1)
         scan_state = ScanState(
             id=str(scan.id),
             project_id=str(scan.project_id),
             name=scan.name,
-            target=scan.target,
+            target=target,
             status=ScanStatus(scan.status.value),
-            agent_count=scan.agent_count or 1,
+            agent_count=agent_count,
             created_at=scan.created_at,
-            started_at=scan.started_at,
-            completed_at=scan.completed_at
+            started_at=getattr(scan, "started_at", None),
+            completed_at=getattr(scan, "completed_at", None),
         )
         self.scans[scan_state.id] = scan_state
+        project_state = self.projects.get(scan_state.project_id)
+        if project_state:
+            project_state.scan_count = len(self.get_scans_for_project(scan_state.project_id))
+            project_state.last_scan_status = scan_state.status
+            if scan_state.target and not project_state.target:
+                project_state.target = scan_state.target
         self.emit("scan_added", scan_state)
 
     def add_scan_state(self, scan_state: "ScanState"):
@@ -282,6 +291,9 @@ class AppState:
             scan_state = self.scans[scan_id]
             old_status = scan_state.status
             scan_state.status = status
+            project_state = self.projects.get(scan_state.project_id)
+            if project_state:
+                project_state.last_scan_status = status
             
             if status == ScanStatus.RUNNING and not scan_state.started_at:
                 scan_state.started_at = datetime.now()

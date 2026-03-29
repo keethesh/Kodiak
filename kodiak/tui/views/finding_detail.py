@@ -215,7 +215,8 @@ class FindingDetailScreen(Screen):
         
         # Update severity with color (Requirement 10.1)
         severity = self.query_one("#finding-severity", Static)
-        severity_value = (self.finding.severity or "info").lower()
+        raw_severity = self.finding.severity.value if hasattr(self.finding.severity, "value") else (self.finding.severity or "info")
+        severity_value = str(raw_severity).lower()
         severity_icon = self._get_severity_icon(severity_value)
         severity.update(f"Severity: {severity_icon} {severity_value.upper()}")
         severity.add_class(f"severity-{severity_value}")
@@ -243,21 +244,22 @@ class FindingDetailScreen(Screen):
         lines.append(f"URL/Target: {target}")
         
         # Get parameter if available
-        if self.finding.evidence and isinstance(self.finding.evidence, dict):
-            parameter = self.finding.evidence.get("parameter") or self.finding.evidence.get("param")
+        evidence = self._finding_evidence()
+        if evidence:
+            parameter = evidence.get("parameter") or evidence.get("param")
             if parameter:
                 lines.append(f"Parameter: {parameter}")
             
-            method = self.finding.evidence.get("method") or self.finding.evidence.get("http_method")
+            method = evidence.get("method") or evidence.get("http_method")
             if method:
                 lines.append(f"Method: {method}")
             
-            endpoint = self.finding.evidence.get("endpoint") or self.finding.evidence.get("path")
+            endpoint = evidence.get("endpoint") or evidence.get("path")
             if endpoint:
                 lines.append(f"Endpoint: {endpoint}")
         
         # Get node info if available
-        if self.finding.node:
+        if getattr(self.finding, "node", None):
             if hasattr(self.finding.node, 'type'):
                 lines.append(f"Node Type: {self.finding.node.type}")
             if hasattr(self.finding.node, 'name'):
@@ -271,9 +273,10 @@ class FindingDetailScreen(Screen):
         
         lines = []
         
-        if self.finding.evidence and isinstance(self.finding.evidence, dict):
+        evidence = self._finding_evidence()
+        if evidence:
             # Request data
-            request = self.finding.evidence.get("request")
+            request = evidence.get("request")
             if request:
                 lines.append("Request:")
                 if isinstance(request, dict):
@@ -282,7 +285,7 @@ class FindingDetailScreen(Screen):
                     lines.append(f"  {request}")
             
             # Response data
-            response = self.finding.evidence.get("response")
+            response = evidence.get("response")
             if response:
                 lines.append("\nResponse:")
                 if isinstance(response, dict):
@@ -295,7 +298,7 @@ class FindingDetailScreen(Screen):
                     lines.append(f"  {response_str}")
             
             # Payload
-            payload = self.finding.evidence.get("payload") or self.finding.evidence.get("payloads")
+            payload = evidence.get("payload") or evidence.get("payloads")
             if payload:
                 lines.append("\nPayload(s):")
                 if isinstance(payload, list):
@@ -305,13 +308,13 @@ class FindingDetailScreen(Screen):
                     lines.append(f"  {payload}")
             
             # Proof of concept
-            poc = self.finding.evidence.get("poc") or self.finding.evidence.get("proof_of_concept")
+            poc = evidence.get("poc") or evidence.get("proof_of_concept")
             if poc:
                 lines.append("\nProof of Concept:")
                 lines.append(f"  {poc}")
             
             # Additional evidence fields
-            for key, value in self.finding.evidence.items():
+            for key, value in evidence.items():
                 if key not in ["request", "response", "payload", "payloads", "poc", 
                               "proof_of_concept", "target", "url", "parameter", "param",
                               "method", "http_method", "endpoint", "path", "discovered_by",
@@ -330,14 +333,13 @@ class FindingDetailScreen(Screen):
         
         if self.finding.remediation:
             remediation_content.update(self.finding.remediation)
-        elif self.finding.evidence and isinstance(self.finding.evidence, dict):
-            remediation = self.finding.evidence.get("remediation") or self.finding.evidence.get("recommendation")
+        else:
+            evidence = self._finding_evidence()
+            remediation = evidence.get("remediation") or evidence.get("recommendation")
             if remediation:
                 remediation_content.update(remediation)
             else:
                 remediation_content.update("No remediation recommendations available")
-        else:
-            remediation_content.update("No remediation recommendations available")
     
     def _update_details_section(self):
         """Update the additional details section"""
@@ -381,17 +383,31 @@ class FindingDetailScreen(Screen):
         """Get target from finding, node, or evidence"""
         if hasattr(self.finding, 'target') and self.finding.target:
             return self.finding.target
-        if self.finding.node and hasattr(self.finding.node, 'name'):
+        if getattr(self.finding, "node", None) and hasattr(self.finding.node, 'name'):
             return self.finding.node.name
-        if self.finding.evidence and isinstance(self.finding.evidence, dict):
-            return self.finding.evidence.get("target") or self.finding.evidence.get("url") or "N/A"
+        evidence = self._finding_evidence()
+        if evidence:
+            return evidence.get("target") or evidence.get("url") or "N/A"
         return "N/A"
     
     def _get_finding_agent(self) -> str:
         """Get discovering agent from finding evidence"""
-        if self.finding.evidence and isinstance(self.finding.evidence, dict):
-            return self.finding.evidence.get("discovered_by") or self.finding.evidence.get("agent") or "Unknown"
+        evidence = self._finding_evidence()
+        if evidence:
+            return evidence.get("discovered_by") or evidence.get("agent") or "Unknown"
         return "Unknown"
+
+    def _finding_evidence(self) -> dict:
+        """Best-effort evidence accessor for ORM and projection-backed findings."""
+        evidence = getattr(self.finding, "evidence", None)
+        if isinstance(evidence, dict):
+            return evidence
+        properties = getattr(self.finding, "properties", None)
+        if isinstance(properties, dict):
+            nested = properties.get("evidence")
+            if isinstance(nested, dict):
+                return nested
+        return {}
     
     def _get_severity_icon(self, severity: str) -> str:
         """Get the appropriate icon for severity"""
@@ -422,9 +438,10 @@ class FindingDetailScreen(Screen):
         poc_parts.append("")
         
         # Evidence
-        if self.finding.evidence and isinstance(self.finding.evidence, dict):
+        evidence = self._finding_evidence()
+        if evidence:
             # Payload
-            payload = self.finding.evidence.get("payload") or self.finding.evidence.get("payloads")
+            payload = evidence.get("payload") or evidence.get("payloads")
             if payload:
                 poc_parts.append("Payload:")
                 if isinstance(payload, list):
@@ -435,14 +452,14 @@ class FindingDetailScreen(Screen):
                 poc_parts.append("")
             
             # PoC
-            poc = self.finding.evidence.get("poc") or self.finding.evidence.get("proof_of_concept")
+            poc = evidence.get("poc") or evidence.get("proof_of_concept")
             if poc:
                 poc_parts.append("Proof of Concept:")
                 poc_parts.append(poc)
                 poc_parts.append("")
             
             # Request
-            request = self.finding.evidence.get("request")
+            request = evidence.get("request")
             if request:
                 poc_parts.append("Request:")
                 if isinstance(request, dict):

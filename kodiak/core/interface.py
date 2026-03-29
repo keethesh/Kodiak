@@ -7,8 +7,11 @@ from loguru import logger
 
 from kodiak.api.events import TUIEvent, TUIEventManager, event_manager as default_event_manager
 from kodiak.core.interface_events import CoreEvent, map_tui_event_payload
+from kodiak.core.shared_store import SharedScanStore
 from kodiak.core.scan_runner import ScanRunner, ScanResult
 from kodiak.core.config import settings
+from kodiak.database.crud import scan_job as crud_scan
+from kodiak.database.engine import get_session
 from kodiak.services import llm
 
 
@@ -29,6 +32,8 @@ class _RunState:
     report_format: str
     report_path: Optional[str]
     project_name: Optional[str] = None
+    project_id: Optional[str] = None
+    scan_name: Optional[str] = None
     queue: asyncio.Queue[CoreEvent] = field(default_factory=asyncio.Queue)
     task: Optional[asyncio.Task] = None
     result: Optional[ScanResult] = None
@@ -77,6 +82,9 @@ class CoreInterface:
         report_format: str = "json+md",
         report_path: Optional[str] = None,
         project_name: Optional[str] = None,
+        project_id: Optional[str] = None,
+        scan_id: Optional[str] = None,
+        scan_name: Optional[str] = None,
     ) -> str:
         await self._ensure_subscriptions()
 
@@ -96,10 +104,16 @@ class CoreInterface:
             report_format=report_format,
             report_path=report_path,
             project_name=project_name,
+            project_id=project_id,
+            scan_name=scan_name,
         )
+        if scan_id:
+            state.scan_id = scan_id
 
         async with self._lock:
             self._runs[run_id] = state
+            if scan_id:
+                self._scan_to_run[scan_id] = run_id
 
         state.task = asyncio.create_task(self._run_scan(state), name=f"kodiak-run-{run_id}")
         return run_id
@@ -151,6 +165,22 @@ class CoreInterface:
             pass
         return True
 
+    async def get_scan_projection(self, run_id: str) -> Dict[str, Any]:
+        """Return the canonical scan projection for a known run."""
+        state = self._runs.get(run_id)
+        if not state or not state.scan_id:
+            return {}
+
+        scan_uuid = uuid.UUID(state.scan_id)
+        async for session in get_session():
+            scan = await crud_scan.get(session, scan_uuid)
+            if not scan:
+                return {}
+            store = SharedScanStore(project_id=scan.project_id, scan_id=scan.id)
+            return await store.build_projection(session)
+
+        return {}
+
     async def _run_scan(self, state: _RunState) -> None:
         try:
             from kodiak.core.config import settings
@@ -170,6 +200,9 @@ class CoreInterface:
                     report_format=state.report_format,
                     report_path=state.report_path,
                     project_name=state.project_name,
+                    project_id=state.project_id,
+                    scan_id=state.scan_id,
+                    scan_name=state.scan_name,
                 )
                 state.result = result
             finally:
