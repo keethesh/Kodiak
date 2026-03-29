@@ -520,6 +520,7 @@ install_from_source() {
     
     local source_dir="$INSTALL_DIR/source"
     local is_update=false
+    local using_current_dir=false
     
     if [[ "$UPDATE_INSTALL" == "true" ]] && [[ -d "$source_dir/.git" ]]; then
         is_update=true
@@ -529,6 +530,7 @@ install_from_source() {
     if [[ -f "pyproject.toml" ]] && grep -q "name = \"kodiak-pentest\"" pyproject.toml 2>/dev/null; then
         print_status "Found local Kodiak source code. Installing from current directory..."
         source_dir="$PWD"
+        using_current_dir=true
         cd "$source_dir"
         
         if [[ "$is_update" == "true" ]]; then
@@ -604,15 +606,30 @@ install_from_source() {
             fi
         fi
     else
-        # Latest tracks main branch by default.
-        if git show-ref --verify --quiet refs/remotes/origin/main; then
-            print_status "Using main branch..."
+        # Latest defaults to the currently checked out branch on updates, or main for fresh clones.
+        local update_branch="main"
+        if [[ "$is_update" == "true" ]]; then
+            local current_branch
+            current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+            if [[ -n "$current_branch" ]]; then
+                update_branch="$current_branch"
+            fi
+        fi
+
+        if git show-ref --verify --quiet "refs/remotes/origin/$update_branch"; then
+            print_status "Using branch $update_branch..."
+            run_cmd_allow_fail "Checking out branch $update_branch" git checkout "$update_branch"
+            if [[ "$is_update" == "true" ]]; then
+                run_cmd_allow_fail "Pulling latest $update_branch branch changes" git pull origin "$update_branch" --rebase
+            fi
+        elif git show-ref --verify --quiet refs/remotes/origin/main; then
+            print_warning "origin/$update_branch not found. Falling back to main."
             run_cmd_allow_fail "Checking out main branch" git checkout main
-            if [[ "$is_update" == "true" ]] && [[ "$source_dir" != "$PWD" || $(git symbolic-ref --short HEAD 2>/dev/null) == "main" ]]; then
+            if [[ "$is_update" == "true" ]]; then
                 run_cmd_allow_fail "Pulling latest main branch changes" git pull origin main --rebase
             fi
         else
-            print_warning "origin/main not found. Staying on current branch."
+            print_warning "No suitable remote branch found. Staying on current branch."
         fi
     fi
 
@@ -620,7 +637,7 @@ install_from_source() {
     local project_dir
     project_dir="$(resolve_python_project_dir "$source_dir" || true)"
 
-    if [[ -z "$project_dir" ]] && [[ "$source_dir" != "$PWD" ]]; then
+    if [[ -z "$project_dir" ]] && [[ "$using_current_dir" != "true" ]]; then
         print_warning "Source checkout missing pyproject.toml/setup.py. Re-cloning repository..."
         run_cmd "Removing invalid source checkout" rm -rf "$source_dir"
         if ! run_cmd "Re-cloning Kodiak repository" git clone https://github.com/keethesh/Kodiak.git "$source_dir"; then
