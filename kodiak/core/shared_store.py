@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 from loguru import logger
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
+from sqlmodel import select, update
 
 from kodiak.database.models import (
     Attempt,
@@ -216,6 +216,7 @@ class SharedScanStore:
             )
             result = await session.execute(stmt)
             unit = None
+            claim_started_at = datetime.now(timezone.utc)
             for candidate in result.scalars().all():
                 family = _tool_family(candidate.technique, candidate.command_template or "")
                 if (
@@ -223,17 +224,32 @@ class SharedScanStore:
                     and (family, candidate.targets_hash) in active_locks
                 ):
                     continue
-                unit = candidate
-                break
+                claim_stmt = (
+                    update(WorkUnit)
+                    .where(
+                        WorkUnit.id == candidate.id,
+                        WorkUnit.status == WorkUnitStatus.PENDING,
+                    )
+                    .values(
+                        status=WorkUnitStatus.CLAIMED,
+                        claimed_by=worker_id,
+                        started_at=claim_started_at,
+                    )
+                )
+                claim_result = await session.execute(claim_stmt)
+                if (claim_result.rowcount or 0) == 1:
+                    unit = candidate
+                    break
+                await session.rollback()
             if unit is None:
                 return None
 
-            unit.status = WorkUnitStatus.CLAIMED
-            unit.claimed_by = worker_id
-            unit.started_at = datetime.now(timezone.utc)
-            session.add(unit)
             await session.commit()
-            await session.refresh(unit)
+            refresh_stmt = select(WorkUnit).where(WorkUnit.id == unit.id)
+            refreshed = await session.execute(refresh_stmt)
+            unit = refreshed.scalar_one_or_none()
+            if unit is None:
+                return None
             await self.append_event(
                 session,
                 event_type=ScanEventType.WORK_UNIT_CLAIMED,

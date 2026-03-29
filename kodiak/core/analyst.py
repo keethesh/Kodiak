@@ -183,8 +183,17 @@ class AnalystAgent:
                 await self._sleep(poll_interval)
                 continue
 
-            # Process batch
-            result = await self._analyze_batch(unanalyzed)
+            # Process batch. Keep the Analyst alive if one batch hits an
+            # unexpected persistence/parsing edge case.
+            try:
+                result = await self._analyze_batch(unanalyzed)
+            except Exception:
+                self._cycle_count += 1
+                logger.exception("Analyst batch processing failed")
+                idle_cycles = 0
+                await self._sleep(poll_interval)
+                continue
+
             self._cycle_count += 1
             idle_cycles = 0
 
@@ -484,6 +493,7 @@ class AnalystAgent:
                     details={"source": "finding", "title": finding.title},
                 )
 
+        await self._derive_waf_followup_directives(session, parsed.analysis, work_units)
         await self._derive_chain_hypotheses(session)
 
     async def _persist_url_state(self, session, url: str, source: str) -> None:
@@ -687,6 +697,62 @@ class AnalystAgent:
                         "chain": "wordpress_admin",
                     },
                 )
+
+    async def _derive_waf_followup_directives(
+        self,
+        session,
+        analysis: str,
+        work_units: List[WorkUnit],
+    ) -> None:
+        """Turn WAF/browser-origin conclusions into concrete follow-up directives."""
+        analysis_lower = (analysis or "").lower()
+        waf_markers = (
+            "cloudflare",
+            "just a moment",
+            "bot management",
+            "waf",
+            "akamai",
+        )
+        if not any(marker in analysis_lower for marker in waf_markers):
+            return
+
+        targets: List[str] = []
+        for unit in work_units:
+            unit_targets = json.loads(unit.targets_json) if unit.targets_json else []
+            for target in unit_targets:
+                normalized = self._normalize_target(target)
+                if "://" in normalized:
+                    targets.append(normalized)
+
+        unique_targets: List[str] = []
+        seen = set()
+        for target in targets:
+            if target in seen:
+                continue
+            seen.add(target)
+            unique_targets.append(target)
+
+        for target in unique_targets[:8]:
+            await self.store.add_directive(
+                session,
+                directive_type=DirectiveType.ATTACK_HINT,
+                content={
+                    "technique": "waf_detection_followup",
+                    "targets": [target],
+                    "context": "WAF/CDN pressure detected; confirm the protection and adapt follow-up accordingly",
+                    "command": "wafw00f {target} -a",
+                },
+            )
+            await self.store.add_directive(
+                session,
+                directive_type=DirectiveType.ATTACK_HINT,
+                content={
+                    "technique": "browser_like_probe_followup",
+                    "targets": [target],
+                    "context": "CLI probes were blocked; retry with a realistic browser user-agent and follow redirects for better surface visibility",
+                    "command": "curl -skL -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36' {target} | head -200",
+                },
+            )
 
     @staticmethod
     def _extract_urls(text: str) -> List[str]:

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shlex
 import time
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -40,7 +41,13 @@ _HEAVY_TOOLS = frozenset({
 def _tool_name_for_unit(unit: WorkUnit) -> str:
     command = (unit.command_template or "").strip()
     if command:
-        return command.split()[0].lower()
+        segment = command.rsplit("|", 1)[-1].strip()
+        try:
+            parts = shlex.split(segment, posix=True)
+        except ValueError:
+            parts = segment.split()
+        if parts:
+            return parts[0].lower()
     return unit.technique.split("_", 1)[0].lower()
 
 
@@ -108,6 +115,7 @@ async def _worker_loop(
             pass
 
         tool_name = _tool_name_for_unit(unit)
+        primary_target = (json.loads(unit.targets_json)[0] if unit.targets_json else "")
 
         # Emit tool start event
         if event_manager:
@@ -116,7 +124,7 @@ async def _worker_loop(
                     scan_id=scan_id_str,
                     tool_name=tool_name,
                     agent_id=worker_id,
-                    target=command[:80],
+                    target=primary_target or command[:80],
                 )
             except Exception:
                 pass
@@ -133,7 +141,7 @@ async def _worker_loop(
             await store.record_attempt(
                 session,
                 tool=tool_name,
-                target=(json.loads(unit.targets_json)[0] if unit.targets_json else ""),
+                target=primary_target,
                 status="started",
                 reason=unit.context or unit.technique,
                 properties={
@@ -168,7 +176,7 @@ async def _worker_loop(
             await store.record_attempt(
                 session,
                 tool=tool_name,
-                target=(json.loads(unit.targets_json)[0] if unit.targets_json else ""),
+                target=primary_target,
                 status=("timeout" if result.timed_out else "success" if result.exit_code == 0 else "failed"),
                 reason=unit.context or unit.technique,
                 properties={

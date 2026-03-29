@@ -9,10 +9,12 @@ import pytest
 from kodiak.api.events import TUIEvent, TUIEventManager
 from kodiak.core.analyst import AnalystAgent, AnalystResponse
 from kodiak.core.interface import CoreInterface
+from kodiak.core.multi_agent_orchestrator import _tool_name_for_unit
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.models import (
     ScanStatus as DBScanStatus,
+    DirectiveType,
     Hypothesis,
     HypothesisStatus,
     HypothesisType,
@@ -202,21 +204,42 @@ async def test_claim_work_unit_serializes_same_scope_heavy_tool_families():
         command_template="nuclei -u https://b.example.com -tags config",
         status=WorkUnitStatus.PENDING,
     )
+    claimed_allowed = WorkUnit(
+        id=allowed.id,
+        scan_id=scan_id,
+        project_id=project_id,
+        technique="nuclei_config",
+        targets_json='["https://b.example.com"]',
+        targets_hash="scope-b",
+        command_template="nuclei -u https://b.example.com -tags config",
+        status=WorkUnitStatus.CLAIMED,
+        claimed_by="worker-1",
+    )
+
+    class FakeClaimResult:
+        def __init__(self, rowcount):
+            self.rowcount = rowcount
 
     class FakeSession:
         def __init__(self):
-            self._responses = [
-                _FakeResult([active]),
-                _FakeResult([blocked, allowed]),
-            ]
-            self.added = []
+            self.refreshed = False
             self.committed = False
 
         async def execute(self, statement):
-            return self._responses.pop(0)
+            text = str(statement)
+            if "FROM workunit" in text and "status IN" in text:
+                return _FakeResult([active])
+            if "FROM workunit" in text and "status =" in text and "LIMIT" in text:
+                return _FakeResult([blocked, allowed])
+            if text.startswith("UPDATE workunit"):
+                return FakeClaimResult(1)
+            if "WHERE workunit.id =" in text:
+                self.refreshed = True
+                return _FakeResult([claimed_allowed])
+            raise AssertionError(f"Unexpected statement: {text}")
 
         def add(self, obj):
-            self.added.append(obj)
+            return None
 
         async def commit(self):
             self.committed = True
@@ -231,9 +254,91 @@ async def test_claim_work_unit_serializes_same_scope_heavy_tool_families():
 
     claimed = await store.claim_work_unit(session, "worker-1")
 
-    assert claimed is allowed
+    assert claimed is claimed_allowed
     assert claimed.claimed_by == "worker-1"
     assert session.committed is True
+    assert session.refreshed is True
+
+
+@pytest.mark.asyncio
+async def test_claim_work_unit_does_not_double_claim_same_unit():
+    scan_id = uuid4()
+    project_id = uuid4()
+    store = SharedScanStore(project_id=project_id, scan_id=scan_id)
+    unit_id = uuid4()
+
+    pending_unit = WorkUnit(
+        id=unit_id,
+        scan_id=scan_id,
+        project_id=project_id,
+        technique="subfinder",
+        targets_json='["example.com"]',
+        targets_hash="scope-example",
+        command_template="subfinder -d example.com -silent",
+        status=WorkUnitStatus.PENDING,
+    )
+    claimed_unit = WorkUnit(
+        id=unit_id,
+        scan_id=scan_id,
+        project_id=project_id,
+        technique="subfinder",
+        targets_json='["example.com"]',
+        targets_hash="scope-example",
+        command_template="subfinder -d example.com -silent",
+        status=WorkUnitStatus.CLAIMED,
+        claimed_by="worker-1",
+    )
+
+    class FakeClaimResult:
+        def __init__(self, rowcount):
+            self.rowcount = rowcount
+
+    class FakeSession:
+        def __init__(self):
+            self.phase = 0
+            self.committed = 0
+
+        async def execute(self, statement):
+            text = str(statement)
+            if "FROM workunit" in text and "status IN" in text:
+                return _FakeResult([])
+            if "FROM workunit" in text and "status =" in text and "LIMIT" in text:
+                return _FakeResult([pending_unit] if self.phase == 0 else [])
+            if text.startswith("UPDATE workunit"):
+                rowcount = 1 if self.phase == 0 else 0
+                self.phase += 1
+                return FakeClaimResult(rowcount)
+            if "WHERE workunit.id =" in text:
+                return _FakeResult([claimed_unit])
+            raise AssertionError(f"Unexpected statement: {text}")
+
+        async def commit(self):
+            self.committed += 1
+
+        async def rollback(self):
+            return None
+
+        def add(self, obj):
+            return None
+
+        async def refresh(self, obj):
+            return None
+
+    emitted = []
+
+    async def fake_append_event(session, **kwargs):
+        emitted.append(kwargs)
+        return object()
+
+    store.append_event = fake_append_event
+    session = FakeSession()
+    first = await store.claim_work_unit(session, "worker-1")
+    second = await store.claim_work_unit(session, "worker-2")
+
+    assert first is not None
+    assert first.claimed_by == "worker-1"
+    assert second is None
+    assert emitted[0]["event_type"] == ScanEventType.WORK_UNIT_CLAIMED
 
 
 @pytest.mark.asyncio
@@ -328,6 +433,41 @@ async def test_analyst_derives_chain_hypotheses_from_capability_combinations():
 
 
 @pytest.mark.asyncio
+async def test_analyst_derives_waf_followup_directives():
+    directives = []
+
+    class DirectiveStore:
+        scan_id = uuid4()
+
+        async def add_directive(self, session, **kwargs):
+            directives.append(kwargs)
+
+    analyst = AnalystAgent(store=DirectiveStore())
+    work_unit = WorkUnit(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        technique="httpx_primary",
+        targets_json=json.dumps(["https://app.example.com"]),
+        targets_hash="hash-1",
+        command_template="httpx ...",
+        status=WorkUnitStatus.COMPLETED,
+    )
+
+    await analyst._derive_waf_followup_directives(
+        object(),
+        "Cloudflare bot management is blocking standard CLI probes. A browser-like approach is needed.",
+        [work_unit],
+    )
+
+    directive_types = {entry["directive_type"] for entry in directives}
+    commands = {entry["content"]["command"] for entry in directives}
+
+    assert DirectiveType.ATTACK_HINT in directive_types
+    assert "wafw00f {target} -a" in commands
+    assert any("Mozilla/5.0" in command for command in commands)
+
+
+@pytest.mark.asyncio
 async def test_planner_processes_pending_hypotheses_into_followup_work(monkeypatch):
     class HypothesisStore(RecordingStore):
         def __init__(self):
@@ -376,6 +516,19 @@ async def test_planner_processes_pending_hypotheses_into_followup_work(monkeypat
     assert "hypothesis_sqlmap_followup" in techniques
     assert "hypothesis_admin_surface_followup" in techniques
     assert store.marked[0][1] == HypothesisStatus.QUEUED
+
+
+def test_planner_normalizes_nmap_targets_to_hostnames():
+    store = RecordingStore()
+    planner = PlannerAgent(store=store, target="https://example.com")
+    rule = SimpleNamespace(
+        command_template="nmap -sV -sC -T3 -p 80,443 {target}",
+        technique="nmap_initial",
+    )
+
+    normalized = planner._normalize_target_for_rule(rule, "https://example.com", "example.com")
+
+    assert normalized == "example.com"
 
 
 @pytest.mark.asyncio
@@ -432,10 +585,14 @@ async def test_shared_store_emits_scan_events_for_work_unit_lifecycle():
         status=WorkUnitStatus.PENDING,
     )
 
+    class FakeClaimResult:
+        def __init__(self, rowcount):
+            self.rowcount = rowcount
+
     class FakeSession:
         def __init__(self):
             self.commits = 0
-            self._responses = [_FakeResult([]), _FakeResult([unit])]
+            self.refreshed = False
 
         def add(self, obj):
             return None
@@ -450,10 +607,19 @@ async def test_shared_store_emits_scan_events_for_work_unit_lifecycle():
             return None
 
         async def execute(self, statement):
-            return self._responses.pop(0)
+            text = str(statement)
+            if "FROM workunit" in text and "status IN" in text:
+                return _FakeResult([])
+            if "FROM workunit" in text and "status =" in text and "LIMIT" in text:
+                return _FakeResult([unit])
+            if text.startswith("UPDATE workunit"):
+                return FakeClaimResult(1)
+            if "WHERE workunit.id =" in text:
+                self.refreshed = True
+                return _FakeResult([unit])
+            raise AssertionError(f"Unexpected statement: {text}")
 
     enqueue_session = FakeSession()
-    enqueue_session._responses = []
     await store.enqueue_work_unit(
         enqueue_session,
         technique="httpx_primary",
@@ -466,7 +632,6 @@ async def test_shared_store_emits_scan_events_for_work_unit_lifecycle():
     assert claimed is unit
 
     complete_session = FakeSession()
-    complete_session._responses = [_FakeResult([unit])]
     await store.complete_work_unit(
         complete_session,
         unit.id,
@@ -657,3 +822,17 @@ async def test_core_interface_returns_scan_projection(monkeypatch):
     projection = await interface.get_scan_projection(run_id)
 
     assert projection == expected_projection
+
+
+def test_tool_name_for_unit_prefers_last_piped_command():
+    unit = WorkUnit(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        technique="httpx_primary",
+        targets_json='["https://example.com"]',
+        targets_hash="hash-httpx",
+        command_template="echo 'https://example.com' | httpx -sc -title -tech-detect -silent",
+        status=WorkUnitStatus.PENDING,
+    )
+
+    assert _tool_name_for_unit(unit) == "httpx"

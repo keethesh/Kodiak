@@ -627,14 +627,15 @@ class PlannerAgent:
         """Enqueue one concrete work unit per target scope."""
         count = 0
         for target in self._dedupe_preserve_order(targets)[:rule.max_targets]:
-            cmd = rule.command_template.format(target=target, domain=domain)
+            normalized_target = self._normalize_target_for_rule(rule, target, domain)
+            cmd = rule.command_template.format(target=normalized_target, domain=domain)
             if self._rate_limit:
                 cmd = self._apply_rate_limit(cmd, rule)
 
             unit = await self.store.enqueue_work_unit(
                 session,
                 technique=rule.technique,
-                targets=[target],
+                targets=[normalized_target],
                 command_template=cmd,
                 priority=rule.priority,
                 phase=rule.phase,
@@ -642,6 +643,24 @@ class PlannerAgent:
             if unit:
                 count += 1
         return count
+
+    def _normalize_target_for_rule(
+        self,
+        rule: MethodologyRule,
+        target: str,
+        domain: str,
+    ) -> str:
+        """Match target shape to the tool family behind a methodology rule."""
+        command_head = rule.command_template.strip().split()[0].lower() if rule.command_template.strip() else ""
+
+        if command_head in {"nmap", "dnsx"} or rule.technique in {"nmap_initial", "ssl_check", "dnsx_subdomains"}:
+            host = self._extract_host(target)
+            return host or domain
+
+        if command_head in {"httpx", "whatweb", "ffuf", "katana", "nuclei", "wpscan", "nikto", "sqlmap", "curl", "wafw00f"}:
+            return self._canonical_hint_target(target)
+
+        return target
 
     def _apply_rate_limit(self, cmd: str, rule: MethodologyRule) -> str:
         """Apply Analyst-directed rate limiting to a command."""
