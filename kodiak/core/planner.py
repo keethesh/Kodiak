@@ -26,6 +26,7 @@ from kodiak.core.methodology import (
     MethodologyRule,
     TriggerType,
     get_rules_for_phase,
+    get_rule_by_technique,
 )
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.engine import get_session
@@ -103,56 +104,60 @@ class PlannerAgent:
         while self._cycle_count < max_cycles and not self._stop_requested:
             self._cycle_count += 1
 
-            # Consume Analyst directives
-            await self._process_directives()
+            try:
+                # Consume Analyst directives
+                await self._process_directives()
 
-            # Scan for new intelligence in completed results
-            await self._update_state_from_results()
-            await self._refresh_state_from_store()
+                # Scan for new intelligence in completed results
+                await self._update_state_from_results()
+                await self._refresh_state_from_store()
 
-            # Expand structured hypotheses into concrete follow-up work.
-            await self._process_hypotheses()
+                # Expand structured hypotheses into concrete follow-up work.
+                await self._process_hypotheses()
 
-            # Generate new work units from methodology
-            generated = await self._generate_work_units()
-
-            # Check if the system has actually settled before auto-advancing.
-            async for session in get_session():
-                pending = await self.store.get_pending_count(session)
-                unanalyzed = await self.store.get_unanalyzed_count(session)
-                waiting_directives = await self.store.get_unconsumed_directive_count(session)
-
-            if pending == 0 and generated == 0:
-                if unanalyzed == 0 and waiting_directives == 0:
-                    self._idle_cycles += 1
-                else:
-                    self._idle_cycles = 0
-            else:
-                self._idle_cycles = 0
-
-            if pending == 0 and generated == 0 and self._cycle_count > 3:
-                if unanalyzed > 0 or waiting_directives > 0 or self._idle_cycles < 2:
-                    await self._sleep(cycle_interval)
-                    continue
-
-                # Try to advance phase once we've been idle across multiple cycles.
-                advanced = self._try_advance_phase()
-                self._idle_cycles = 0
-                if not advanced:
-                    logger.info("📋 Planner: no more work — all phases exhausted")
-                    break
-                # Generate work for new phase immediately.
+                # Generate new work units from methodology
                 generated = await self._generate_work_units()
 
-            if self.event_manager and generated > 0:
-                try:
-                    await self.event_manager.emit_agent_thinking(
-                        agent_id="planner",
-                        message=f"Cycle {self._cycle_count}: queued {generated} work units (phase={self._current_phase})",
-                        scan_id=str(self.store.scan_id),
-                    )
-                except Exception:
-                    pass
+                # Check if the system has actually settled before auto-advancing.
+                async for session in get_session():
+                    pending = await self.store.get_pending_count(session)
+                    unanalyzed = await self.store.get_unanalyzed_count(session)
+                    waiting_directives = await self.store.get_unconsumed_directive_count(session)
+
+                if pending == 0 and generated == 0:
+                    if unanalyzed == 0 and waiting_directives == 0:
+                        self._idle_cycles += 1
+                    else:
+                        self._idle_cycles = 0
+                else:
+                    self._idle_cycles = 0
+
+                if pending == 0 and generated == 0 and self._cycle_count > 3:
+                    if unanalyzed > 0 or waiting_directives > 0 or self._idle_cycles < 2:
+                        await self._sleep(cycle_interval)
+                        continue
+
+                    # Try to advance phase once we've been idle across multiple cycles.
+                    advanced = self._try_advance_phase()
+                    self._idle_cycles = 0
+                    if not advanced:
+                        logger.info("📋 Planner: no more work — all phases exhausted")
+                        break
+                    # Generate work for new phase immediately.
+                    generated = await self._generate_work_units()
+
+                if self.event_manager and generated > 0:
+                    try:
+                        await self.event_manager.emit_agent_thinking(
+                            agent_id="planner",
+                            message=f"Cycle {self._cycle_count}: queued {generated} work units (phase={self._current_phase})",
+                            scan_id=str(self.store.scan_id),
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                logger.exception("Planner cycle failed")
+                self._idle_cycles = 0
 
             await self._sleep(cycle_interval)
 
@@ -240,48 +245,138 @@ class PlannerAgent:
         technique = content.get("technique", "analyst_hint")
         targets = content.get("targets", [])
         context = content.get("context", "")
-        command = content.get("command", "")
 
         if not targets:
             targets = list(self._live_http_hosts - self._skip_targets)
         if not targets:
             targets = list(self._known_hosts - self._skip_targets)
 
-        if not targets or not command:
+        work_specs = self._expand_attack_hint_specs(technique, targets, content)
+        if not work_specs:
             return
 
         async for session in get_session():
-            if "{target}" in command or len(targets) == 1:
-                for target in self._dedupe_preserve_order(targets)[:20]:
-                    resolved_target = self._canonical_hint_target(target)
-                    cmd = command.format(
-                        target=resolved_target,
-                        domain=self._extract_domain(resolved_target),
-                    )
-                    await self.store.enqueue_work_unit(
-                        session,
-                        technique=f"hint_{technique}",
-                        targets=[resolved_target],
-                        command_template=cmd,
-                        context=context,
-                        priority=15,
-                        phase=self._current_phase,
-                    )
-            else:
-                logger.warning(
-                    "Planner received multi-target attack_hint without '{target}' placeholder; "
-                    "enqueueing only the first target to avoid incorrect command reuse."
+            for spec in work_specs:
+                resolved_target = spec["target"]
+                command = spec["command"].format(
+                    target=resolved_target,
+                    domain=self._extract_domain(resolved_target),
                 )
-                first_target = self._canonical_hint_target(targets[0])
                 await self.store.enqueue_work_unit(
                     session,
-                    technique=f"hint_{technique}",
-                    targets=[first_target],
+                    technique=spec["technique"],
+                    targets=[resolved_target],
                     command_template=command,
-                    context=context,
-                    priority=15,
-                    phase=self._current_phase,
+                    context=spec["context"],
+                    priority=spec["priority"],
+                    phase=spec["phase"],
                 )
+
+    def _expand_attack_hint_specs(
+        self,
+        technique: str,
+        targets: List[str],
+        content: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Resolve analyst hint techniques into concrete executable work."""
+        command = content.get("command", "")
+        context = content.get("context", "")
+        ordered_targets = self._dedupe_preserve_order(targets)[:20]
+
+        if command:
+            return [
+                {
+                    "technique": f"hint_{technique}",
+                    "target": self._canonical_hint_target(target),
+                    "command": command,
+                    "context": context,
+                    "priority": 15,
+                    "phase": self._current_phase,
+                }
+                for target in ordered_targets
+            ]
+
+        alias_map = {
+            "nikto_scan": ["nikto"],
+            "nuclei_cves": ["nuclei_cves"],
+            "vulnerability_scanning": ["nuclei_cves", "nikto"],
+            "directory_bruteforce": ["ffuf_common"],
+            "active_crawling": ["katana_crawl"],
+            "active_web_discovery": ["katana_crawl", "ffuf_common"],
+            "web_discovery": ["dnsx_subdomains", "httpx_subdomains", "whatweb_primary"],
+            "subdomain_recon_and_probing": ["dnsx_subdomains", "httpx_subdomains", "whatweb_primary"],
+            "port_scan_and_web_discovery": ["nmap_initial", "httpx_subdomains", "whatweb_primary"],
+            "waf_detection_followup": ["hint_waf_detection_followup"],
+            "browser_like_probe_followup": ["hint_browser_like_probe_followup"],
+        }
+        resolved_techniques = alias_map.get(technique, [technique])
+        specs: List[Dict[str, Any]] = []
+
+        for target in ordered_targets:
+            for resolved in resolved_techniques:
+                spec = self._work_spec_for_hint_technique(
+                    resolved,
+                    target,
+                    context,
+                )
+                if spec:
+                    specs.append(spec)
+
+        if not specs:
+            logger.debug(f"Planner ignored unsupported attack_hint technique: {technique}")
+        return specs
+
+    def _work_spec_for_hint_technique(
+        self,
+        technique: str,
+        target: str,
+        context: str,
+    ) -> Optional[Dict[str, Any]]:
+        if technique == "hint_waf_detection_followup":
+            resolved_target = self._canonical_hint_target(target)
+            return {
+                "technique": "hint_waf_detection_followup",
+                "target": resolved_target,
+                "command": "wafw00f {target} -a",
+                "context": context,
+                "priority": 15,
+                "phase": self._current_phase,
+            }
+
+        if technique == "hint_browser_like_probe_followup":
+            resolved_target = self._canonical_hint_target(target)
+            return {
+                "technique": "hint_browser_like_probe_followup",
+                "target": resolved_target,
+                "command": "curl -skL -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36' {target} | head -200",
+                "context": context,
+                "priority": 15,
+                "phase": self._current_phase,
+            }
+
+        rule = get_rule_by_technique(technique)
+        if not rule:
+            return None
+
+        normalized_target = self._normalize_target_for_rule(
+            rule,
+            self._canonical_hint_target(target),
+            self._extract_domain(target),
+        )
+        return {
+            "technique": f"hint_{technique}",
+            "target": normalized_target,
+            "command": self._apply_rate_limit(rule.command_template.format(
+                target=normalized_target,
+                domain=self._extract_domain(normalized_target),
+            ), rule) if self._rate_limit else rule.command_template.format(
+                target=normalized_target,
+                domain=self._extract_domain(normalized_target),
+            ),
+            "context": context,
+            "priority": min(rule.priority, 15),
+            "phase": rule.phase or self._current_phase,
+        }
 
     async def _process_escalation(self, content: Dict[str, Any]) -> None:
         """Convert an Analyst escalation into an urgent work unit."""

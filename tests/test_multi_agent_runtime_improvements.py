@@ -563,6 +563,34 @@ async def test_planner_processes_pending_hypotheses_into_followup_work(monkeypat
     assert store.marked[0][1] == HypothesisStatus.QUEUED
 
 
+@pytest.mark.asyncio
+async def test_planner_expands_attack_hint_aliases_into_real_work(monkeypatch):
+    store = RecordingStore()
+    planner = PlannerAgent(store=store, target="metservice.intnet.mu")
+    planner._remember_live_http_target("https://metservice.intnet.mu")
+
+    async def fake_get_session():
+        yield object()
+
+    monkeypatch.setattr("kodiak.core.planner.get_session", fake_get_session)
+
+    await planner._process_attack_hint(
+        {
+            "technique": "vulnerability_scanning",
+            "targets": ["https://metservice.intnet.mu"],
+            "context": "Legacy Apache/PHP stack detected",
+        }
+    )
+
+    techniques = {call["technique"] for call in store.enqueued}
+    commands = {call["command_template"] for call in store.enqueued}
+
+    assert "hint_nuclei_cves" in techniques
+    assert "hint_nikto" in techniques
+    assert any(command.startswith("nuclei -u https://metservice.intnet.mu") for command in commands)
+    assert any(command.startswith("nikto -h https://metservice.intnet.mu") for command in commands)
+
+
 def test_planner_normalizes_nmap_targets_to_hostnames():
     store = RecordingStore()
     planner = PlannerAgent(store=store, target="https://example.com")
