@@ -177,7 +177,12 @@ class MissionControlScreen(Screen):
         queue = getattr(current_scan, "work_queue", {}) or {}
         running_jobs = queue.get("running", 0) + queue.get("claimed", 0)
         pending_jobs = queue.get("pending", 0)
-        
+        degraded = list(getattr(current_scan, "degraded_components", []) or [])
+        degraded_info = ""
+        if degraded:
+            names = ", ".join(component.get("component", "?") for component in degraded[:2])
+            degraded_info = f" | Degraded: {names}"
+
         info_text = (
             f"{status_icon} {current_project.name} → {current_scan.name} | "
             f"Status: {status.value.title()} | "
@@ -185,6 +190,7 @@ class MissionControlScreen(Screen):
             f"Findings: {finding_count} | "
             f"Nodes: {node_count} | "
             f"Jobs: {running_jobs} active / {pending_jobs} queued"
+            f"{degraded_info}"
         )
         
         scan_status.update(info_text)
@@ -241,6 +247,14 @@ class MissionControlScreen(Screen):
             return
 
         activity_log = self.query_one("#activity-log", ActivityLog)
+        degraded = list(getattr(current_scan, "degraded_components", []) or [])
+        if degraded:
+            for component in degraded[:3]:
+                activity_log.add_log(
+                    "WARNING",
+                    f"Degraded component: {component.get('component', '?')} ({component.get('reason', 'unknown reason')})",
+                    source="Projection",
+                )
         for entry in (getattr(current_scan, "recent_events", []) or [])[:5]:
             event_type = str(entry.get("type", "")).replace("_", " ")
             payload = entry.get("payload", {}) or {}

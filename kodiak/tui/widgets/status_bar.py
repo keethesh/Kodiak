@@ -158,9 +158,14 @@ class StatusBar(Widget):
                               if agent.status.value in ["executing", "thinking"])
             pending = queue.get("pending", 0)
             running = queue.get("running", 0) + queue.get("claimed", 0)
+            degraded = list(getattr(self.current_scan, "degraded_components", []) or [])
+            degraded_info = ""
+            if degraded:
+                names = ", ".join(component.get("component", "?") for component in degraded[:2])
+                degraded_info = f", degraded: {names}"
             return (
                 f"🔄 Running ({active_agents}/{agent_count} agents, "
-                f"{running} active jobs, {pending} queued, {finding_count} findings)",
+                f"{running} active jobs, {pending} queued, {finding_count} findings{degraded_info})",
                 "status-running",
             )
         

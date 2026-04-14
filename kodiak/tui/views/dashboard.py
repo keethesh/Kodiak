@@ -243,6 +243,7 @@ class DashboardView(Static):
         queue    = getattr(scan, "work_queue", {}) if scan else {}
         tools    = (queue.get("completed", 0) + queue.get("failed", 0)) if scan else 0
         phase    = self._current_phase(scan) if scan else "—"
+        degraded = len(getattr(scan, "degraded_components", []) or []) if scan else 0
 
         self.query_one("#stat-findings", Static).update(
             f"[bold cyan]{findings}[/bold cyan]\n[dim]Findings[/dim]"
@@ -254,7 +255,7 @@ class DashboardView(Static):
             f"[bold cyan]{tools}[/bold cyan]\n[dim]Tools Run[/dim]"
         )
         self.query_one("#stat-phase", Static).update(
-            f"[bold magenta]{phase}[/bold magenta]\n[dim]Phase[/dim]"
+            f"[bold magenta]{phase}[/bold magenta]\n[dim]{'Phase' if degraded == 0 else f'Phase • {degraded} degraded'}[/dim]"
         )
 
     def _refresh_findings(self) -> None:
@@ -282,6 +283,10 @@ class DashboardView(Static):
         scan = app_state.get_current_scan()
         if scan and getattr(scan, "recent_events", None):
             lines = []
+            degraded = list(getattr(scan, "degraded_components", []) or [])
+            if degraded:
+                names = ", ".join(component.get("component", "?") for component in degraded[:3])
+                lines.append(f"⚠️ degraded components: {names}")
             for entry in scan.recent_events[:12]:
                 event_type = str(entry.get("type", "")).replace("_", " ")
                 payload = entry.get("payload", {}) or {}
