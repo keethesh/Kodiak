@@ -227,7 +227,7 @@ class ScanRunner:
                         "raw_findings": self._finding_event_count,
                         "deduped_findings": len(self._finding_keys),
                         "findings_by_severity": self._finding_counts_by_severity,
-                        "findings_count": manager_result.findings_count,
+                        "findings_count": kernel_result.findings_count,
                         "duration": duration,
                         "report_paths": report_paths,
                     }
