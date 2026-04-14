@@ -22,7 +22,7 @@ async def test_orchestrator_marks_failed_when_agent_task_raises(monkeypatch):
             return []
 
     class CrashingPlanner:
-        def __init__(self, store, target, instructions="", event_manager=None):
+        def __init__(self, store, target, instructions="", event_manager=None, tool_availability=None):
             self._cycle_count = 0
 
         async def run(self, cycle_interval=8.0, max_cycles=200):
@@ -90,7 +90,7 @@ async def test_orchestrator_passes_instructions_to_agents(monkeypatch):
             return []
 
     class Planner:
-        def __init__(self, store, target, instructions="", event_manager=None):
+        def __init__(self, store, target, instructions="", event_manager=None, tool_availability=None):
             captures["planner"] = instructions
             self._cycle_count = 1
 

@@ -25,6 +25,14 @@ class ToolAvailability:
     
     def is_available(self, tool_name: str) -> bool:
         """Check if a specific tool is available."""
+        if tool_name in self.unavailable_tools:
+            return False
+        if (
+            not self._checked
+            and not self.available_tools
+            and not self.unavailable_tools
+        ):
+            return True
         return tool_name in self.available_tools
     
     def is_unavailable(self, tool_name: str) -> bool:

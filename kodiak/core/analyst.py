@@ -475,32 +475,31 @@ class AnalystAgent:
         """Persist deterministic observations, capabilities, and hypotheses."""
         for unit in work_units:
             target = unit.target if unit.target else ""
+            primary_target = self._normalize_target(target) if target else ""
             combined_output = self._clean_text("\n".join(
                 part for part in [unit.result_stdout or "", unit.result_stderr or ""] if part
             ))
 
             if target:
-                normalized_target = self._normalize_target(target)
-                if "://" in normalized_target:
+                if "://" in primary_target:
                     await self.store.add_observation(
                         session,
                         observation_type=ObservationType.LIVE_HTTP,
-                        target=normalized_target,
-                        key=normalized_target,
+                        target=primary_target,
+                        key=primary_target,
                         value={"source": unit.technique},
                     )
                     await self.store.add_capability(
                         session,
                         capability_type=CapabilityType.WEB_SURFACE,
-                        target=normalized_target,
-                        key=normalized_target,
+                        target=primary_target,
+                        key=primary_target,
                         details={"source": unit.technique},
                     )
 
             for url in self._extract_urls(combined_output):
                 await self._persist_url_state(session, url, unit.technique)
 
-            primary_target = self._normalize_target(targets[0]) if targets else ""
             await self._persist_service_state(session, combined_output, primary_target, unit.technique)
             await self._persist_tls_name_state(session, combined_output, primary_target, unit.technique)
             for tech in self._extract_technologies(combined_output):
