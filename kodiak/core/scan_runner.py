@@ -15,6 +15,7 @@ from kodiak.core.tools.inventory import ToolInventory
 from kodiak.core.config import settings
 from kodiak.core.event_publisher import RuntimeEventPublisher
 from kodiak.core.reporting import write_scan_report
+from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.engine import get_session
 from kodiak.database.models import Project, ScanJob, ScanStatus
 from kodiak.database import crud
@@ -166,6 +167,8 @@ class ScanRunner:
                 
                 nodes = await crud.node.get_nodes_by_project(session, project.id)
                 duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                projection_store = SharedScanStore(project_id=project.id, scan_id=scan_job.id)
+                projection = await projection_store.build_projection(session)
                 
                 asset_count = projection.get("asset_count", len(nodes))
                 work_queue = projection.get("work_queue", {})

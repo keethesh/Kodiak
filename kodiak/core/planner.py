@@ -14,7 +14,6 @@ to Analyst directives. It runs on a fast cycle (~10s) to keep Workers busy.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
@@ -113,6 +112,13 @@ class PlannerAgent:
         if not self._tool_availability:
             return False
         return self._tool_availability.is_unavailable(tool_family)
+
+    @staticmethod
+    def _command_tool_family(command_template: str) -> str:
+        command = (command_template or "").strip()
+        if not command:
+            return ""
+        return command.split(maxsplit=1)[0].strip().lower()
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -386,23 +392,30 @@ class PlannerAgent:
 
         for target in ordered_targets:
             for resolved in resolved_techniques:
-                tool_family = resolved.split("_", 1)[0] if "_" in resolved else resolved
-                if self._skip_unavailable_tool(tool_family):
-                    skipped_tools.add(tool_family)
-                    continue
                 spec = self._work_spec_for_hint_technique(
                     resolved,
                     target,
                     context,
                 )
-                if spec:
-                    specs.append(spec)
+                if not spec:
+                    continue
+                tool_family = str(spec.get("tool_family", "")).strip().lower()
+                if not tool_family:
+                    tool_family = resolved.split("_", 1)[0].lower() if "_" in resolved else resolved.lower()
+                if self._skip_unavailable_tool(tool_family):
+                    skipped_tools.add(tool_family)
+                    continue
+                specs.append(spec)
 
         if skipped_tools:
             logger.debug(f"Skipped unavailable tools in attack_hint: {skipped_tools}")
 
         if not specs:
             if command:
+                fallback_tool = self._command_tool_family(command)
+                if fallback_tool and self._skip_unavailable_tool(fallback_tool):
+                    logger.debug(f"Skipped unavailable fallback attack_hint command tool: {fallback_tool}")
+                    return []
                 logger.warning(
                     "Planner executed deprecated raw-command attack_hint for technique "
                     f"{technique}; migrate this hint to structured technique mapping."
@@ -412,6 +425,7 @@ class PlannerAgent:
                         "technique": f"hint_{technique}",
                         "target": self._canonical_hint_target(target),
                         "command": command,
+                        "tool_family": fallback_tool,
                         "context": self._compose_context(context),
                         "priority": 15,
                         "phase": self._current_phase,
@@ -433,6 +447,7 @@ class PlannerAgent:
                 "technique": "hint_waf_detection_followup",
                 "target": resolved_target,
                 "command": "wafw00f {target} -a",
+                "tool_family": "wafw00f",
                 "context": self._compose_context(context),
                 "priority": 15,
                 "phase": self._current_phase,
@@ -444,6 +459,7 @@ class PlannerAgent:
                 "technique": "hint_browser_like_probe_followup",
                 "target": resolved_target,
                 "command": "curl -skL -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36' {target} | head -200",
+                "tool_family": "curl",
                 "context": self._compose_context(context),
                 "priority": 15,
                 "phase": self._current_phase,
@@ -473,6 +489,7 @@ class PlannerAgent:
                 target=safe_target,
                 domain=safe_domain,
             ),
+            "tool_family": self._command_tool_family(rule.command_template),
             "context": self._compose_context(context),
             "priority": min(rule.priority, 15),
             "phase": rule.phase or self._current_phase,

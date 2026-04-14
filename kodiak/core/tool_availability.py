@@ -128,12 +128,13 @@ async def check_tool_availability(
 def get_default_tools_to_check() -> Set[str]:
     """Get the set of tools that the kernel depends on."""
     from kodiak.core.config import settings
-    return settings.HEAVY_TOOLS | {
+    configured_tools = settings.HEAVY_TOOLS | {
         "nmap", "nikto", "sqlmap", "commix", "wpscan",
         "subfinder", "dnsx", "httpx", "whatweb", "amass",
-        "ffuf", "gau", "katana", " Nuclei", "wafw00f",
+        "ffuf", "gau", "katana", "nuclei", "wafw00f",
         "curl", "wget", "jq", "grep", "sed", "awk",
     }
+    return {tool.strip().lower() for tool in configured_tools if tool.strip()}
 
 
 def filter_available_tools(

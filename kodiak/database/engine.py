@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import AsyncGenerator
 from loguru import logger
 
@@ -116,9 +117,15 @@ async def _validate_sqlite_schema(conn) -> None:
     or missing required columns. Old databases should be reset, not migrated.
     """
     try:
-        result = await conn.execute(text("PRAGMA table_info(workunit)"))
+        result = conn.execute(text("PRAGMA table_info(workunit)"))
+        if inspect.isawaitable(result):
+            result = await result
         columns = {row[1] for row in result.fetchall()}
     except SQLAlchemyError:
+        return
+
+    # Fresh databases may not have created tables yet during bootstrap.
+    if not columns:
         return
     
     legacy_columns = {"targets_json", "targets_hash"}
@@ -126,7 +133,7 @@ async def _validate_sqlite_schema(conn) -> None:
         raise SchemaMigrationRequired(
             "Legacy WorkUnit schema detected (has targets_json/targets_hash columns). "
             "The multi-agent kernel requires a fresh schema. "
-            f"Run: kodiak migrate --reset"
+            "Run: kodiak migrate --reset"
         )
     
     required_columns = {"target", "target_kind", "tool_family", "scope_key"}
@@ -156,7 +163,7 @@ async def reset_database() -> None:
     
     try:
         async with get_engine().begin() as conn:
-            from kodiak.database import models
+            from kodiak.database import models as _models  # noqa: F401
             await conn.run_sync(SQLModel.metadata.drop_all)
             await conn.run_sync(SQLModel.metadata.create_all)
         
