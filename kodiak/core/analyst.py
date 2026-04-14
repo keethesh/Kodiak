@@ -7,7 +7,7 @@ performs deep vulnerability analysis, and outputs:
   - Notes (intelligence for other agents)
   - Directives (strategic instructions for the Planner)
 
-Uses the powerful model (Gemini Pro) with high thinking for thorough analysis.
+Uses the powerful model (Claude Sonnet) for thorough analysis.
 """
 
 from __future__ import annotations
@@ -38,8 +38,7 @@ from kodiak.database.models import (
     ScanEventType,
     WorkUnit,
 )
-from kodiak.services import llm
-from kodiak.services.gemini_client import GeminiClient
+from kodiak.services.litellm_client import LiteLLMClient
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -99,8 +98,7 @@ class AnalystResult:
     scan_summary: Optional[str] = None
     input_tokens: int = 0
     output_tokens: int = 0
-    thinking_tokens: int = 0
-    cached_tokens: int = 0
+    total_cost: float = 0.0
 
 
 class AnalystAgent:
@@ -124,11 +122,10 @@ class AnalystAgent:
         self.store = store
         self._instructions = (instructions or "").strip()
         self.event_manager = event_manager
-        self._gemini = GeminiClient()
+        self._llm = LiteLLMClient()
         self._total_input_tokens = 0
         self._total_output_tokens = 0
-        self._total_thinking_tokens = 0
-        self._total_cached_tokens = 0
+        self._total_cost = 0.0
         self._cycle_count = 0
         self._stop_requested = False
         self._circuit_breaker = CircuitBreaker(
@@ -325,20 +322,15 @@ class AnalystAgent:
         # Call LLM
         try:
             model = settings.get_analyst_model()
-            thinking_level = llm.resolve_gemini_thinking_level(
-                model, settings.gemini_thinking_level
-            )
-            api_key = llm.get_google_api_key()
+            api_key = settings.get_resolved_api_key()
 
-            response = await self._gemini.generate(
+            response = await self._llm.generate(
                 model=model,
-                api_key=api_key,
                 system_prompt=system_prompt,
                 messages=messages,
                 temperature=settings.llm_temperature,
                 max_tokens=settings.llm_max_tokens,
-                thinking_level=thinking_level,
-                response_schema=AnalystResponse,
+                response_format={"type": "json_object"},
             )
         except Exception as exc:
             logger.error(f"Analyst LLM call failed: {exc}")
@@ -347,11 +339,10 @@ class AnalystAgent:
         if not response or not response.content:
             return None
 
-        # Track tokens
+        # Track tokens and cost
         self._total_input_tokens += response.input_tokens
         self._total_output_tokens += response.output_tokens
-        self._total_thinking_tokens += response.thinking_tokens
-        self._total_cached_tokens += response.cached_tokens
+        self._total_cost += response.response_cost
 
         # Parse response
         try:
@@ -392,8 +383,7 @@ class AnalystAgent:
             scan_summary=parsed.scan_summary,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
-            thinking_tokens=response.thinking_tokens,
-            cached_tokens=response.cached_tokens,
+            total_cost=response.response_cost,
         )
 
     async def _persist_analysis(

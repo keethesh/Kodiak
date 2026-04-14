@@ -269,10 +269,45 @@ result = await interface.get_scan_result(run_id)
 ### Configuration
 
 All settings via environment variables or `.env`:
-- `KODIAK_LLM_MODEL`: Gemini model selection
+- `KODIAK_LLM_PROVIDER`: LLM provider (`openrouter`)
+- `KODIAK_OPENROUTER_API_KEY`: OpenRouter API key
+- `KODIAK_PLANNER_MODEL`: Fast model (e.g., `anthropic/claude-3.5-haiku`)
+- `KODIAK_ANALYST_MODEL`: Deep model (e.g., `anthropic/claude-3.5-sonnet`)
 - `KODIAK_MULTI_AGENT_WORKERS`: Worker pool size
 - `KODIAK_GLOBAL_CONCURRENCY`: Tool execution limit
 - `KODIAK_TOOL_TIMEOUT`: Default tool timeout
+
+## LLM Provider
+
+### OpenRouter via LiteLLM
+
+Kodiak uses OpenRouter for LLM access via the LiteLLM library, supporting 100+ models:
+
+```python
+from kodiak.services.litellm_client import LiteLLMClient
+
+client = LiteLLMClient()
+response = await client.generate(
+    model="anthropic/claude-3.5-sonnet-20241022",
+    system_prompt="You are a security analyst.",
+    messages=[{"role": "user", "content": "Analyze this finding..."}],
+)
+```
+
+### Model Selection
+
+| Agent | Recommended Model | Reason |
+|-------|-----------------|--------|
+| **Planner** | `anthropic/claude-3.5-haiku` | Fast, cheap, good for rules-based work |
+| **Analyst** | `anthropic/claude-3.5-sonnet` | Deep reasoning for vulnerability analysis |
+
+### Cost Tracking
+
+Actual costs are tracked from OpenRouter API response metadata:
+```python
+response = await client.generate(...)
+print(f"Cost: ${response.response_cost:.4f}")
+```
 
 ## Database Schema
 

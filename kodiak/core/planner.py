@@ -1,7 +1,7 @@
 """
 Planner Agent — methodology-driven work unit generator for the multi-agent pipeline.
 
-The Planner uses a fast model (Gemini Flash) to:
+The Planner uses a fast model (Claude Haiku) to:
   1. Read shared scan state
   2. Apply methodology rules to generate work units
   3. Consume Analyst directives to adjust strategy

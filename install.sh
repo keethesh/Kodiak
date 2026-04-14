@@ -714,12 +714,13 @@ setup_configuration() {
 # NOTE: After major updates, run 'kodiak migrate --reset' to recreate schema
 KODIAK_DB_TYPE=sqlite
 
-# LLM: Configure Gemini with 'kodiak config'
-# GOOGLE_API_KEY=your_api_key_here
+# LLM Provider (OpenRouter via LiteLLM)
+# Get your API key at https://openrouter.ai/keys
+KODIAK_OPENROUTER_API_KEY=your_openrouter_api_key_here
 
-# Agent Model Settings
-KODIAK_PLANNER_MODEL=gemini/gemini-3-flash-preview
-KODIAK_ANALYST_MODEL=gemini/gemini-3.1-pro-preview
+# Agent Model Settings (OpenRouter models)
+KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022
+KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022
 
 # Agent Cycle Settings
 KODIAK_PLANNER_CYCLE_INTERVAL=8.0
@@ -746,7 +747,7 @@ EOF
     fi
     
     print_success "Configuration created at $config_file"
-    print_status "Run 'kodiak config' to set up your Gemini model and API key"
+    print_status "Run 'kodiak config' to set up your OpenRouter API key"
     
     if [[ "$RESET_DB" == "true" ]]; then
         print_status "Resetting database schema..."

@@ -493,21 +493,21 @@ class MultiAgentOrchestrator:
         planner_output = planner_stats.get("output_tokens", 0)
         analyst_input = analyst_result.input_tokens if analyst_result else 0
         analyst_output = analyst_result.output_tokens if analyst_result else 0
-        analyst_thinking = analyst_result.thinking_tokens if analyst_result else 0
+        analyst_cost = analyst_result.total_cost if analyst_result else 0.0
 
         from kodiak.services.llm import calculate_cost
         planner_model = settings.get_planner_model()
         analyst_model = settings.get_analyst_model()
-        total_cost = calculate_cost(
+        
+        # Estimate planner cost (fast model)
+        planner_cost = calculate_cost(
             model=planner_model,
             input_tokens=planner_input,
             output_tokens=planner_output,
-        ) + calculate_cost(
-            model=analyst_model,
-            input_tokens=analyst_input,
-            output_tokens=analyst_output,
-            thinking_tokens=analyst_thinking,
         )
+        
+        # Use actual cost from OpenRouter for analyst
+        total_cost = planner_cost + analyst_cost
 
         return KernelResult(
             status=status,
@@ -517,7 +517,5 @@ class MultiAgentOrchestrator:
             task_errors=task_errors,
             total_input_tokens=planner_input + analyst_input,
             total_output_tokens=planner_output + analyst_output,
-            total_thinking_tokens=analyst_thinking,
-            total_cached_tokens=0,
             total_cost_usd=total_cost,
         )
