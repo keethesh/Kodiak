@@ -83,6 +83,19 @@ class PlannerAgent:
         if "://" in target:
             self._remember_live_http_target(target)
 
+    @staticmethod
+    def _unit_targets(unit: WorkUnit) -> List[str]:
+        """Compatibility accessor while WorkUnit keeps targets_json."""
+        if unit.target:
+            return [unit.target]
+        if unit.targets_json:
+            try:
+                parsed = json.loads(unit.targets_json)
+            except json.JSONDecodeError:
+                return []
+            return [str(item) for item in parsed]
+        return []
+
     def request_stop(self) -> None:
         self._stop_requested = True
 
@@ -484,7 +497,7 @@ class PlannerAgent:
             self._processed_result_ids.add(unit_id)
             self._completed_techniques.add(unit.technique)
 
-            targets = json.loads(unit.targets_json) if unit.targets_json else []
+            targets = self._unit_targets(unit)
             for target in targets:
                 self._remember_target(target)
 
@@ -502,7 +515,7 @@ class PlannerAgent:
 
             # Extract technologies from whatweb/httpx output
             if unit.technique in ("whatweb_primary", "httpx_primary", "httpx_subdomains"):
-                self._extract_techs_from_output(stdout, unit.targets_json)
+                self._extract_techs_from_output(stdout, targets)
 
             self._extract_parameterized_urls(combined_output)
 
@@ -545,9 +558,8 @@ class PlannerAgent:
             if "." in token:
                 self._remember_live_http_target(token.lower())
 
-    def _extract_techs_from_output(self, stdout: str, targets_json: str) -> None:
+    def _extract_techs_from_output(self, stdout: str, targets: List[str]) -> None:
         """Extract technology names from whatweb/httpx output."""
-        targets = json.loads(targets_json) if targets_json else []
         host = self._canonical_hint_target(targets[0]) if targets else self._canonical_hint_target(self.target)
 
         tech_keywords = [

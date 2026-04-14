@@ -9,7 +9,7 @@ import pytest
 from kodiak.api.events import TUIEvent, TUIEventManager
 from kodiak.core.analyst import AnalystAgent, AnalystResponse
 from kodiak.core.interface import CoreInterface
-from kodiak.core.multi_agent_orchestrator import _tool_name_for_unit
+from kodiak.core.multi_agent_orchestrator import _tool_name_for_unit, _unit_primary_target
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.models import (
@@ -1051,3 +1051,21 @@ def test_tool_name_for_unit_prefers_last_piped_command():
     )
 
     assert _tool_name_for_unit(unit) == "httpx"
+
+
+def test_unit_primary_target_prefers_single_scope_field():
+    unit = WorkUnit(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        technique="httpx_primary",
+        target="https://single.example.com",
+        target_kind="origin",
+        tool_family="httpx",
+        scope_key="https://single.example.com",
+        targets_json='["https://legacy.example.com"]',
+        targets_hash="hash-httpx",
+        command_template="echo 'https://single.example.com' | httpx -sc -title -tech-detect -silent",
+        status=WorkUnitStatus.PENDING,
+    )
+
+    assert _unit_primary_target(unit) == "https://single.example.com"

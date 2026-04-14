@@ -55,6 +55,19 @@ def _target_kind(target: str) -> str:
     return "host"
 
 
+def _unit_targets(unit: WorkUnit) -> List[str]:
+    """Compatibility accessor while the schema still carries targets_json."""
+    if unit.target:
+        return [unit.target]
+    if unit.targets_json:
+        try:
+            parsed = json.loads(unit.targets_json)
+        except json.JSONDecodeError:
+            return []
+        return [str(item) for item in parsed]
+    return []
+
+
 _SERIALIZED_TOOL_FAMILIES = frozenset({
     "nuclei", "ffuf", "katana", "gau", "sqlmap",
     "nmap", "commix", "wpscan", "hydra", "nikto",
@@ -179,7 +192,7 @@ class SharedScanStore:
                 entity_id=str(unit.id),
                 payload={
                     "technique": technique,
-                    "targets": sorted(targets),
+                    "targets": [unit.target] if unit.target else sorted(targets),
                     "priority": priority,
                     "phase": phase,
                 },
@@ -260,7 +273,7 @@ class SharedScanStore:
                     unit = candidate
                     claimed_id = candidate.id
                     claimed_technique = candidate.technique
-                    claimed_targets = json.loads(candidate.targets_json or "[]")
+                    claimed_targets = _unit_targets(candidate)
                     break
                 await session.rollback()
             if unit is None:
@@ -311,7 +324,7 @@ class SharedScanStore:
             unit.result_stderr = stderr
             unit.exit_code = exit_code
             unit.completed_at = datetime.now(timezone.utc)
-            completed_targets = json.loads(unit.targets_json or "[]")
+            completed_targets = _unit_targets(unit)
             completed_technique = unit.technique
             session.add(unit)
             await session.commit()

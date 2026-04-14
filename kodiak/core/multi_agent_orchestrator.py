@@ -51,6 +51,20 @@ def _tool_name_for_unit(unit: WorkUnit) -> str:
     return unit.technique.split("_", 1)[0].lower()
 
 
+def _unit_primary_target(unit: WorkUnit) -> str:
+    """Read the canonical scope from the single-scope fields first."""
+    if unit.target:
+        return unit.target
+    if unit.targets_json:
+        try:
+            targets = json.loads(unit.targets_json)
+        except json.JSONDecodeError:
+            return ""
+        if targets:
+            return str(targets[0])
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Worker loop (no LLM — just claims and executes)
 # ---------------------------------------------------------------------------
@@ -115,7 +129,7 @@ async def _worker_loop(
             pass
 
         tool_name = _tool_name_for_unit(unit)
-        primary_target = (json.loads(unit.targets_json)[0] if unit.targets_json else "")
+        primary_target = _unit_primary_target(unit)
 
         # Emit tool start event
         if event_manager:
