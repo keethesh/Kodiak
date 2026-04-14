@@ -557,11 +557,34 @@ async def test_analyst_derives_waf_followup_directives():
     )
 
     directive_types = {entry["directive_type"] for entry in directives}
-    commands = {entry["content"]["command"] for entry in directives}
+    techniques = {entry["content"]["technique"] for entry in directives}
 
     assert DirectiveType.ATTACK_HINT in directive_types
-    assert "wafw00f {target} -a" in commands
-    assert any("Mozilla/5.0" in command for command in commands)
+    assert "waf_detection_followup" in techniques
+    assert "browser_like_probe_followup" in techniques
+
+
+@pytest.mark.asyncio
+async def test_planner_supports_deprecated_raw_command_attack_hints(monkeypatch):
+    store = RecordingStore()
+    planner = PlannerAgent(store=store, target="https://example.com")
+
+    async def fake_get_session():
+        yield object()
+
+    monkeypatch.setattr("kodiak.core.planner.get_session", fake_get_session)
+
+    await planner._process_attack_hint(
+        {
+            "technique": "legacy_raw_hint",
+            "targets": ["https://example.com"],
+            "context": "compatibility",
+            "command": "echo test {target}",
+        }
+    )
+
+    assert store.enqueued[0]["technique"] == "hint_legacy_raw_hint"
+    assert store.enqueued[0]["command_template"] == "echo test https://example.com"
 
 
 @pytest.mark.asyncio

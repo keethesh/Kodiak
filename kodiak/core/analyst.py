@@ -857,7 +857,6 @@ class AnalystAgent:
                     "technique": "waf_detection_followup",
                     "targets": [target],
                     "context": "WAF/CDN pressure detected; confirm the protection and adapt follow-up accordingly",
-                    "command": "wafw00f {target} -a",
                 },
             )
             await self.store.add_directive(
@@ -867,7 +866,6 @@ class AnalystAgent:
                     "technique": "browser_like_probe_followup",
                     "targets": [target],
                     "context": "CLI probes were blocked; retry with a realistic browser user-agent and follow redirects for better surface visibility",
-                    "command": "curl -skL -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36' {target} | head -200",
                 },
             )
 

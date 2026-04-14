@@ -320,23 +320,13 @@ class PlannerAgent:
         targets: List[str],
         content: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
-        """Resolve analyst hint techniques into concrete executable work."""
+        """Resolve analyst hint techniques into concrete executable work.
+
+        Raw ``command`` payloads are a compatibility fallback only.
+        """
         command = content.get("command", "")
         context = content.get("context", "")
         ordered_targets = self._dedupe_preserve_order(targets)[:20]
-
-        if command:
-            return [
-                {
-                    "technique": f"hint_{technique}",
-                    "target": self._canonical_hint_target(target),
-                    "command": command,
-                    "context": context,
-                    "priority": 15,
-                    "phase": self._current_phase,
-                }
-                for target in ordered_targets
-            ]
 
         alias_map = {
             "nikto_scan": ["nikto"],
@@ -365,6 +355,22 @@ class PlannerAgent:
                     specs.append(spec)
 
         if not specs:
+            if command:
+                logger.warning(
+                    "Planner executed deprecated raw-command attack_hint for technique "
+                    f"{technique}; migrate this hint to structured technique mapping."
+                )
+                return [
+                    {
+                        "technique": f"hint_{technique}",
+                        "target": self._canonical_hint_target(target),
+                        "command": command,
+                        "context": context,
+                        "priority": 15,
+                        "phase": self._current_phase,
+                    }
+                    for target in ordered_targets
+                ]
             logger.debug(f"Planner ignored unsupported attack_hint technique: {technique}")
         return specs
 
