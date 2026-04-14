@@ -22,9 +22,9 @@ from urllib.parse import urlparse
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from kodiak.api.events import TUIEventManager
 from kodiak.core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 from kodiak.core.config import settings
+from kodiak.core.event_publisher import RuntimeEventPublisher
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.engine import get_session
 from kodiak.database.models import (
@@ -119,7 +119,7 @@ class AnalystAgent:
         self,
         store: SharedScanStore,
         instructions: str = "",
-        event_manager: Optional[TUIEventManager] = None,
+        event_manager: Optional[RuntimeEventPublisher] = None,
     ):
         self.store = store
         self._instructions = (instructions or "").strip()

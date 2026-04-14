@@ -97,6 +97,7 @@ kodiak/
 ├── core/
 │   ├── analyst.py          # Analyst agent (deep thinking)
 │   ├── config.py           # Settings management
+│   ├── event_publisher.py  # Runtime event publisher protocol
 │   ├── failure_policy.py   # Error handling policies
 │   ├── interface.py        # Frontend-agnostic API
 │   ├── kernel_result.py    # Runtime result type

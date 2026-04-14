@@ -21,9 +21,9 @@ from uuid import UUID
 
 from loguru import logger
 
-from kodiak.api.events import TUIEventManager
 from kodiak.core.analyst import AnalystAgent
 from kodiak.core.config import settings
+from kodiak.core.event_publisher import RuntimeEventPublisher
 from kodiak.core.kernel_result import KernelResult
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
@@ -72,7 +72,7 @@ async def _worker_loop(
     store: SharedScanStore,
     semaphore: asyncio.Semaphore,
     heavy_semaphore: asyncio.Semaphore,
-    event_manager: Optional[TUIEventManager] = None,
+    event_manager: Optional[RuntimeEventPublisher] = None,
     idle_timeout: float = 30.0,
     scan_id_str: str = "",
     container_label: str = "",
@@ -235,7 +235,7 @@ class MultiAgentOrchestrator:
 
     def __init__(
         self,
-        event_manager: TUIEventManager,
+        event_manager: RuntimeEventPublisher,
         num_workers: int = 4,
         worker_idle_timeout: float = 60.0,
         max_scan_duration: float = 3600.0,

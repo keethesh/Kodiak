@@ -51,6 +51,7 @@ def _create_engine():
 
 _engine = None
 
+
 def get_engine():
     """Lazily create and return the database engine."""
     global _engine
@@ -59,23 +60,14 @@ def get_engine():
     return _engine
 
 
-class LazyEngine:
-    """Lazy engine proxy to avoid eager database connection on import."""
-    def __init__(self):
-        self._engine = None
-        
-    def _ensure_engine(self):
-        if self._engine is None:
-            self._engine = _create_engine()
-        return self._engine
-    
+class _EngineProxy:
+    """Compatibility proxy that always delegates to the canonical engine."""
+
     def __getattr__(self, name):
-        """Forward all attribute access to the real engine."""
-        return getattr(self._ensure_engine(), name)
+        return getattr(get_engine(), name)
 
 
-# Global lazy engine instance
-engine = LazyEngine()
+engine = _EngineProxy()
 
 
 async def init_db():
@@ -86,7 +78,7 @@ async def init_db():
     try:
         logger.info("Initializing database...")
         
-        async with engine.begin() as conn:
+        async with get_engine().begin() as conn:
             # Import all models to ensure they're registered with SQLModel metadata
             from kodiak.database import models  # noqa
             

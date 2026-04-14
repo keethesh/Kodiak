@@ -20,6 +20,8 @@ from rich.table import Table
 from rich import box
 from loguru import logger
 
+from kodiak import __version__
+
 console = Console()
 
 # Severity color styles for Rich markup
@@ -111,7 +113,7 @@ def run_docker_compose(args: list[str]) -> tuple[bool, str]:
 def main(ctx, version: bool, target: Optional[str]):
     """Kodiak - AI-Powered Penetration Testing Suite"""
     if version:
-        console.print("Kodiak v1.1.0 (Refactor)")
+        console.print(f"Kodiak v{__version__}")
         return
     
     if target:

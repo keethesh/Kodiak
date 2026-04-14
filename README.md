@@ -118,20 +118,14 @@ kodiak --help
 # Check installation
 kodiak doctor
 
-# Interactive configuration
-kodiak config
-
-# Initialize database
-kodiak init
-
 # Launch TUI
 kodiak tui
 
 # Quick scan
 kodiak --target https://example.com
 
-# API server mode
-kodiak api --port 8000
+# Explicit scan command
+kodiak scan https://example.com --instructions "Passive recon only"
 ```
 
 ### TUI Navigation
@@ -147,15 +141,15 @@ kodiak api --port 8000
 
 ## 🏗️ Architecture
 
-### Manager-Worker Architecture
-- **Single LLM Brain**: One Manager makes all decisions across the engagement
-- **Parallel Workers**: Stateless tool executors run concurrently per batch
+### Multi-Agent Pipeline
+- **Planner + Analyst Agents**: Specialized reasoning stages coordinate scan strategy
+- **Parallel Workers**: Stateless tool executors run concurrently
 - **Phased Execution**: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING
 - **Per-Tool Concurrency**: Limits prevent WAF tripping and resource exhaustion
 
 ### Execution State
 - **Structured Scan State**: Bounded context replaces unbounded conversation history
-- **Token Efficient**: ~100-150K tokens per scan (vs 400K+ with multi-agent)
+- **Persistent Shared Store**: Planner, workers, and analyst coordinate through DB-backed state
 - **Persistent Memory**: Complete audit trail and session state
 
 ### Database Schema

@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from loguru import logger
 
-from kodiak.api.events import TUIEventManager
+from kodiak.core.event_publisher import RuntimeEventPublisher
 
 if TYPE_CHECKING:
     from kodiak.services.executor import DockerExecutor
@@ -212,7 +212,7 @@ async def execute_command(
 
 async def dispatch_commands(
     commands: List[CommandTask],
-    event_manager: Optional[TUIEventManager] = None,
+    event_manager: Optional[RuntimeEventPublisher] = None,
     scan_id: Optional[str] = None,
     global_concurrency: int = 4,
 ) -> List[CommandResult]:

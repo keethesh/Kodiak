@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kodiak.core.kernel_result import KernelResult
 from kodiak.core.tools.inventory import ToolInventory
 from kodiak.core.config import settings
+from kodiak.core.event_publisher import RuntimeEventPublisher
 from kodiak.core.reporting import write_scan_report
-from kodiak.api.events import TUIEventManager
 from kodiak.database.engine import get_session
 from kodiak.database.models import Project, ScanJob, ScanStatus
 from kodiak.database import crud
@@ -45,7 +45,7 @@ class ScanRunner:
     planner + analyst + worker pool.
     """
     
-    def __init__(self, event_manager: TUIEventManager):
+    def __init__(self, event_manager: RuntimeEventPublisher):
         self.event_manager = event_manager
         self._cancel_requested = False
         self._manager_task: Optional[asyncio.Task] = None

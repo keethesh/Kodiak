@@ -21,9 +21,9 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
-from kodiak.api.events import TUIEventManager
 from kodiak.core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 from kodiak.core.config import settings
+from kodiak.core.event_publisher import RuntimeEventPublisher
 from kodiak.core.methodology import (
     MethodologyRule,
     TriggerType,
@@ -57,7 +57,7 @@ class PlannerAgent:
         store: SharedScanStore,
         target: str,
         instructions: str = "",
-        event_manager: Optional[TUIEventManager] = None,
+        event_manager: Optional[RuntimeEventPublisher] = None,
     ):
         self.store = store
         self.target = target

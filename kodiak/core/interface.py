@@ -5,7 +5,8 @@ from typing import Any, AsyncIterator, Dict, Optional
 
 from loguru import logger
 
-from kodiak.api.events import TUIEvent, TUIEventManager, event_manager as default_event_manager
+from kodiak.api.events import TUIEvent, event_manager as default_event_manager
+from kodiak.core.event_publisher import RuntimeEventPublisher
 from kodiak.core.interface_events import CoreEvent, map_tui_event_payload
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.core.scan_runner import ScanRunner, ScanResult
@@ -43,7 +44,7 @@ class CoreInterface:
     Frontend-agnostic interface for scan orchestration and runtime events.
     """
 
-    def __init__(self, event_manager: Optional[TUIEventManager] = None):
+    def __init__(self, event_manager: Optional[RuntimeEventPublisher] = None):
         self._event_manager = event_manager or default_event_manager
         self._runner = ScanRunner(self._event_manager)
         self._runs: Dict[str, _RunState] = {}

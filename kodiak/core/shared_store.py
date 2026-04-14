@@ -12,7 +12,7 @@ import json
 import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from loguru import logger
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -130,6 +130,12 @@ def _handle_db_error(operation: str, error: SQLAlchemyError, default_return: Any
     return default_return
 
 
+async def _flush_if_available(session: AsyncSession) -> None:
+    flush = getattr(session, "flush", None)
+    if flush is not None:
+        await flush()
+
+
 class SharedScanStore:
     """
     Thread-safe, DB-backed store shared by Planner, Analyst, and Workers.
@@ -154,6 +160,7 @@ class SharedScanStore:
         payload: Dict[str, Any],
         entity_type: str | None = None,
         entity_id: str | None = None,
+        auto_commit: bool = True,
     ) -> Optional[ScanEvent]:
         """Append a normalized scan event to the event log."""
         event = ScanEvent(
@@ -166,13 +173,18 @@ class SharedScanStore:
         )
         try:
             session.add(event)
-            await session.commit()
-            await session.refresh(event)
+            if auto_commit:
+                await session.commit()
+                await session.refresh(event)
+            else:
+                await _flush_if_available(session)
             DBMetrics.record_operation("append_event")
             return event
         except SQLAlchemyError as e:
-            await session.rollback()
-            return _handle_db_error("append_event", e)
+            if auto_commit:
+                await session.rollback()
+                return _handle_db_error("append_event", e)
+            raise
 
     async def get_events(
         self,
@@ -226,8 +238,7 @@ class SharedScanStore:
         )
         try:
             session.add(unit)
-            await session.commit()
-            await session.refresh(unit)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=ScanEventType.WORK_UNIT_QUEUED,
@@ -239,7 +250,10 @@ class SharedScanStore:
                     "priority": priority,
                     "phase": phase,
                 },
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(unit)
             logger.debug(f"📋 WorkUnit queued: {technique} → {targets[:3]}")
             return unit
         except IntegrityError:
@@ -322,12 +336,6 @@ class SharedScanStore:
             if unit is None:
                 return None
 
-            await session.commit()
-            refresh_stmt = select(WorkUnit).where(WorkUnit.id == claimed_id)
-            refreshed = await session.execute(refresh_stmt)
-            unit = refreshed.scalar_one_or_none()
-            if unit is None:
-                return None
             await self.append_event(
                 session,
                 event_type=ScanEventType.WORK_UNIT_CLAIMED,
@@ -338,7 +346,14 @@ class SharedScanStore:
                     "worker_id": worker_id,
                     "targets": claimed_targets,
                 },
+                auto_commit=False,
             )
+            await session.commit()
+            refresh_stmt = select(WorkUnit).where(WorkUnit.id == claimed_id)
+            refreshed = await session.execute(refresh_stmt)
+            unit = refreshed.scalar_one_or_none()
+            if unit is None:
+                return None
             return unit
         except SQLAlchemyError as e:
             await session.rollback()
@@ -370,8 +385,7 @@ class SharedScanStore:
             completed_targets = _unit_targets(unit)
             completed_technique = unit.technique
             session.add(unit)
-            await session.commit()
-            await session.refresh(unit)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=(
@@ -387,7 +401,10 @@ class SharedScanStore:
                     "exit_code": exit_code,
                     "targets": completed_targets,
                 },
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(unit)
         except SQLAlchemyError as e:
             await session.rollback()
             logger.error(f"Failed to complete work unit {unit_id}: {e}")
@@ -510,15 +527,17 @@ class SharedScanStore:
         )
         try:
             session.add(directive)
-            await session.commit()
-            await session.refresh(directive)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=ScanEventType.DIRECTIVE_ADDED,
                 entity_type="directive",
                 entity_id=str(directive.id),
                 payload={"type": str(directive_type), "content": content},
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(directive)
             logger.debug(f"📜 Directive added: {directive_type} → {content}")
             return directive
         except SQLAlchemyError as e:
@@ -592,15 +611,17 @@ class SharedScanStore:
         )
         try:
             session.add(observation)
-            await session.commit()
-            await session.refresh(observation)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=ScanEventType.OBSERVATION_ADDED,
                 entity_type="observation",
                 entity_id=str(observation.id),
                 payload={"type": str(observation_type), "target": target, "key": key},
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(observation)
             return observation
         except IntegrityError:
             await session.rollback()
@@ -662,15 +683,17 @@ class SharedScanStore:
                 existing.details = details
                 existing.updated_at = datetime.now(timezone.utc)
                 session.add(existing)
-                await session.commit()
-                await session.refresh(existing)
+                await _flush_if_available(session)
                 await self.append_event(
                     session,
                     event_type=ScanEventType.CAPABILITY_ADDED,
                     entity_type="capability",
                     entity_id=str(existing.id),
                     payload={"type": str(capability_type), "target": target, "key": key},
+                    auto_commit=False,
                 )
+                await session.commit()
+                await session.refresh(existing)
                 return existing
         except SQLAlchemyError:
             await session.rollback()
@@ -685,15 +708,17 @@ class SharedScanStore:
         )
         try:
             session.add(capability)
-            await session.commit()
-            await session.refresh(capability)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=ScanEventType.CAPABILITY_ADDED,
                 entity_type="capability",
                 entity_id=str(capability.id),
                 payload={"type": str(capability_type), "target": target, "key": key},
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(capability)
             return capability
         except IntegrityError:
             await session.rollback()
@@ -761,8 +786,7 @@ class SharedScanStore:
                 existing.evidence = evidence or {}
                 existing.updated_at = datetime.now(timezone.utc)
                 session.add(existing)
-                await session.commit()
-                await session.refresh(existing)
+                await _flush_if_available(session)
                 await self.append_event(
                     session,
                     event_type=ScanEventType.HYPOTHESIS_UPDATED,
@@ -774,7 +798,10 @@ class SharedScanStore:
                         "key": key,
                         "status": str(existing.status),
                     },
+                    auto_commit=False,
                 )
+                await session.commit()
+                await session.refresh(existing)
                 return existing
         except SQLAlchemyError:
             await session.rollback()
@@ -792,8 +819,7 @@ class SharedScanStore:
         )
         try:
             session.add(hypothesis)
-            await session.commit()
-            await session.refresh(hypothesis)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=ScanEventType.HYPOTHESIS_ADDED,
@@ -805,7 +831,10 @@ class SharedScanStore:
                     "key": key,
                     "status": str(status),
                 },
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(hypothesis)
             return hypothesis
         except IntegrityError:
             await session.rollback()
@@ -857,7 +886,6 @@ class SharedScanStore:
                 hypothesis.status = status
                 hypothesis.updated_at = datetime.now(timezone.utc)
                 session.add(hypothesis)
-            await session.commit()
             for hypothesis in hypotheses:
                 await self.append_event(
                     session,
@@ -870,7 +898,9 @@ class SharedScanStore:
                         "key": hypothesis.key,
                         "status": str(status),
                     },
+                    auto_commit=False,
                 )
+            await session.commit()
         except SQLAlchemyError as e:
             await session.rollback()
             logger.error(f"Failed to update hypothesis status: {e}")
@@ -924,15 +954,17 @@ class SharedScanStore:
         )
         try:
             session.add(finding)
-            await session.commit()
-            await session.refresh(finding)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=ScanEventType.FINDING_ADDED,
                 entity_type="finding",
                 entity_id=str(finding.id),
                 payload={"title": title, "severity": str(severity), "target": target},
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(finding)
             return finding
         except SQLAlchemyError as e:
             await session.rollback()
@@ -978,15 +1010,17 @@ class SharedScanStore:
         )
         try:
             session.add(note)
-            await session.commit()
-            await session.refresh(note)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=ScanEventType.NOTE_ADDED,
                 entity_type="note",
                 entity_id=str(note.id),
                 payload={"category": str(category), "target": target},
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(note)
             return note
         except SQLAlchemyError as e:
             await session.rollback()
@@ -1055,15 +1089,17 @@ class SharedScanStore:
         )
         try:
             session.add(attempt)
-            await session.commit()
-            await session.refresh(attempt)
+            await _flush_if_available(session)
             await self.append_event(
                 session,
                 event_type=ScanEventType.ATTEMPT_RECORDED,
                 entity_type="attempt",
                 entity_id=str(attempt.id),
                 payload={"tool": tool, "target": target, "status": status},
+                auto_commit=False,
             )
+            await session.commit()
+            await session.refresh(attempt)
             DBMetrics.record_operation("record_attempt")
             return attempt
         except SQLAlchemyError as e:
