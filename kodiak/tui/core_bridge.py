@@ -537,25 +537,14 @@ class CoreBridge:
             logger.error(f"Error handling finding discovered event: {e}")
 
     async def get_scan_projection(self, scan_id: str) -> Dict[str, Any]:
-        """Return the canonical projection for a scan from the shared store."""
+        """Return the canonical projection for a scan from CoreInterface."""
         try:
-            run_id = self._scan_runs.get(scan_id)
-            if run_id:
-                projection = await self._core_interface.get_scan_projection(run_id)
-                if projection:
-                    return projection
-            scan_uuid = UUID(scan_id)
+            projection = await self._core_interface.get_scan_projection(scan_id)
+            if projection:
+                return projection
         except (TypeError, ValueError) as e:
             raise ValueError(f"Invalid scan_id: {scan_id}") from e
-
-        async for session in get_session():
-            scan = await crud_scan.get(session, scan_uuid)
-            if not scan:
-                raise ValueError(f"Unknown scan_id: {scan_id}")
-            store = SharedScanStore(project_id=scan.project_id, scan_id=scan.id)
-            return await store.build_projection(session)
-
-        return {}
+        raise ValueError(f"Unknown scan_id: {scan_id}")
 
     async def _refresh_scan_projection(self, scan_id: str) -> None:
         """Hydrate TUI state from the canonical scan projection."""
@@ -645,6 +634,7 @@ class CoreBridge:
                     status=ScanStatus.PENDING,
                     config={
                         "target": target,
+                        "worker_count": agent_count,
                         "agent_count": agent_count,
                         "instructions": instructions,
                     },
@@ -686,7 +676,7 @@ class CoreBridge:
                 run_id = await self._core_interface.start_scan(
                     target=str(config.get("target", "") or ""),
                     instructions=str(config.get("instructions", "") or ""),
-                    agent_count=int(config.get("agent_count", 1) or 1),
+                    worker_count=int(config.get("worker_count", config.get("agent_count", 1)) or 1),
                     project_name=project.name if project else None,
                     project_id=str(scan.project_id),
                     scan_id=str(scan.id),

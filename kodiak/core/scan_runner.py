@@ -1,6 +1,4 @@
-"""
-Scan Runner - Clean implementation of scan execution
-"""
+"""Scan Runner - active scan-kernel execution wrapper."""
 
 import asyncio
 import shlex
@@ -12,7 +10,7 @@ from dataclasses import dataclass
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kodiak.core.manager import ManagerAgent, ManagerResult
+from kodiak.core.kernel_result import KernelResult
 from kodiak.core.tools.inventory import ToolInventory
 from kodiak.core.config import settings
 from kodiak.core.reporting import write_scan_report
@@ -43,8 +41,8 @@ class ScanRunner:
     """
     Executes a single security scan from start to finish.
 
-    Uses a single ManagerAgent (Phased Manager-Worker architecture):
-    one LLM brain dispatches parallel stateless workers.
+    Uses the active multi-agent kernel:
+    planner + analyst + worker pool.
     """
     
     def __init__(self, event_manager: TUIEventManager):
@@ -70,6 +68,7 @@ class ScanRunner:
         scan_name: Optional[str] = None,
         max_iterations: int = 30,
         agent_count: int = 1,
+        worker_count: Optional[int] = None,
         role_strategy: str = "role_hinted",
         force_agents: bool = False,
         report_format: str = "json+md",
@@ -77,10 +76,10 @@ class ScanRunner:
         event_scheduler: Optional[bool] = None,
     ) -> ScanResult:
         """
-        Execute a complete scan using the Manager-Worker architecture.
+        Execute a complete scan using the active multi-agent kernel.
 
-        ``agent_count`` and ``role_strategy`` are accepted for API compatibility
-        but ignored — the Manager architecture always uses a single brain.
+        ``agent_count``, ``role_strategy``, and ``event_scheduler`` are accepted
+        for compatibility but ignored by the active runtime.
         """
         start_time = datetime.now(timezone.utc)
         
@@ -149,52 +148,34 @@ class ScanRunner:
                 if dns_warning:
                     instructions = f"{instructions}\n\n[PREFLIGHT WARNING] {dns_warning}" if instructions else f"[PREFLIGHT WARNING] {dns_warning}"
 
-                # 3. Create and run Manager (or Multi-Agent Pipeline)
-                if settings.multi_agent:
-                    from kodiak.core.multi_agent_orchestrator import MultiAgentOrchestrator
+                # 3. Run the active multi-agent kernel.
+                from kodiak.core.multi_agent_orchestrator import MultiAgentOrchestrator
 
-                    orchestrator = MultiAgentOrchestrator(
-                        event_manager=self.event_manager,
-                        num_workers=settings.multi_agent_workers,
-                        max_scan_duration=float(settings.multi_agent_max_duration),
-                    )
-                    logger.info(
-                        f"Starting Multi-Agent Pipeline with "
-                        f"{settings.multi_agent_workers} workers"
-                    )
-                    manager_result = await orchestrator.run(
-                        target=target,
-                        instructions=instructions,
-                        project_id=project.id,
-                        scan_id=scan_job.id,
-                    )
-                else:
-                    manager = ManagerAgent(
-                        event_manager=self.event_manager,
-                        tool_inventory=tool_inventory,
-                    )
+                if event_scheduler is not None:
+                    logger.warning("event_scheduler is deprecated and ignored by the active runtime")
+                if role_strategy != "role_hinted":
+                    logger.warning("role_strategy is deprecated and ignored by the active runtime")
+                if agent_count != 1:
+                    logger.warning("agent_count is deprecated; use worker_count/--workers instead")
 
-                    scheduler_mode = settings.event_scheduler_enabled if event_scheduler is None else bool(event_scheduler)
-                    logger.info(
-                        f"Starting Manager with {max_iterations} max iterations "
-                        f"(event_scheduler={'on' if scheduler_mode else 'off'})"
-                    )
-
-                    manager_result = await manager.run(
-                        target=target,
-                        instructions=instructions,
-                        session=session,
-                        project_id=project.id,
-                        scan_id=scan_job.id,
-                        max_iterations=max_iterations,
-                        allowed_tools=allowed_tools,
-                        event_scheduler=event_scheduler,
-                    )
+                effective_workers = max(1, int(worker_count or settings.multi_agent_workers))
+                orchestrator = MultiAgentOrchestrator(
+                    event_manager=self.event_manager,
+                    num_workers=effective_workers,
+                    max_scan_duration=float(settings.multi_agent_max_duration),
+                )
+                logger.info(f"Starting Multi-Agent Pipeline with {effective_workers} workers")
+                kernel_result = await orchestrator.run(
+                    target=target,
+                    instructions=instructions,
+                    project_id=project.id,
+                    scan_id=scan_job.id,
+                )
                 
                 # 4. Finalize
                 final_status = (
                     ScanStatus.COMPLETED
-                    if manager_result.status == "completed"
+                    if kernel_result.status == "completed"
                     else ScanStatus.FAILED
                 )
                 await crud.scan_job.update_status(session, scan_job.id, final_status)
@@ -203,17 +184,17 @@ class ScanRunner:
                 duration = (datetime.now(timezone.utc) - start_time).total_seconds()
                 
                 scan_result = ScanResult(
-                    status=manager_result.status,
-                    summary=manager_result.summary,
+                    status=kernel_result.status,
+                    summary=self._build_scan_summary(kernel_result),
                     nodes_discovered=len(nodes),
-                    findings_count=manager_result.findings_count,
+                    findings_count=kernel_result.findings_count,
                     duration_seconds=duration,
-                    iterations=manager_result.iterations,
-                    total_input_tokens=manager_result.total_input_tokens,
-                    total_output_tokens=manager_result.total_output_tokens,
-                    total_thinking_tokens=manager_result.total_thinking_tokens,
-                    total_cached_tokens=manager_result.total_cached_tokens,
-                    total_cost_usd=manager_result.total_cost_usd,
+                    iterations=kernel_result.iterations,
+                    total_input_tokens=kernel_result.total_input_tokens,
+                    total_output_tokens=kernel_result.total_output_tokens,
+                    total_thinking_tokens=kernel_result.total_thinking_tokens,
+                    total_cached_tokens=kernel_result.total_cached_tokens,
+                    total_cost_usd=kernel_result.total_cost_usd,
                 )
                 
                 attempts = await crud.attempt.get_attempts_by_scan(session, scan_job.id, limit=400)
@@ -222,15 +203,15 @@ class ScanRunner:
                     "scan_name": project.name,
                     "project_id": str(project.id),
                     "target": target,
-                    "status": manager_result.status,
+                    "status": kernel_result.status,
                     "summary": {
                         "nodes_discovered": len(nodes),
                         "raw_findings": self._finding_event_count,
                         "deduped_findings": len(self._finding_keys),
                         "findings_by_severity": self._finding_counts_by_severity,
-                        "findings_count": manager_result.findings_count,
+                        "findings_count": kernel_result.findings_count,
                         "duration_seconds": duration,
-                        "iterations": manager_result.iterations,
+                        "iterations": kernel_result.iterations,
                     },
                     "findings": list(self._finding_records.values()),
                     "attempts": [
@@ -456,3 +437,6 @@ class ScanRunner:
                     evidence_signature = str(value).strip().lower()
                     break
         return "|".join([title, severity, target, evidence_signature])
+
+    def _build_scan_summary(self, kernel_result: KernelResult) -> str:
+        return kernel_result.summary

@@ -24,7 +24,7 @@ from loguru import logger
 from kodiak.api.events import TUIEventManager
 from kodiak.core.analyst import AnalystAgent
 from kodiak.core.config import settings
-from kodiak.core.manager import ManagerResult
+from kodiak.core.kernel_result import KernelResult
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.core.worker import CommandResult, CommandTask, execute_command
@@ -230,10 +230,9 @@ class MultiAgentOrchestrator:
         instructions: str = "",
         project_id: UUID,
         scan_id: UUID,
-    ) -> ManagerResult:
+    ) -> KernelResult:
         """
-        Run the full multi-agent pipeline. Returns ManagerResult for
-        backward compatibility with ScanRunner.
+        Run the active multi-agent kernel and return a runtime-neutral result.
         """
         start = time.monotonic()
         scan_id_str = str(scan_id)
@@ -394,7 +393,7 @@ class MultiAgentOrchestrator:
             thinking_tokens=analyst_thinking,
         )
 
-        return ManagerResult(
+        return KernelResult(
             status=status,
             summary=summary,
             findings_count=findings_count,

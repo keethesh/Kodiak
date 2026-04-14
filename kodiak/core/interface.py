@@ -25,10 +25,8 @@ class _RunState:
     instructions: str
     max_iterations: int
     model: Optional[str]
-    agent_count: int
-    role_strategy: str
+    worker_count: int
     force_agents: bool
-    event_scheduler: Optional[bool]
     report_format: str
     report_path: Optional[str]
     project_name: Optional[str] = None
@@ -75,6 +73,7 @@ class CoreInterface:
         instructions: str = "Conduct a security assessment",
         model: Optional[str] = None,
         max_iterations: int = 100,
+        worker_count: Optional[int] = None,
         agent_count: Optional[int] = None,
         role_strategy: str = "role_hinted",
         force_agents: bool = False,
@@ -88,7 +87,11 @@ class CoreInterface:
     ) -> str:
         await self._ensure_subscriptions()
 
-        requested_agents = agent_count or settings.default_agent_count
+        resolved_workers = worker_count
+        if resolved_workers is None and agent_count is not None:
+            resolved_workers = agent_count
+        if resolved_workers is None:
+            resolved_workers = settings.multi_agent_workers
 
         run_id = str(uuid.uuid4())
         state = _RunState(
@@ -97,10 +100,8 @@ class CoreInterface:
             instructions=instructions,
             max_iterations=max_iterations,
             model=model,
-            agent_count=requested_agents,
-            role_strategy=role_strategy,
+            worker_count=int(resolved_workers),
             force_agents=force_agents,
-            event_scheduler=event_scheduler,
             report_format=report_format,
             report_path=report_path,
             project_name=project_name,
@@ -165,13 +166,19 @@ class CoreInterface:
             pass
         return True
 
-    async def get_scan_projection(self, run_id: str) -> Dict[str, Any]:
-        """Return the canonical scan projection for a known run."""
-        state = self._runs.get(run_id)
-        if not state or not state.scan_id:
+    async def get_scan_projection(self, scan_id: str) -> Dict[str, Any]:
+        """Return the canonical scan projection for a scan id.
+
+        ``run_id`` values are still accepted temporarily for compatibility.
+        """
+        state = self._runs.get(scan_id)
+        if state and state.scan_id:
+            scan_id = state.scan_id
+        try:
+            scan_uuid = uuid.UUID(scan_id)
+        except (TypeError, ValueError, AttributeError):
             return {}
 
-        scan_uuid = uuid.UUID(state.scan_id)
         async for session in get_session():
             scan = await crud_scan.get(session, scan_uuid)
             if not scan:
@@ -193,10 +200,8 @@ class CoreInterface:
                     target=state.target,
                     instructions=state.instructions,
                     max_iterations=state.max_iterations,
-                    agent_count=state.agent_count,
-                    role_strategy=state.role_strategy,
+                    worker_count=state.worker_count,
                     force_agents=state.force_agents,
-                    event_scheduler=state.event_scheduler,
                     report_format=state.report_format,
                     report_path=state.report_path,
                     project_name=state.project_name,

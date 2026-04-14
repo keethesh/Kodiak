@@ -726,6 +726,9 @@ async def test_shared_store_builds_projection_from_events_and_runtime_state():
     async def fake_get_findings(session, limit=100):
         return [SimpleNamespace(title="SQL Injection", severity="high", target="https://app.example.com")]
 
+    async def fake_get_observations(session, limit=200):
+        return [SimpleNamespace(type="live_http", target="https://app.example.com", key="https://app.example.com")]
+
     async def fake_get_capabilities(session, limit=100):
         return [SimpleNamespace(type="auth_surface", target="https://app.example.com/login", key="login")]
 
@@ -745,6 +748,7 @@ async def test_shared_store_builds_projection_from_events_and_runtime_state():
         return [SimpleNamespace(id=uuid4(), name="https://app.example.com", type="url", label="Endpoint", properties={}, scanned=True)]
 
     store.get_findings = fake_get_findings
+    store.get_observations = fake_get_observations
     store.get_capabilities = fake_get_capabilities
     store.get_hypotheses = fake_get_hypotheses
     store.get_notes = fake_get_notes
@@ -763,6 +767,7 @@ async def test_shared_store_builds_projection_from_events_and_runtime_state():
 
     assert projection["work_queue"]["pending"] == 2
     assert projection["work_queue"]["completed"] == 5
+    assert projection["assets"][0]["target"] == "https://app.example.com"
     assert projection["findings"][0]["title"] == "SQL Injection"
     assert projection["node_count"] == 1
     assert projection["nodes"][0]["type"] == "url"
@@ -803,6 +808,8 @@ def test_scan_state_applies_projection_payload():
 
     projection = {
         "work_queue": {"pending": 2, "completed": 5},
+        "assets": [{"target": "https://example.com", "host": "example.com", "observation_types": ["live_http"], "capability_types": []}],
+        "degraded_components": [{"component": "planner", "status": "warning"}],
         "node_count": 1,
         "nodes": [
             {"id": str(uuid4()), "name": "https://example.com", "type": "url", "label": "Endpoint", "properties": {}, "scanned": True},
@@ -820,6 +827,8 @@ def test_scan_state_applies_projection_payload():
     scan.apply_projection(projection)
 
     assert scan.work_queue["pending"] == 2
+    assert scan.assets[0]["host"] == "example.com"
+    assert scan.degraded_components[0]["component"] == "planner"
     assert scan.node_count == 1
     assert scan.nodes[0].type == "url"
     assert scan.findings[0].title == "SQL Injection"
@@ -830,7 +839,7 @@ def test_scan_state_applies_projection_payload():
     assert scan.recent_events[0]["type"] == "work_unit_completed"
 
 
-def test_app_state_add_scan_reads_target_and_agent_count_from_scan_config():
+def test_app_state_add_scan_prefers_worker_count_from_scan_config():
     state = AppState()
     project_id = uuid4()
     state.add_project(
@@ -850,6 +859,7 @@ def test_app_state_add_scan_reads_target_and_agent_count_from_scan_config():
         updated_at=datetime.now(),
         config={
             "target": "https://app.example.com",
+            "worker_count": 4,
             "agent_count": 3,
         },
     )
@@ -859,16 +869,14 @@ def test_app_state_add_scan_reads_target_and_agent_count_from_scan_config():
     added = state.get_scan(str(scan.id))
     assert added is not None
     assert added.target == "https://app.example.com"
-    assert added.agent_count == 3
+    assert added.agent_count == 4
     assert state.get_project(str(project_id)).target == "https://app.example.com"
 
 
 @pytest.mark.asyncio
-async def test_core_interface_returns_scan_projection(monkeypatch):
+async def test_core_interface_returns_scan_projection_by_scan_id(monkeypatch):
     interface = CoreInterface()
-    run_id = "run-1"
     scan_id = str(uuid4())
-    interface._runs[run_id] = SimpleNamespace(scan_id=scan_id)
 
     fake_scan = SimpleNamespace(id=uuid4(), project_id=uuid4())
     expected_projection = {"scan_id": scan_id, "work_queue": {"pending": 1}}
@@ -892,7 +900,7 @@ async def test_core_interface_returns_scan_projection(monkeypatch):
     monkeypatch.setattr("kodiak.core.interface.crud_scan.get", fake_get)
     monkeypatch.setattr("kodiak.core.interface.SharedScanStore", FakeStore)
 
-    projection = await interface.get_scan_projection(run_id)
+    projection = await interface.get_scan_projection(scan_id)
 
     assert projection == expected_projection
 

@@ -97,8 +97,10 @@ class ScanState:
     attempts: List[Dict[str, Any]] = field(default_factory=list)
     engagement_notes: List[Dict[str, Any]] = field(default_factory=list)
     work_queue: Dict[str, int] = field(default_factory=dict)
+    assets: List[Dict[str, Any]] = field(default_factory=list)
     capabilities: List[Dict[str, Any]] = field(default_factory=list)
     hypotheses: List[Dict[str, Any]] = field(default_factory=list)
+    degraded_components: List[Dict[str, Any]] = field(default_factory=list)
     recent_events: List[Dict[str, Any]] = field(default_factory=list)
     projection: Dict[str, Any] = field(default_factory=dict)
     
@@ -128,8 +130,10 @@ class ScanState:
         self.projection = dict(projection or {})
         self.work_queue = dict(self.projection.get("work_queue", {}))
         self.node_count = int(self.projection.get("node_count", len(self.nodes) or 0))
+        self.assets = list(self.projection.get("assets", []))
         self.capabilities = list(self.projection.get("capabilities", []))
         self.hypotheses = list(self.projection.get("hypotheses", []))
+        self.degraded_components = list(self.projection.get("degraded_components", []))
         self.recent_events = list(self.projection.get("recent_events", []))
         self.attempts = list(self.projection.get("attempts", []))
         self.engagement_notes = list(self.projection.get("notes", []))
@@ -287,7 +291,7 @@ class AppState:
         """Add a scan to state"""
         config = scan.config or {}
         target = str(config.get("target", "") or "")
-        agent_count = int(config.get("agent_count", 1) or 1)
+        agent_count = int(config.get("worker_count", config.get("agent_count", 1)) or 1)
         scan_state = ScanState(
             id=str(scan.id),
             project_id=str(scan.project_id),

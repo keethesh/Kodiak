@@ -131,14 +131,15 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.argument("target")
 @click.option("--instructions", "-i", help="Custom scan instructions", default="Conduct a security assessment")
 @click.option("--model", "-m", help="LLM model to use")
-@click.option("--max-iterations", "-n", default=100, help="Total manager iteration budget")
+@click.option("--max-iterations", "-n", default=100, help="Compatibility iteration budget (ignored by active runtime)")
 @click.option("--project", "-p", default=None, help="Project name — reuse across scans to load prior knowledge")
+@click.option("--workers", "-w", type=int, default=None, help="Worker concurrency for the multi-agent runtime")
 @click.option("--agents", "-a", type=int, default=None, hidden=True)
 @click.option("--force-agents", is_flag=True, help="Allow agent count above KODIAK_MAX_AGENTS")
 @click.option(
     "--event-scheduler/--no-event-scheduler",
     default=True,
-    help="Enable non-blocking event-driven scheduling (default: enabled).",
+    help="Deprecated compatibility option; ignored by the active runtime.",
 )
 @click.option(
     "--report-format",
@@ -160,6 +161,7 @@ def scan(
     model: Optional[str],
     max_iterations: int,
     project: Optional[str],
+    workers: Optional[int],
     agents: Optional[int],
     force_agents: bool,
     event_scheduler: bool,
@@ -211,21 +213,16 @@ def scan(
         console.print(f"📋 [bold]Instructions:[/bold] {instructions}")
         if project:
             console.print(f"📁 [bold]Project:[/bold] {project} [dim](prior knowledge will be loaded if project exists)[/dim]")
-        architecture_label = (
-            f"Multi-Agent Pipeline ({settings.multi_agent_workers} workers, planner + analyst)"
-            if settings.multi_agent
-            else "Manager-Worker (single brain, parallel tools)"
-        )
+        effective_workers = int(workers or agents or settings.multi_agent_workers)
+        architecture_label = f"Multi-Agent Pipeline ({effective_workers} workers, planner + analyst)"
         console.print(f"👤 [bold]Architecture:[/bold] {architecture_label}")
-        scheduler_mode = bool(event_scheduler)
-        console.print(f"📡 [bold]Event Scheduler:[/bold] {'enabled' if scheduler_mode else 'disabled'}")
+        console.print("[dim]Event Scheduler: deprecated, ignored by active runtime[/dim]")
+        if workers is not None and agents is not None and int(workers) != int(agents):
+            console.print("[yellow]Note: --workers takes precedence over deprecated --agents.[/yellow]")
         if agents is not None:
-            if settings.multi_agent:
-                console.print("[yellow]Note: --agents is currently ignored; worker count comes from KODIAK_MULTI_AGENT_WORKERS.[/yellow]")
-            else:
-                console.print("[yellow]Note: --agents is ignored in Manager-Worker mode.[/yellow]")
+            console.print("[yellow]Note: --agents is deprecated; use --workers.[/yellow]")
         if role_strategy != "role-hinted":
-            console.print("[yellow]Note: --role-strategy is currently ignored by the active scan runtime.[/yellow]")
+            console.print("[yellow]Note: --role-strategy is deprecated and ignored by the active runtime.[/yellow]")
         console.print(f"📝 [bold]Report:[/bold] format={report_format} path={report_path or settings.report_output_path}")
         console.print("")
         
@@ -235,10 +232,11 @@ def scan(
             instructions=instructions,
             model=model,
             max_iterations=max_iterations,
-            agent_count=1,
-            role_strategy="role_hinted",
+            worker_count=effective_workers,
+            agent_count=agents,
+            role_strategy=role_strategy.replace("-", "_"),
             force_agents=force_agents,
-            event_scheduler=scheduler_mode,
+            event_scheduler=event_scheduler,
             report_format=report_format.lower(),
             report_path=report_path,
             project_name=project,

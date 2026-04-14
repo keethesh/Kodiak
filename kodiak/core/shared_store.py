@@ -998,12 +998,14 @@ class SharedScanStore:
     async def build_projection(self, session: AsyncSession) -> Dict[str, Any]:
         """Build a compact, event-first projection for UI/CLI consumers."""
         findings = await self.get_findings(session, limit=100)
+        observations = await self.get_observations(session, limit=200)
         capabilities = await self.get_capabilities(session, limit=100)
         hypotheses = await self.get_hypotheses(session, limit=100)
         notes = await self.get_notes(session, limit=50)
         attempts = await self.get_attempts(session, limit=100)
         recent_events = await self.get_events(session, limit=25)
         nodes = await self._get_nodes(session, limit=100)
+        assets = self._build_assets_projection(observations, capabilities)
 
         try:
             from sqlalchemy import func
@@ -1021,6 +1023,8 @@ class SharedScanStore:
             "scan_id": str(self.scan_id),
             "project_id": str(self.project_id),
             "work_queue": work_queue,
+            "assets": assets,
+            "degraded_components": [],
             "node_count": len(nodes),
             "nodes": [
                 {
@@ -1079,6 +1083,40 @@ class SharedScanStore:
                 for event in recent_events
             ],
         }
+
+    def _build_assets_projection(
+        self,
+        observations: List[Observation],
+        capabilities: List[Capability],
+    ) -> List[Dict[str, Any]]:
+        """Derive a lightweight asset read model from kernel evidence tables."""
+        assets: Dict[str, Dict[str, Any]] = {}
+
+        def ensure_asset(target: str) -> Dict[str, Any]:
+            asset = assets.get(target)
+            if asset is None:
+                asset = {
+                    "target": target,
+                    "host": target.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower(),
+                    "observation_types": [],
+                    "capability_types": [],
+                }
+                assets[target] = asset
+            return asset
+
+        for observation in observations:
+            asset = ensure_asset(observation.target)
+            obs_type = str(observation.type)
+            if obs_type not in asset["observation_types"]:
+                asset["observation_types"].append(obs_type)
+
+        for capability in capabilities:
+            asset = ensure_asset(capability.target)
+            capability_type = str(capability.type)
+            if capability_type not in asset["capability_types"]:
+                asset["capability_types"].append(capability_type)
+
+        return sorted(assets.values(), key=lambda item: (item["host"], item["target"]))
 
     async def get_attempts(
         self, session: AsyncSession, limit: int = 100
