@@ -56,6 +56,60 @@ The shared database store serves as the sole IPC mechanism:
 - **Observations**: Extracted facts from tool output
 - **Capabilities**: Derived asset properties (auth_surface, admin_surface, etc.)
 
+## Event Abstraction Layer
+
+The system uses a **transport-agnostic event architecture** via `RuntimeEventPublisher`:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Components                               │
+│   ┌────────────┐    ┌────────────┐    ┌────────────────┐   │
+│   │  Planner   │    │  Workers   │    │    Analyst     │   │
+│   └─────┬──────┘    └─────┬──────┘    └───────┬────────┘   │
+│         │                  │                   │            │
+│         └──────────────────┼───────────────────┘            │
+│                            │                                │
+│                   ┌────────▼────────┐                       │
+│                   │RuntimeEventPublisher│                   │
+│                   │    (Protocol)     │                      │
+│                   └────────┬────────┘                       │
+│                            │                                │
+│         ┌──────────────────┼──────────────────┐             │
+│         │                  │                  │             │
+│  ┌──────▼──────┐    ┌──────▼──────┐    ┌─────▼─────┐     │
+│  │TUIEventManager│    │SharedScanStore│   │ FileLogger│     │
+│  └─────────────┘    └──────────────┘   └───────────┘     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### RuntimeEventPublisher Protocol
+
+Components communicate through this interface without knowing the transport:
+
+```python
+class RuntimeEventPublisher(Protocol):
+    async def emit_tool_start(...) -> None: ...
+    async def emit_tool_complete(...) -> None: ...
+    async def emit_agent_thinking(...) -> None: ...
+    async def emit_agent_thought(...) -> None: ...
+    async def emit_scan_started(...) -> None: ...
+    async def emit_scan_completed(...) -> None: ...
+    async def emit_scan_failed(...) -> None: ...
+    async def emit_note_saved(...) -> None: ...
+    async def emit_finding_saved(...) -> None: ...
+    async def emit_phase_advanced(...) -> None: ...
+```
+
+### Event Types
+
+| Category | Events |
+|----------|--------|
+| **Scan** | `scan_started`, `scan_completed`, `scan_failed` |
+| **Tool** | `tool_start`, `tool_complete` |
+| **Agent** | `agent_thinking`, `agent_thought` |
+| **Data** | `note_saved`, `finding_saved` |
+| **Phase** | `phase_advanced`, `prior_knowledge_loaded` |
+
 ## Scan Phases
 
 The pipeline follows a methodology-driven approach:

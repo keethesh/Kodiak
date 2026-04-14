@@ -518,6 +518,7 @@ class MultiAgentOrchestrator:
             summary=summary,
             findings_count=findings_count,
             iterations=planner_stats.get("cycles", 0) + analyst_cycles,
+            task_errors=task_errors,
             total_input_tokens=planner_input + analyst_input,
             total_output_tokens=planner_output + analyst_output,
             total_thinking_tokens=analyst_thinking,
