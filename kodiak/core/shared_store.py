@@ -48,6 +48,13 @@ def _targets_hash(targets: List[str]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
+def _target_kind(target: str) -> str:
+    if "://" in target:
+        parsed_path = target.split("://", 1)[-1]
+        return "url" if "/" in parsed_path or "?" in parsed_path else "origin"
+    return "host"
+
+
 _SERIALIZED_TOOL_FAMILIES = frozenset({
     "nuclei", "ffuf", "katana", "gau", "sqlmap",
     "nmap", "commix", "wpscan", "hydra", "nikto",
@@ -57,10 +64,11 @@ _SERIALIZED_TOOL_FAMILIES = frozenset({
 def _tool_family(technique: str, command_template: str = "") -> str:
     """Best-effort tool family used for concurrency-aware claiming."""
     if command_template:
+        segment = command_template.rsplit("|", 1)[-1].strip()
         try:
-            parts = shlex.split(command_template, posix=True)
+            parts = shlex.split(segment, posix=True)
         except ValueError:
-            parts = command_template.strip().split()
+            parts = segment.split()
         if parts:
             return parts[0].lower()
     return technique.split("_", 1)[0].lower()
@@ -149,6 +157,10 @@ class SharedScanStore:
             scan_id=self.scan_id,
             project_id=self.project_id,
             technique=technique,
+            target=(sorted(targets)[0] if targets else ""),
+            target_kind=_target_kind(sorted(targets)[0]) if targets else "scope",
+            tool_family=_tool_family(technique, command_template),
+            scope_key=(sorted(targets)[0] if targets else ""),
             targets_json=json.dumps(sorted(targets)),
             targets_hash=_targets_hash(targets),
             command_template=command_template,
@@ -200,7 +212,10 @@ class SharedScanStore:
             )
             active_result = await session.execute(active_stmt)
             active_locks = {
-                (_tool_family(unit.technique, unit.command_template or ""), unit.targets_hash)
+                (
+                    unit.tool_family or _tool_family(unit.technique, unit.command_template or ""),
+                    unit.scope_key or unit.target or unit.targets_hash,
+                )
                 for unit in active_result.scalars().all()
             }
 
@@ -222,9 +237,10 @@ class SharedScanStore:
             claim_started_at = datetime.now(timezone.utc)
             for candidate in result.scalars().all():
                 family = _tool_family(candidate.technique, candidate.command_template or "")
+                scope_key = candidate.scope_key or candidate.target or candidate.targets_hash
                 if (
                     family in _SERIALIZED_TOOL_FAMILIES
-                    and (family, candidate.targets_hash) in active_locks
+                    and (family, scope_key) in active_locks
                 ):
                     continue
                 claim_stmt = (
@@ -1006,6 +1022,7 @@ class SharedScanStore:
         recent_events = await self.get_events(session, limit=25)
         nodes = await self._get_nodes(session, limit=100)
         assets = self._build_assets_projection(observations, capabilities)
+        degraded_components = self._build_degraded_components_projection(recent_events)
 
         try:
             from sqlalchemy import func
@@ -1024,7 +1041,7 @@ class SharedScanStore:
             "project_id": str(self.project_id),
             "work_queue": work_queue,
             "assets": assets,
-            "degraded_components": [],
+            "degraded_components": degraded_components,
             "node_count": len(nodes),
             "nodes": [
                 {
@@ -1117,6 +1134,34 @@ class SharedScanStore:
                 asset["capability_types"].append(capability_type)
 
         return sorted(assets.values(), key=lambda item: (item["host"], item["target"]))
+
+    def _build_degraded_components_projection(
+        self,
+        recent_events: List[ScanEvent],
+    ) -> List[Dict[str, Any]]:
+        """Reduce recent component health events into current degraded state."""
+        state_by_component: Dict[str, Dict[str, Any]] = {}
+        for event in reversed(recent_events):
+            event_type = str(event.type)
+            if event_type not in {
+                str(ScanEventType.COMPONENT_DEGRADED),
+                str(ScanEventType.COMPONENT_RECOVERED),
+            }:
+                continue
+            payload = event.payload or {}
+            component = str(payload.get("component", "")).strip()
+            if not component or component in state_by_component:
+                continue
+            state_by_component[component] = {
+                "component": component,
+                "status": "degraded" if event_type == str(ScanEventType.COMPONENT_DEGRADED) else "healthy",
+                "reason": payload.get("reason", ""),
+                "details": payload.get("details", {}),
+            }
+        return [
+            state for state in state_by_component.values()
+            if state["status"] == "degraded"
+        ]
 
     async def get_attempts(
         self, session: AsyncSession, limit: int = 100

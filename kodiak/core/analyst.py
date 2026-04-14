@@ -33,6 +33,7 @@ from kodiak.database.models import (
     HypothesisType,
     NoteCategory,
     ObservationType,
+    ScanEventType,
     WorkUnit,
 )
 from kodiak.services import llm
@@ -126,6 +127,7 @@ class AnalystAgent:
         self._total_cached_tokens = 0
         self._cycle_count = 0
         self._stop_requested = False
+        self._degraded = False
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -189,10 +191,16 @@ class AnalystAgent:
             # Process batch. Keep the Analyst alive if one batch hits an
             # unexpected persistence/parsing edge case.
             try:
+                if self._degraded:
+                    await self._record_component_recovered()
+                    self._degraded = False
                 result = await self._analyze_batch(unanalyzed)
             except Exception:
                 self._cycle_count += 1
                 logger.exception("Analyst batch processing failed")
+                if not self._degraded:
+                    await self._record_component_degraded("Analyst batch processing failed")
+                    self._degraded = True
                 idle_cycles = 0
                 await self._sleep(poll_interval)
                 continue
@@ -228,6 +236,26 @@ class AnalystAgent:
             await asyncio.sleep(seconds)
         except asyncio.CancelledError:
             self._stop_requested = True
+
+    async def _record_component_degraded(self, reason: str) -> None:
+        async for session in get_session():
+            await self.store.append_event(
+                session,
+                event_type=ScanEventType.COMPONENT_DEGRADED,
+                entity_type="component",
+                entity_id="analyst",
+                payload={"component": "analyst", "reason": reason},
+            )
+
+    async def _record_component_recovered(self) -> None:
+        async for session in get_session():
+            await self.store.append_event(
+                session,
+                event_type=ScanEventType.COMPONENT_RECOVERED,
+                entity_type="component",
+                entity_id="analyst",
+                payload={"component": "analyst", "reason": "Analyst resumed successful batch processing"},
+            )
 
     # ------------------------------------------------------------------
     # Core analysis
@@ -444,6 +472,8 @@ class AnalystAgent:
                 await self._persist_url_state(session, url, unit.technique)
 
             primary_target = self._normalize_target(targets[0]) if targets else ""
+            await self._persist_service_state(session, combined_output, primary_target, unit.technique)
+            await self._persist_tls_name_state(session, combined_output, primary_target, unit.technique)
             for tech in self._extract_technologies(combined_output):
                 tech_target = primary_target or self._extract_host(primary_target)
                 if not tech_target:
@@ -473,6 +503,7 @@ class AnalystAgent:
                         confidence=0.78,
                         evidence={"tech": tech, "source": unit.technique},
                     )
+            await self._persist_legacy_stack_hypotheses(session, combined_output, primary_target, unit.technique)
 
         for finding in parsed.findings:
             finding_target = self._normalize_target(finding.target)
@@ -621,6 +652,89 @@ class AnalystAgent:
                 confidence=0.72,
                 evidence={"source": source},
             )
+
+    async def _persist_service_state(self, session, output: str, target: str, source: str) -> None:
+        """Extract simple network service facts from tool output."""
+        host = self._extract_host(target)
+        if not host:
+            return
+
+        for match in re.finditer(r"(?mi)^(\d+)/(tcp|udp)\s+open\s+([a-z0-9._-]+)", output):
+            port, proto, service = match.groups()
+            key = f"{proto}/{port}/{service}"
+            details = {"source": source, "port": port, "protocol": proto, "service": service}
+            await self.store.add_observation(
+                session,
+                observation_type=ObservationType.NETWORK_SERVICE,
+                target=host,
+                key=key,
+                value=details,
+            )
+            await self.store.add_capability(
+                session,
+                capability_type=CapabilityType.NETWORK_SERVICE,
+                target=host,
+                key=key,
+                details=details,
+            )
+
+    async def _persist_tls_name_state(self, session, output: str, target: str, source: str) -> None:
+        """Extract TLS certificate SAN/CN hostnames as hidden-host evidence."""
+        parent_host = self._extract_host(target)
+        if not parent_host:
+            return
+
+        tls_names = set()
+        for match in re.finditer(r"DNS:([A-Za-z0-9._-]+)", output):
+            tls_names.add(match.group(1).lower())
+        for match in re.finditer(r"Subject:.*?CN=([A-Za-z0-9._-]+)", output):
+            tls_names.add(match.group(1).lower())
+
+        for name in sorted(tls_names):
+            if name == parent_host:
+                continue
+            await self.store.add_observation(
+                session,
+                observation_type=ObservationType.TLS_NAME,
+                target=name,
+                key=name,
+                value={"source": source, "discovered_from": parent_host},
+            )
+            await self.store.add_hypothesis(
+                session,
+                hypothesis_type=HypothesisType.HIDDEN_HOST_FOLLOWUP,
+                target=name,
+                key=f"{parent_host}:tls-name:{name}",
+                rationale="TLS certificate metadata exposed an additional host that should receive DNS, port, and web discovery",
+                confidence=0.89,
+                evidence={"source": source, "discovered_from": parent_host, "tls_name": name},
+            )
+
+    async def _persist_legacy_stack_hypotheses(self, session, output: str, target: str, source: str) -> None:
+        """Create focused follow-up for obviously legacy/EOL web stacks."""
+        lowered = output.lower()
+        indicators = []
+        if "apache/2.2" in lowered or "apache 2.2" in lowered:
+            indicators.append("apache-2.2")
+        if "php/5.3" in lowered or "php 5.3" in lowered:
+            indicators.append("php-5.3")
+        if "centos 6" in lowered:
+            indicators.append("centos-6")
+        if not indicators:
+            return
+
+        followup_target = self._normalize_target(target)
+        if not followup_target:
+            return
+        await self.store.add_hypothesis(
+            session,
+            hypothesis_type=HypothesisType.LEGACY_STACK_RCE_FOLLOWUP,
+            target=followup_target,
+            key=f"{followup_target}:legacy-stack",
+            rationale="Legacy stack indicators suggest targeted CVE and RCE follow-up, including Shellshock-era exposure checks",
+            confidence=0.9,
+            evidence={"source": source, "indicators": indicators},
+        )
 
     async def _derive_chain_hypotheses(self, session) -> None:
         """Create higher-value follow-up hypotheses from capability combinations."""

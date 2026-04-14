@@ -13,6 +13,7 @@ from kodiak.core.multi_agent_orchestrator import _tool_name_for_unit
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.models import (
+    CapabilityType,
     ScanStatus as DBScanStatus,
     DirectiveType,
     Hypothesis,
@@ -342,6 +343,45 @@ async def test_claim_work_unit_does_not_double_claim_same_unit():
 
 
 @pytest.mark.asyncio
+async def test_enqueue_work_unit_populates_single_scope_fields():
+    scan_id = uuid4()
+    project_id = uuid4()
+    store = SharedScanStore(project_id=project_id, scan_id=scan_id)
+    captured = {}
+
+    class FakeSession:
+        def add(self, obj):
+            captured["unit"] = obj
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, obj):
+            return None
+
+        async def rollback(self):
+            return None
+
+    async def fake_append_event(session, **kwargs):
+        return object()
+
+    store.append_event = fake_append_event
+    session = FakeSession()
+    unit = await store.enqueue_work_unit(
+        session,
+        technique="httpx_primary",
+        targets=["https://app.example.com"],
+        command_template="echo 'https://app.example.com' | httpx -sc -title -tech-detect -silent",
+    )
+
+    assert unit is captured["unit"]
+    assert unit.target == "https://app.example.com"
+    assert unit.target_kind == "origin"
+    assert unit.tool_family == "httpx"
+    assert unit.scope_key == "https://app.example.com"
+
+
+@pytest.mark.asyncio
 async def test_analyst_persists_structured_state_from_urls_and_tech():
     calls = {"observations": [], "capabilities": [], "hypotheses": []}
 
@@ -395,6 +435,63 @@ async def test_analyst_persists_structured_state_from_urls_and_tech():
         HypothesisType.TECH_FOLLOWUP,
     }
     assert capability_types
+
+
+@pytest.mark.asyncio
+async def test_analyst_extracts_tls_names_services_and_legacy_stack_hypotheses():
+    calls = {"observations": [], "capabilities": [], "hypotheses": []}
+
+    class RecordingStructuredStore:
+        scan_id = uuid4()
+
+        async def add_observation(self, session, **kwargs):
+            calls["observations"].append(kwargs)
+
+        async def add_capability(self, session, **kwargs):
+            calls["capabilities"].append(kwargs)
+
+        async def add_hypothesis(self, session, **kwargs):
+            calls["hypotheses"].append(kwargs)
+
+        async def get_capabilities(self, session, limit=250):
+            return []
+
+        async def add_directive(self, session, **kwargs):
+            return None
+
+    analyst = AnalystAgent(store=RecordingStructuredStore())
+    parsed = AnalystResponse(analysis="structured")
+    work_unit = WorkUnit(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        technique="nmap_initial",
+        targets_json=json.dumps(["metservice.intnet.mu"]),
+        targets_hash="hash-legacy",
+        command_template="nmap ...",
+        status=WorkUnitStatus.COMPLETED,
+        result_stdout=(
+            "443/tcp open https\n"
+            "Service Info: OS: CentOS 6; CPE: cpe:/o:centos:centos:6\n"
+            "Apache httpd 2.2.15 ((CentOS))\n"
+            "PHP/5.3.27\n"
+            "Subject Alternative Name: DNS:metservice.intnet.mu, DNS:adminmeteo.intnet.mu\n"
+        ),
+        result_stderr="",
+    )
+
+    await analyst._persist_structured_state(object(), parsed, [work_unit])
+
+    observation_types = {call["observation_type"] for call in calls["observations"]}
+    capability_types = {call["capability_type"] for call in calls["capabilities"]}
+    hypothesis_types = {call["hypothesis_type"] for call in calls["hypotheses"]}
+    hypothesis_targets = {call["target"] for call in calls["hypotheses"]}
+
+    assert ObservationType.NETWORK_SERVICE in observation_types
+    assert ObservationType.TLS_NAME in observation_types
+    assert CapabilityType.NETWORK_SERVICE in capability_types
+    assert HypothesisType.HIDDEN_HOST_FOLLOWUP in hypothesis_types
+    assert HypothesisType.LEGACY_STACK_RCE_FOLLOWUP in hypothesis_types
+    assert "adminmeteo.intnet.mu" in hypothesis_targets
 
 
 @pytest.mark.asyncio
@@ -561,6 +658,39 @@ async def test_planner_processes_pending_hypotheses_into_followup_work(monkeypat
     assert "hypothesis_sqlmap_followup" in techniques
     assert "hypothesis_admin_surface_followup" in techniques
     assert store.marked[0][1] == HypothesisStatus.QUEUED
+
+
+def test_planner_maps_hidden_host_and_legacy_stack_hypotheses_to_work():
+    planner = PlannerAgent(store=RecordingStore(), target="https://example.com")
+
+    hidden = Hypothesis(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        type=HypothesisType.HIDDEN_HOST_FOLLOWUP,
+        target="adminmeteo.intnet.mu",
+        key="tls-hidden",
+        rationale="TLS SAN revealed hidden host",
+        confidence=0.9,
+        status=HypothesisStatus.PENDING,
+    )
+    legacy = Hypothesis(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        type=HypothesisType.LEGACY_STACK_RCE_FOLLOWUP,
+        target="https://metservice.intnet.mu",
+        key="legacy-stack",
+        rationale="Legacy stack indicators present",
+        confidence=0.9,
+        status=HypothesisStatus.PENDING,
+    )
+
+    hidden_work = planner._work_item_for_hypothesis(hidden)
+    legacy_work = planner._work_item_for_hypothesis(legacy)
+
+    assert hidden_work["technique"] == "hypothesis_hidden_host_followup"
+    assert "nmap -sV -sC" in hidden_work["command"]
+    assert legacy_work["technique"] == "hypothesis_legacy_stack_rce_followup"
+    assert "nuclei -u https://metservice.intnet.mu" in legacy_work["command"]
 
 
 @pytest.mark.asyncio
@@ -736,7 +866,10 @@ async def test_shared_store_builds_projection_from_events_and_runtime_state():
         return [SimpleNamespace(type="auth_followup", target="https://app.example.com/login", status="pending", confidence=0.8)]
 
     async def fake_get_events(session, limit=25):
-        return [SimpleNamespace(type="work_unit_completed", entity_type="work_unit", entity_id="abc", payload={"technique": "httpx_primary"})]
+        return [
+            SimpleNamespace(type="component_degraded", entity_type="component", entity_id="planner", payload={"component": "planner", "reason": "cycle failed"}),
+            SimpleNamespace(type="work_unit_completed", entity_type="work_unit", entity_id="abc", payload={"technique": "httpx_primary"}),
+        ]
 
     async def fake_get_notes(session, limit=50):
         return [SimpleNamespace(id=uuid4(), category="attack_hint", target="https://app.example.com", content="Try auth reuse")]
@@ -768,6 +901,7 @@ async def test_shared_store_builds_projection_from_events_and_runtime_state():
     assert projection["work_queue"]["pending"] == 2
     assert projection["work_queue"]["completed"] == 5
     assert projection["assets"][0]["target"] == "https://app.example.com"
+    assert projection["degraded_components"][0]["component"] == "planner"
     assert projection["findings"][0]["title"] == "SQL Injection"
     assert projection["node_count"] == 1
     assert projection["nodes"][0]["type"] == "url"
@@ -775,7 +909,7 @@ async def test_shared_store_builds_projection_from_events_and_runtime_state():
     assert projection["notes"][0]["content"] == "Try auth reuse"
     assert projection["capabilities"][0]["type"] == "auth_surface"
     assert projection["hypotheses"][0]["status"] == "pending"
-    assert projection["recent_events"][0]["type"] == "work_unit_completed"
+    assert projection["recent_events"][0]["type"] == "component_degraded"
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,7 @@ from kodiak.database.models import (
     HypothesisStatus,
     HypothesisType,
     ObservationType,
+    ScanEventType,
     WorkUnit,
     WorkUnitStatus,
 )
@@ -77,6 +78,7 @@ class PlannerAgent:
         self._total_output_tokens: int = 0
         self._total_thinking_tokens: int = 0
         self._total_cached_tokens: int = 0
+        self._degraded = False
 
         if "://" in target:
             self._remember_live_http_target(target)
@@ -105,6 +107,10 @@ class PlannerAgent:
             self._cycle_count += 1
 
             try:
+                if self._degraded:
+                    await self._record_component_recovered()
+                    self._degraded = False
+
                 # Consume Analyst directives
                 await self._process_directives()
 
@@ -157,6 +163,9 @@ class PlannerAgent:
                         pass
             except Exception:
                 logger.exception("Planner cycle failed")
+                if not self._degraded:
+                    await self._record_component_degraded("Planner cycle failed")
+                    self._degraded = True
                 self._idle_cycles = 0
 
             await self._sleep(cycle_interval)
@@ -175,6 +184,26 @@ class PlannerAgent:
             await asyncio.sleep(seconds)
         except asyncio.CancelledError:
             self._stop_requested = True
+
+    async def _record_component_degraded(self, reason: str) -> None:
+        async for session in get_session():
+            await self.store.append_event(
+                session,
+                event_type=ScanEventType.COMPONENT_DEGRADED,
+                entity_type="component",
+                entity_id="planner",
+                payload={"component": "planner", "reason": reason},
+            )
+
+    async def _record_component_recovered(self) -> None:
+        async for session in get_session():
+            await self.store.append_event(
+                session,
+                event_type=ScanEventType.COMPONENT_RECOVERED,
+                entity_type="component",
+                entity_id="planner",
+                payload={"component": "planner", "reason": "Planner resumed successful cycles"},
+            )
 
     # ------------------------------------------------------------------
     # Initial seeding
@@ -662,6 +691,30 @@ class PlannerAgent:
                     "priority": 19,
                     "phase": "vuln_scan",
                 }
+
+        if hypothesis.type == HypothesisType.HIDDEN_HOST_FOLLOWUP:
+            host = self._extract_host(target)
+            if not host:
+                return None
+            return {
+                "technique": "hypothesis_hidden_host_followup",
+                "target": host,
+                "command": f"nmap -sV -sC -T3 -p 80,443,8080,8443 {host}",
+                "context": hypothesis.rationale,
+                "priority": 12,
+                "phase": "recon",
+            }
+
+        if hypothesis.type == HypothesisType.LEGACY_STACK_RCE_FOLLOWUP:
+            web_target = self._canonical_hint_target(target)
+            return {
+                "technique": "hypothesis_legacy_stack_rce_followup",
+                "target": web_target,
+                "command": f"nuclei -u {web_target} -tags cve,shellshock,apache,php -rl 10 -silent",
+                "context": hypothesis.rationale,
+                "priority": 13,
+                "phase": "vuln_scan",
+            }
 
         return None
 

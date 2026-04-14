@@ -92,6 +92,8 @@ async def init_db():
             
             # Create all tables
             await conn.run_sync(SQLModel.metadata.create_all)
+            if settings.is_sqlite:
+                await _apply_sqlite_compat_migrations(conn)
             
         logger.info("Database initialization completed successfully")
         
@@ -104,6 +106,92 @@ async def init_db():
     except Exception as e:
         logger.error(f"Unexpected error during database initialization: {e}")
         raise
+
+
+async def _apply_sqlite_compat_migrations(conn) -> None:
+    """Apply lightweight additive SQLite migrations for active runtime fields."""
+    existing_columns_result = await conn.execute(text("PRAGMA table_info(workunit)"))
+    existing_columns = {row[1] for row in existing_columns_result.fetchall()}
+
+    migrations = [
+        ("target", "ALTER TABLE workunit ADD COLUMN target VARCHAR DEFAULT ''"),
+        ("target_kind", "ALTER TABLE workunit ADD COLUMN target_kind VARCHAR DEFAULT 'scope'"),
+        ("tool_family", "ALTER TABLE workunit ADD COLUMN tool_family VARCHAR DEFAULT ''"),
+        ("scope_key", "ALTER TABLE workunit ADD COLUMN scope_key VARCHAR DEFAULT ''"),
+    ]
+    for column_name, ddl in migrations:
+        if column_name not in existing_columns:
+            await conn.execute(text(ddl))
+
+    refreshed_columns_result = await conn.execute(text("PRAGMA table_info(workunit)"))
+    refreshed_columns = {row[1] for row in refreshed_columns_result.fetchall()}
+    required = {"target", "target_kind", "tool_family", "scope_key"}
+    if not required.issubset(refreshed_columns):
+        return
+
+    await conn.execute(
+        text(
+            """
+            UPDATE workunit
+            SET
+                target = CASE
+                    WHEN target IS NULL OR target = '' THEN
+                        COALESCE(
+                            NULLIF(
+                                REPLACE(REPLACE(REPLACE(REPLACE(targets_json, '["', ''), '"]', ''), '\"', ''), '\\', ''),
+                                ''
+                            ),
+                            ''
+                        )
+                    ELSE target
+                END
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE workunit
+            SET target_kind = CASE
+                WHEN target_kind IS NULL OR target_kind = '' OR target_kind = 'scope' THEN
+                    CASE
+                        WHEN instr(target, '://') > 0 AND (instr(substr(target, instr(target, '://') + 3), '/') > 0 OR instr(target, '?') > 0) THEN 'url'
+                        WHEN instr(target, '://') > 0 THEN 'origin'
+                        ELSE 'host'
+                    END
+                ELSE target_kind
+            END
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE workunit
+            SET tool_family = CASE
+                WHEN tool_family IS NULL OR tool_family = '' THEN
+                    CASE
+                        WHEN instr(trim(command_template), ' ') > 0 THEN lower(substr(trim(command_template), 1, instr(trim(command_template), ' ') - 1))
+                        WHEN trim(command_template) <> '' THEN lower(trim(command_template))
+                        WHEN instr(technique, '_') > 0 THEN lower(substr(technique, 1, instr(technique, '_') - 1))
+                        ELSE lower(technique)
+                    END
+                ELSE tool_family
+            END
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE workunit
+            SET scope_key = CASE
+                WHEN scope_key IS NULL OR scope_key = '' THEN COALESCE(NULLIF(target, ''), targets_hash)
+                ELSE scope_key
+            END
+            """
+        )
+    )
 
 
 

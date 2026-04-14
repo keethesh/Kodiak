@@ -67,6 +67,9 @@ class ObservationType(StrEnum):
     LOGIN_SURFACE = "login_surface"
     ADMIN_SURFACE = "admin_surface"
     API_SURFACE = "api_surface"
+    TLS_NAME = "tls_name"
+    NETWORK_SERVICE = "network_service"
+    ORIGIN_CANDIDATE = "origin_candidate"
 
 
 class CapabilityType(StrEnum):
@@ -76,6 +79,8 @@ class CapabilityType(StrEnum):
     ADMIN_SURFACE = "admin_surface"
     API_SURFACE = "api_surface"
     TECH_STACK = "tech_stack"
+    NETWORK_SERVICE = "network_service"
+    ORIGIN_REACHABLE = "origin_reachable"
 
 
 class HypothesisType(StrEnum):
@@ -84,6 +89,8 @@ class HypothesisType(StrEnum):
     ADMIN_FOLLOWUP = "admin_followup"
     API_LOGIC_FOLLOWUP = "api_logic_followup"
     TECH_FOLLOWUP = "tech_followup"
+    HIDDEN_HOST_FOLLOWUP = "hidden_host_followup"
+    LEGACY_STACK_RCE_FOLLOWUP = "legacy_stack_rce_followup"
 
 
 class HypothesisStatus(StrEnum):
@@ -106,6 +113,8 @@ class ScanEventType(StrEnum):
     FINDING_ADDED = "finding_added"
     NOTE_ADDED = "note_added"
     ATTEMPT_RECORDED = "attempt_recorded"
+    COMPONENT_DEGRADED = "component_degraded"
+    COMPONENT_RECOVERED = "component_recovered"
 
 
 def utc_now():
@@ -292,6 +301,10 @@ class WorkUnit(SQLModel, table=True):
     project_id: UUID = Field(foreign_key="project.id")
 
     technique: str = Field(index=True)  # e.g. "nuclei_drupal", "ffuf_dirbrute"
+    target: str = Field(default="", index=True)  # Canonical single scope for this work unit
+    target_kind: str = Field(default="scope", index=True)  # host, origin, url, or scope
+    tool_family: str = Field(default="", index=True)
+    scope_key: str = Field(default="", index=True)
     targets_json: str  # JSON array of target hostnames/URLs
     targets_hash: str = Field(index=True)  # SHA256 of sorted targets for dedup
     context: str = ""  # Extra context for the worker (e.g. "Laravel detected")
