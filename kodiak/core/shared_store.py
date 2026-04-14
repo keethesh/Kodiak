@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, update
 
+from kodiak.core.config import settings
 from kodiak.database.models import (
     Attempt,
     Capability,
@@ -68,10 +69,7 @@ def _unit_targets(unit: WorkUnit) -> List[str]:
     return []
 
 
-_SERIALIZED_TOOL_FAMILIES = frozenset({
-    "nuclei", "ffuf", "katana", "gau", "sqlmap",
-    "nmap", "commix", "wpscan", "hydra", "nikto",
-})
+_SERIALIZED_TOOL_FAMILIES = settings.HEAVY_TOOLS
 
 
 def _tool_family(technique: str, command_template: str = "") -> str:
@@ -85,6 +83,51 @@ def _tool_family(technique: str, command_template: str = "") -> str:
         if parts:
             return parts[0].lower()
     return technique.split("_", 1)[0].lower()
+
+
+class DBMetrics:
+    """Track database operation metrics for monitoring."""
+    
+    _error_counts: dict[str, int] = {}
+    _operation_counts: dict[str, int] = {}
+    
+    @classmethod
+    def record_operation(cls, operation: str) -> None:
+        cls._operation_counts[operation] = cls._operation_counts.get(operation, 0) + 1
+    
+    @classmethod
+    def record_error(cls, operation: str, error_type: str) -> None:
+        cls._error_counts[f"{operation}:{error_type}"] = (
+            cls._error_counts.get(f"{operation}:{error_type}", 0) + 1
+        )
+        if cls._error_counts.get(f"{operation}:{error_type}", 0) >= 10:
+            logger.warning(
+                f"DB error rate elevated for {operation}: "
+                f"{cls._error_counts[f'{operation}:{error_type}']} errors"
+            )
+    
+    @classmethod
+    def get_stats(cls) -> dict:
+        return {
+            "operations": dict(cls._operation_counts),
+            "errors": dict(cls._error_counts),
+            "error_rate": (
+                sum(cls._error_counts.values()) / max(sum(cls._operation_counts.values()), 1)
+            ),
+        }
+    
+    @classmethod
+    def reset(cls) -> None:
+        cls._error_counts.clear()
+        cls._operation_counts.clear()
+
+
+def _handle_db_error(operation: str, error: SQLAlchemyError, default_return: Any = None) -> Any:
+    """Log and record database errors, return default value."""
+    error_type = type(error).__name__
+    DBMetrics.record_error(operation, error_type)
+    logger.debug(f"DB error in {operation}: {error_type} - {error}")
+    return default_return
 
 
 class SharedScanStore:
@@ -125,11 +168,11 @@ class SharedScanStore:
             session.add(event)
             await session.commit()
             await session.refresh(event)
+            DBMetrics.record_operation("append_event")
             return event
         except SQLAlchemyError as e:
             await session.rollback()
-            logger.error(f"Failed to append scan event: {e}")
-            return None
+            return _handle_db_error("append_event", e)
 
     async def get_events(
         self,
@@ -908,9 +951,10 @@ class SharedScanStore:
                 .limit(limit)
             )
             result = await session.execute(stmt)
+            DBMetrics.record_operation("get_findings")
             return list(result.scalars().all())
-        except SQLAlchemyError:
-            return []
+        except SQLAlchemyError as e:
+            return _handle_db_error("get_findings", e, default_return=[])
 
     # ------------------------------------------------------------------
     # Notes (shared intelligence)
@@ -961,9 +1005,10 @@ class SharedScanStore:
                 .limit(limit)
             )
             result = await session.execute(stmt)
+            DBMetrics.record_operation("get_notes")
             return list(result.scalars().all())
-        except SQLAlchemyError:
-            return []
+        except SQLAlchemyError as e:
+            return _handle_db_error("get_notes", e, default_return=[])
 
     async def get_attack_hints(
         self, session: AsyncSession
@@ -979,9 +1024,10 @@ class SharedScanStore:
                 .order_by(EngagementNote.created_at.desc())
             )
             result = await session.execute(stmt)
+            DBMetrics.record_operation("get_attack_hints")
             return list(result.scalars().all())
-        except SQLAlchemyError:
-            return []
+        except SQLAlchemyError as e:
+            return _handle_db_error("get_attack_hints", e, default_return=[])
 
     # ------------------------------------------------------------------
     # Attempts (tool execution history)
@@ -1018,11 +1064,11 @@ class SharedScanStore:
                 entity_id=str(attempt.id),
                 payload={"tool": tool, "target": target, "status": status},
             )
+            DBMetrics.record_operation("record_attempt")
             return attempt
         except SQLAlchemyError as e:
             await session.rollback()
-            logger.error(f"Failed to record attempt: {e}")
-            return None
+            return _handle_db_error("record_attempt", e)
 
     async def build_projection(self, session: AsyncSession) -> Dict[str, Any]:
         """Build a compact, event-first projection for UI/CLI consumers."""

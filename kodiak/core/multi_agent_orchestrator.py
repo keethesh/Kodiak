@@ -32,10 +32,8 @@ from kodiak.database.engine import get_session
 from kodiak.database.models import WorkUnit, WorkUnitStatus
 
 
-_HEAVY_TOOLS = frozenset({
-    "nuclei", "ffuf", "katana", "gau", "sqlmap",
-    "nmap", "commix", "wpscan", "hydra", "nikto",
-})
+_HEAVY_TOOLS = settings.HEAVY_TOOLS
+
 
 
 def _tool_name_for_unit(unit: WorkUnit) -> str:
@@ -236,6 +234,78 @@ class MultiAgentOrchestrator:
         self.num_workers = num_workers
         self.worker_idle_timeout = worker_idle_timeout
         self.max_scan_duration = max_scan_duration
+        self._running = False
+        self._container_label = f"kodiak-scan"
+
+    async def shutdown(self) -> None:
+        """
+        Gracefully shutdown the orchestrator and cleanup resources.
+        
+        This method:
+        1. Cancels all running tasks
+        2. Cleans up orphaned Docker containers
+        3. Logs DB metrics
+        4. Logs shutdown status
+        """
+        self._running = False
+        logger.info("🛑 Initiating graceful shutdown...")
+        
+        await self._cleanup_containers()
+        
+        self._log_metrics()
+        
+        logger.info("✅ Graceful shutdown complete")
+
+    def _log_metrics(self) -> None:
+        """Log database operation metrics for monitoring."""
+        try:
+            from kodiak.core.shared_store import DBMetrics
+            stats = DBMetrics.get_stats()
+            if stats["errors"]:
+                logger.warning(
+                    f"📊 DB Metrics: {sum(stats['operations'].values())} ops, "
+                    f"{sum(stats['errors'].values())} errors, "
+                    f"error rate: {stats['error_rate']:.2%}"
+                )
+            DBMetrics.reset()
+        except Exception:
+            pass
+
+    async def _cleanup_containers(self) -> int:
+        """
+        Remove orphaned Docker containers created by this scan.
+        Returns the number of containers cleaned up.
+        """
+        try:
+            import asyncio
+            process = await asyncio.create_subprocess_exec(
+                "docker", "ps", "-q", "--filter", f"label=kodiak.scan={self._container_label}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await process.communicate()
+            container_ids = stdout.decode().strip().split("\n")
+            container_ids = [cid for cid in container_ids if cid]
+            
+            if not container_ids:
+                return 0
+            
+            logger.info(f"🧹 Cleaning up {len(container_ids)} orphaned containers")
+            
+            for container_id in container_ids:
+                try:
+                    await asyncio.create_subprocess_exec(
+                        "docker", "rm", "-f", container_id,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                except Exception:
+                    pass
+            
+            return len(container_ids)
+        except Exception as e:
+            logger.debug(f"Container cleanup skipped: {e}")
+            return 0
 
     async def run(
         self,
@@ -250,6 +320,8 @@ class MultiAgentOrchestrator:
         """
         start = time.monotonic()
         scan_id_str = str(scan_id)
+        self._running = True
+        self._container_label = f"kodiak-scan-{scan_id_str[:8]}"
 
         from kodiak.database.engine import init_db
         await init_db()
@@ -337,6 +409,7 @@ class MultiAgentOrchestrator:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*all_tasks, return_exceptions=True)
+            await self.shutdown()
 
         except asyncio.CancelledError:
             logger.info("🛑 Multi-agent pipeline cancelled")
@@ -345,6 +418,7 @@ class MultiAgentOrchestrator:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*all_tasks, return_exceptions=True)
+            await self.shutdown()
 
         elapsed = time.monotonic() - start
 

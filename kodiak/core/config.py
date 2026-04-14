@@ -79,6 +79,15 @@ class KodiakSettings(BaseSettings):
     # Failure handling
     failure_threshold: int = Field(default=3, alias="KODIAK_FAILURE_THRESHOLD")
 
+    # Tool classification
+    HEAVY_TOOLS: frozenset = Field(
+        default=frozenset({
+            "nuclei", "ffuf", "katana", "gau", "sqlmap",
+            "nmap", "commix", "wpscan", "hydra", "nikto",
+        }),
+        exclude_from_public_api=True,
+    )
+
     # Security/runtime
     enable_safety_checks: bool = Field(default=True, alias="KODIAK_ENABLE_SAFETY")
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")

@@ -147,6 +147,7 @@ class DockerExecutor(ServiceExecutor):
             "--rm",  # Remove container after execution
             "--memory", kodiak_settings.docker_memory_limit,
             "--cpus", str(kodiak_settings.docker_cpu_limit),
+            "--label", "kodiak.scan",  # Enable container tracking for cleanup
         ]
 
         # Add only the capabilities that are actually needed instead of --privileged.
