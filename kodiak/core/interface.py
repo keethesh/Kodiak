@@ -23,7 +23,6 @@ class _RunState:
     run_id: str
     target: str
     instructions: str
-    max_iterations: int
     model: Optional[str]
     worker_count: int
     report_format: str
@@ -71,11 +70,7 @@ class CoreInterface:
         target: str,
         instructions: str = "Conduct a security assessment",
         model: Optional[str] = None,
-        max_iterations: int = 100,
         worker_count: Optional[int] = None,
-        agent_count: Optional[int] = None,
-        role_strategy: str = "role_hinted",
-        event_scheduler: Optional[bool] = None,
         report_format: str = "json+md",
         report_path: Optional[str] = None,
         project_name: Optional[str] = None,
@@ -85,18 +80,13 @@ class CoreInterface:
     ) -> str:
         await self._ensure_subscriptions()
 
-        resolved_workers = worker_count
-        if resolved_workers is None and agent_count is not None:
-            resolved_workers = agent_count
-        if resolved_workers is None:
-            resolved_workers = settings.multi_agent_workers
+        resolved_workers = worker_count or settings.multi_agent_workers
 
         run_id = str(uuid.uuid4())
         state = _RunState(
             run_id=run_id,
             target=target,
             instructions=instructions,
-            max_iterations=max_iterations,
             model=model,
             worker_count=int(resolved_workers),
             report_format=report_format,
@@ -196,7 +186,6 @@ class CoreInterface:
                 result = await self._runner.run(
                     target=state.target,
                     instructions=state.instructions,
-                    max_iterations=state.max_iterations,
                     worker_count=state.worker_count,
                     report_format=state.report_format,
                     report_path=state.report_path,

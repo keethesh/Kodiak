@@ -131,15 +131,8 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.argument("target")
 @click.option("--instructions", "-i", help="Custom scan instructions", default="Conduct a security assessment")
 @click.option("--model", "-m", help="LLM model to use")
-@click.option("--max-iterations", "-n", default=100, help="Compatibility iteration budget (ignored by active runtime)")
 @click.option("--project", "-p", default=None, help="Project name — reuse across scans to load prior knowledge")
 @click.option("--workers", "-w", type=int, default=None, help="Worker concurrency for the multi-agent runtime")
-@click.option("--agents", "-a", type=int, default=None, hidden=True)
-@click.option(
-    "--event-scheduler/--no-event-scheduler",
-    default=True,
-    help="Deprecated compatibility option; ignored by the active runtime.",
-)
 @click.option(
     "--report-format",
     type=click.Choice(["json", "json+md"], case_sensitive=False),
@@ -147,25 +140,15 @@ def main(ctx, version: bool, target: Optional[str]):
     help="Scan report output format",
 )
 @click.option("--report-path", type=str, default=None, help="Directory for scan report artifacts")
-@click.option(
-    "--role-strategy",
-    type=click.Choice(["role-hinted", "generic"], case_sensitive=False),
-    default="role-hinted",
-    hidden=True,
-)
 @click.option("--verbose", "-v", is_flag=True, help="Show verbose real-time logging output")
 def scan(
     target: str,
     instructions: str,
     model: Optional[str],
-    max_iterations: int,
     project: Optional[str],
     workers: Optional[int],
-    agents: Optional[int],
-    event_scheduler: bool,
     report_format: str,
     report_path: Optional[str],
-    role_strategy: str,
     verbose: bool,
 ):
     """Run a security scan on the target."""
@@ -211,16 +194,9 @@ def scan(
         console.print(f"📋 [bold]Instructions:[/bold] {instructions}")
         if project:
             console.print(f"📁 [bold]Project:[/bold] {project} [dim](prior knowledge will be loaded if project exists)[/dim]")
-        effective_workers = int(workers or agents or settings.multi_agent_workers)
+        effective_workers = int(workers or settings.multi_agent_workers)
         architecture_label = f"Multi-Agent Pipeline ({effective_workers} workers, planner + analyst)"
         console.print(f"👤 [bold]Architecture:[/bold] {architecture_label}")
-        console.print("[dim]Event Scheduler: deprecated, ignored by active runtime[/dim]")
-        if workers is not None and agents is not None and int(workers) != int(agents):
-            console.print("[yellow]Note: --workers takes precedence over deprecated --agents.[/yellow]")
-        if agents is not None:
-            console.print("[yellow]Note: --agents is deprecated; use --workers.[/yellow]")
-        if role_strategy != "role-hinted":
-            console.print("[yellow]Note: --role-strategy is deprecated and ignored by the active runtime.[/yellow]")
         console.print(f"📝 [bold]Report:[/bold] format={report_format} path={report_path or settings.report_output_path}")
         console.print("")
         
@@ -229,11 +205,7 @@ def scan(
             target=target,
             instructions=instructions,
             model=model,
-            max_iterations=max_iterations,
             worker_count=effective_workers,
-            agent_count=agents,
-            role_strategy=role_strategy.replace("-", "_"),
-            event_scheduler=event_scheduler,
             report_format=report_format.lower(),
             report_path=report_path,
             project_name=project,

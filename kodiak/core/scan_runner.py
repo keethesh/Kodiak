@@ -66,20 +66,11 @@ class ScanRunner:
         project_id: Optional[str] = None,
         scan_id: Optional[str] = None,
         scan_name: Optional[str] = None,
-        max_iterations: int = 30,
-        agent_count: int = 1,
         worker_count: Optional[int] = None,
-        role_strategy: str = "role_hinted",
         report_format: str = "json+md",
         report_path: Optional[str] = None,
-        event_scheduler: Optional[bool] = None,
     ) -> ScanResult:
-        """
-        Execute a complete scan using the active multi-agent kernel.
-
-        ``agent_count``, ``role_strategy``, and ``event_scheduler`` are accepted
-        for compatibility but ignored by the active runtime.
-        """
+        """Execute a complete scan using the active multi-agent kernel."""
         start_time = datetime.now(timezone.utc)
         
         if not project_name:
@@ -149,13 +140,6 @@ class ScanRunner:
 
                 # 3. Run the active multi-agent kernel.
                 from kodiak.core.multi_agent_orchestrator import MultiAgentOrchestrator
-
-                if event_scheduler is not None:
-                    logger.warning("event_scheduler is deprecated and ignored by the active runtime")
-                if role_strategy != "role_hinted":
-                    logger.warning("role_strategy is deprecated and ignored by the active runtime")
-                if agent_count != 1:
-                    logger.warning("agent_count is deprecated; use worker_count/--workers instead")
 
                 effective_workers = max(1, int(worker_count or settings.multi_agent_workers))
                 orchestrator = MultiAgentOrchestrator(
