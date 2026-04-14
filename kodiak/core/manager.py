@@ -37,6 +37,11 @@ from kodiak.database.models import Attempt, EngagementNote, Finding, NoteCategor
 from kodiak.services import llm
 from kodiak.services.gemini_client import GeminiClient, GeminiResponse
 
+_LEGACY_EVENT_MODE_DEFAULT = True
+_LEGACY_EVENT_HEARTBEAT_SECONDS = 30
+_LEGACY_EVENT_REPLAN_COOLDOWN_SECONDS = 8
+_LEGACY_EVENT_MAX_QUEUE = 50
+
 
 # ---------------------------------------------------------------------------
 # Result container
@@ -137,7 +142,7 @@ class ManagerAgent:
             }
         ]
 
-        event_mode = settings.event_scheduler_enabled if event_scheduler is None else bool(event_scheduler)
+        event_mode = _LEGACY_EVENT_MODE_DEFAULT if event_scheduler is None else bool(event_scheduler)
 
         if event_mode:
             return await self._run_event_mode(
@@ -291,8 +296,8 @@ class ManagerAgent:
         )
         llm_calls = 0
         need_replan = True
-        heartbeat_seconds = max(5, int(settings.event_scheduler_heartbeat_seconds))
-        cooldown_seconds = max(1, int(settings.event_scheduler_replan_cooldown_seconds))
+        heartbeat_seconds = max(5, int(_LEGACY_EVENT_HEARTBEAT_SECONDS))
+        cooldown_seconds = max(1, int(_LEGACY_EVENT_REPLAN_COOLDOWN_SECONDS))
         last_replan_mono = 0.0
         min_iterations = min(max_iterations, max(3, int(max_iterations * 0.15)))
 
@@ -365,7 +370,7 @@ class ManagerAgent:
                     for cancel_id in cancel_task_ids:
                         await scheduler.cancel(cancel_id)
 
-                    max_queue = max(1, int(settings.event_scheduler_max_queue))
+                    max_queue = max(1, int(_LEGACY_EVENT_MAX_QUEUE))
                     dropped_for_queue = 0
                     for task in launch_tasks:
                         if scheduler.pending_count + scheduler.running_count >= max_queue:
