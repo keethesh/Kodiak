@@ -26,10 +26,11 @@ class ScanResult:
     """Result of a completed scan"""
     status: str  # "completed", "failed", "cancelled", "max_iterations"
     summary: str
-    nodes_discovered: int
-    findings_count: int
-    duration_seconds: float
-    iterations: int
+    nodes_discovered: int  # Deprecated: use asset_count
+    asset_count: int = 0  # Primary asset count from kernel
+    findings_count: int = 0
+    duration_seconds: float = 0.0
+    iterations: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_thinking_tokens: int = 0
@@ -166,10 +167,14 @@ class ScanRunner:
                 nodes = await crud.node.get_nodes_by_project(session, project.id)
                 duration = (datetime.now(timezone.utc) - start_time).total_seconds()
                 
+                asset_count = projection.get("asset_count", len(nodes))
+                work_queue = projection.get("work_queue", {})
+                
                 scan_result = ScanResult(
                     status=kernel_result.status,
                     summary=self._build_scan_summary(kernel_result),
                     nodes_discovered=len(nodes),
+                    asset_count=asset_count,
                     findings_count=kernel_result.findings_count,
                     duration_seconds=duration,
                     iterations=kernel_result.iterations,
@@ -188,6 +193,7 @@ class ScanRunner:
                     "target": target,
                     "status": kernel_result.status,
                     "summary": {
+                        "asset_count": asset_count,
                         "nodes_discovered": len(nodes),
                         "raw_findings": self._finding_event_count,
                         "deduped_findings": len(self._finding_keys),
@@ -195,6 +201,9 @@ class ScanRunner:
                         "findings_count": kernel_result.findings_count,
                         "duration_seconds": duration,
                         "iterations": kernel_result.iterations,
+                        "work_pending": int(work_queue.get("PENDING", 0)),
+                        "work_completed": int(work_queue.get("COMPLETED", 0)),
+                        "task_errors": kernel_result.task_errors if hasattr(kernel_result, 'task_errors') else {},
                     },
                     "findings": list(self._finding_records.values()),
                     "attempts": [
@@ -223,6 +232,7 @@ class ScanRunner:
                     scan_name=project.name,
                     status=final_status,
                     summary={
+                        "asset_count": asset_count,
                         "nodes_discovered": len(nodes),
                         "raw_findings": self._finding_event_count,
                         "deduped_findings": len(self._finding_keys),
@@ -230,6 +240,8 @@ class ScanRunner:
                         "findings_count": kernel_result.findings_count,
                         "duration": duration,
                         "report_paths": report_paths,
+                        "work_pending": int(work_queue.get("PENDING", 0)),
+                        "work_completed": int(work_queue.get("COMPLETED", 0)),
                     }
                 )
                 

@@ -54,15 +54,20 @@ def _render_markdown(report_data: Dict[str, Any]) -> str:
         "",
         "## Summary",
         "",
-        f"- Agents: requested={summary.get('agents_requested', 0)}, running={summary.get('agents_running', 0)}",
-        f"- Nodes discovered: {summary.get('nodes_discovered', 0)}",
+        f"- Assets discovered: {summary.get('asset_count', summary.get('nodes_discovered', 0))}",
         f"- Findings: unique={summary.get('deduped_findings', 0)} raw={summary.get('raw_findings', 0)}",
-        f"- Duplicate findings filtered: {summary.get('duplicate_findings_filtered', 0)}",
+        f"- Work queue: pending={summary.get('work_pending', 0)} completed={summary.get('work_completed', 0)}",
         f"- Duration seconds: {summary.get('duration_seconds', summary.get('duration', 0))}",
         "",
-        "## Findings",
-        "",
     ]
+    
+    if summary.get('unavailable_tools'):
+        lines.extend(["", "## Unavailable Tools", ""])
+        for tool, reason in summary['unavailable_tools'].items():
+            lines.append(f"- {tool}: {reason}")
+        lines.append("")
+    
+    lines.extend(["", "## Findings", ""])
 
     if not findings:
         lines.append("- No findings captured.")
