@@ -330,12 +330,17 @@ class MultiAgentOrchestrator:
         # 1. Create shared store
         store = SharedScanStore(project_id=project_id, scan_id=scan_id)
 
-        # 2. Create agents
+        # 2. Check tool availability
+        from kodiak.core.tool_availability import check_tool_availability, get_default_tools_to_check
+        tool_availability = await check_tool_availability(get_default_tools_to_check())
+
+        # 3. Create agents with tool availability
         planner = PlannerAgent(
             store=store,
             target=target,
             instructions=instructions,
             event_manager=self.event_manager,
+            tool_availability=tool_availability,
         )
 
         analyst = AnalystAgent(
@@ -344,7 +349,7 @@ class MultiAgentOrchestrator:
             event_manager=self.event_manager,
         )
 
-        # 3. Shared concurrency controls for all workers
+        # 4. Shared concurrency controls for all workers
         semaphore = asyncio.Semaphore(settings.global_tool_concurrency)
         heavy_semaphore = asyncio.Semaphore(max(1, settings.heavy_tool_parallel_limit))
         planner_done = asyncio.Event()
@@ -358,7 +363,7 @@ class MultiAgentOrchestrator:
             finally:
                 planner_done.set()
 
-        # 4. Build async tasks
+        # 5. Build async tasks
         planner_task = asyncio.create_task(
             _run_planner(),
             name="planner",
@@ -397,7 +402,7 @@ class MultiAgentOrchestrator:
             f"1 planner (Flash) + 1 analyst (Pro) + {self.num_workers} workers"
         )
 
-        # 5. Run until completion or timeout
+        # 6. Run until completion or timeout
         all_tasks = [planner_task, analyst_task] + worker_tasks
 
         status = "completed"
@@ -436,7 +441,7 @@ class MultiAgentOrchestrator:
 
         elapsed = time.monotonic() - start
 
-        # 6. Collect results
+        # 7. Collect results
         planner_stats: Dict[str, Any] = {}
         if planner_task.done() and not planner_task.cancelled():
             try:

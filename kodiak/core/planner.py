@@ -24,6 +24,7 @@ from loguru import logger
 from kodiak.core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 from kodiak.core.config import settings
 from kodiak.core.event_publisher import RuntimeEventPublisher
+from kodiak.core.tool_availability import ToolAvailability
 from kodiak.core.methodology import (
     MethodologyRule,
     TriggerType,
@@ -58,11 +59,13 @@ class PlannerAgent:
         target: str,
         instructions: str = "",
         event_manager: Optional[RuntimeEventPublisher] = None,
+        tool_availability: Optional[ToolAvailability] = None,
     ):
         self.store = store
         self.target = target
         self._instructions = (instructions or "").strip()
         self.event_manager = event_manager
+        self._tool_availability = tool_availability
 
         # Track state for rule triggering
         self._known_hosts: Set[str] = {self._extract_host(target)}
@@ -98,6 +101,18 @@ class PlannerAgent:
         if unit.target:
             return [unit.target]
         return []
+
+    def _is_tool_available(self, tool_family: str) -> bool:
+        """Check if a tool family is available. Returns True if no availability info."""
+        if not self._tool_availability:
+            return True
+        return self._tool_availability.is_available(tool_family)
+
+    def _skip_unavailable_tool(self, tool_family: str) -> bool:
+        """Return True if tool is unavailable and should be skipped."""
+        if not self._tool_availability:
+            return False
+        return self._tool_availability.is_unavailable(tool_family)
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -367,9 +382,14 @@ class PlannerAgent:
         }
         resolved_techniques = alias_map.get(technique, [technique])
         specs: List[Dict[str, Any]] = []
+        skipped_tools: Set[str] = set()
 
         for target in ordered_targets:
             for resolved in resolved_techniques:
+                tool_family = resolved.split("_", 1)[0] if "_" in resolved else resolved
+                if self._skip_unavailable_tool(tool_family):
+                    skipped_tools.add(tool_family)
+                    continue
                 spec = self._work_spec_for_hint_technique(
                     resolved,
                     target,
@@ -377,6 +397,9 @@ class PlannerAgent:
                 )
                 if spec:
                     specs.append(spec)
+
+        if skipped_tools:
+            logger.debug(f"Skipped unavailable tools in attack_hint: {skipped_tools}")
 
         if not specs:
             if command:
@@ -823,6 +846,11 @@ class PlannerAgent:
         domain: str,
     ) -> int:
         """Enqueue one concrete work unit per target scope."""
+        tool_family = rule.technique.split("_", 1)[0] if rule.technique else ""
+        if self._skip_unavailable_tool(tool_family):
+            logger.debug(f"Skipping rule {rule.technique}: tool {tool_family} unavailable")
+            return 0
+
         count = 0
         for target in self._dedupe_preserve_order(targets)[:rule.max_targets]:
             normalized_target = self._normalize_target_for_rule(rule, target, domain)

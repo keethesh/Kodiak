@@ -1112,6 +1112,7 @@ class SharedScanStore:
         nodes = await self._get_nodes(session, limit=100)
         assets = self._build_assets_projection(observations, capabilities)
         degraded_components = self._build_degraded_components_projection(recent_events)
+        asset_count = len(assets)
 
         try:
             from sqlalchemy import func
@@ -1130,8 +1131,9 @@ class SharedScanStore:
             "project_id": str(self.project_id),
             "work_queue": work_queue,
             "assets": assets,
+            "asset_count": asset_count,
             "degraded_components": degraded_components,
-            "node_count": len(nodes),
+            "node_count": len(nodes),  # Deprecated: use asset_count
             "nodes": [
                 {
                     "id": str(node.id),
