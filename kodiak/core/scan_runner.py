@@ -70,7 +70,6 @@ class ScanRunner:
         agent_count: int = 1,
         worker_count: Optional[int] = None,
         role_strategy: str = "role_hinted",
-        force_agents: bool = False,
         report_format: str = "json+md",
         report_path: Optional[str] = None,
         event_scheduler: Optional[bool] = None,

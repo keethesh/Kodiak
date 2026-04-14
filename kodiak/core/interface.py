@@ -26,7 +26,6 @@ class _RunState:
     max_iterations: int
     model: Optional[str]
     worker_count: int
-    force_agents: bool
     report_format: str
     report_path: Optional[str]
     project_name: Optional[str] = None
@@ -76,7 +75,6 @@ class CoreInterface:
         worker_count: Optional[int] = None,
         agent_count: Optional[int] = None,
         role_strategy: str = "role_hinted",
-        force_agents: bool = False,
         event_scheduler: Optional[bool] = None,
         report_format: str = "json+md",
         report_path: Optional[str] = None,
@@ -101,7 +99,6 @@ class CoreInterface:
             max_iterations=max_iterations,
             model=model,
             worker_count=int(resolved_workers),
-            force_agents=force_agents,
             report_format=report_format,
             report_path=report_path,
             project_name=project_name,
@@ -201,7 +198,6 @@ class CoreInterface:
                     instructions=state.instructions,
                     max_iterations=state.max_iterations,
                     worker_count=state.worker_count,
-                    force_agents=state.force_agents,
                     report_format=state.report_format,
                     report_path=state.report_path,
                     project_name=state.project_name,

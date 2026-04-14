@@ -66,7 +66,6 @@ class KodiakSettings(BaseSettings):
 
     # Security/runtime
     enable_safety_checks: bool = Field(default=True, alias="KODIAK_ENABLE_SAFETY")
-    max_concurrent_agents: int = Field(default=5, alias="KODIAK_MAX_AGENTS")
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")
     global_tool_concurrency: int = Field(default=6, alias="KODIAK_GLOBAL_CONCURRENCY")
     heavy_tool_parallel_limit: int = Field(default=2, alias="KODIAK_HEAVY_TOOL_PARALLEL_LIMIT")

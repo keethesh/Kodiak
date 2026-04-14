@@ -135,7 +135,6 @@ def main(ctx, version: bool, target: Optional[str]):
 @click.option("--project", "-p", default=None, help="Project name — reuse across scans to load prior knowledge")
 @click.option("--workers", "-w", type=int, default=None, help="Worker concurrency for the multi-agent runtime")
 @click.option("--agents", "-a", type=int, default=None, hidden=True)
-@click.option("--force-agents", is_flag=True, help="Allow agent count above KODIAK_MAX_AGENTS")
 @click.option(
     "--event-scheduler/--no-event-scheduler",
     default=True,
@@ -163,7 +162,6 @@ def scan(
     project: Optional[str],
     workers: Optional[int],
     agents: Optional[int],
-    force_agents: bool,
     event_scheduler: bool,
     report_format: str,
     report_path: Optional[str],
@@ -235,7 +233,6 @@ def scan(
             worker_count=effective_workers,
             agent_count=agents,
             role_strategy=role_strategy.replace("-", "_"),
-            force_agents=force_agents,
             event_scheduler=event_scheduler,
             report_format=report_format.lower(),
             report_path=report_path,
