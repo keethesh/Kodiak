@@ -606,12 +606,46 @@ def scan(
 
 
 @main.command()
-def migrate():
-    """Reset and initialize the database tables (MVP simple migration)."""
-    from kodiak.database.engine import init_db
-    console.print("🔄 [bold]Recreating database tables...[/bold]")
-    asyncio.run(init_db())
-    console.print("[green]✅ Database initialized.[/green]")
+@click.option("--reset", is_flag=True, help="Destructive reset: drops all tables and recreates (required for multi-agent kernel schema)")
+@click.option("--force", is_flag=True, help="Skip confirmation prompt for destructive reset")
+def migrate(reset: bool, force: bool):
+    """Reset and initialize the database tables for the multi-agent kernel.
+    
+    The multi-agent kernel requires a specific schema that is incompatible with
+    older SQLite databases. Use --reset to create a fresh database.
+    
+    For non-SQLite databases, this command will fail unless --reset is specified.
+    """
+    import inquirer
+    
+    if not reset:
+        console.print("[yellow]⚠️  The multi-agent kernel requires a fresh schema.[/yellow]")
+        console.print("[yellow]⚠️  Use --reset to recreate the database.[/yellow]")
+        console.print("")
+        console.print("Run: kodiak migrate --reset")
+        return
+
+    if not force and settings.is_sqlite:
+        questions = [
+            inquirer.Confirm("destructive", 
+                message="⚠️  This will DELETE all existing data. Continue?",
+                default=False)
+        ]
+        answers = inquirer.prompt(questions)
+        if not answers or not answers.get("destructive"):
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
+    from kodiak.database.engine import reset_database
+    
+    console.print("🔄 [bold]Resetting database...[/bold]")
+    try:
+        asyncio.run(reset_database())
+        console.print("[green]✅ Database reset complete.[/green]")
+        console.print("[green]✅ Ready for multi-agent kernel.[/green]")
+    except Exception as e:
+        console.print(f"[red]❌ Reset failed: {e}[/red]")
+        raise click.exceptions.Exit(1)
 
 
 @main.command()

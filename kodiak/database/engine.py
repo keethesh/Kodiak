@@ -10,6 +10,11 @@ from sqlmodel import SQLModel
 from kodiak.core.config import settings
 
 
+class SchemaMigrationRequired(Exception):
+    """Raised when the database schema doesn't match the expected model."""
+    pass
+
+
 def _create_engine():
     """Create the async database engine with appropriate settings for the database type."""
     connect_args = {}
@@ -82,10 +87,11 @@ async def init_db():
             # Import all models to ensure they're registered with SQLModel metadata
             from kodiak.database import models  # noqa
             
+            if settings.is_sqlite:
+                await _validate_sqlite_schema(conn)
+            
             # Create all tables
             await conn.run_sync(SQLModel.metadata.create_all)
-            if settings.is_sqlite:
-                await _apply_sqlite_compat_migrations(conn)
             
         logger.info("Database initialization completed successfully")
         
@@ -95,95 +101,70 @@ async def init_db():
     except SQLAlchemyError as e:
         logger.error(f"Database initialization failed: {e}")
         raise
+    except SchemaMigrationRequired as e:
+        logger.error(str(e))
+        raise
     except Exception as e:
         logger.error(f"Unexpected error during database initialization: {e}")
         raise
 
 
-async def _apply_sqlite_compat_migrations(conn) -> None:
-    """Apply lightweight additive SQLite migrations for active runtime fields."""
-    existing_columns_result = await conn.execute(text("PRAGMA table_info(workunit)"))
-    existing_columns = {row[1] for row in existing_columns_result.fetchall()}
-
-    migrations = [
-        ("target", "ALTER TABLE workunit ADD COLUMN target VARCHAR DEFAULT ''"),
-        ("target_kind", "ALTER TABLE workunit ADD COLUMN target_kind VARCHAR DEFAULT 'scope'"),
-        ("tool_family", "ALTER TABLE workunit ADD COLUMN tool_family VARCHAR DEFAULT ''"),
-        ("scope_key", "ALTER TABLE workunit ADD COLUMN scope_key VARCHAR DEFAULT ''"),
-    ]
-    for column_name, ddl in migrations:
-        if column_name not in existing_columns:
-            await conn.execute(text(ddl))
-
-    refreshed_columns_result = await conn.execute(text("PRAGMA table_info(workunit)"))
-    refreshed_columns = {row[1] for row in refreshed_columns_result.fetchall()}
-    required = {"target", "target_kind", "tool_family", "scope_key"}
-    if not required.issubset(refreshed_columns):
+async def _validate_sqlite_schema(conn) -> None:
+    """Validate that the SQLite schema.
+    
+    Fails fast matches the expected WorkUnit shape with explicit guidance if the schema is legacy (has targets_json/targets_hash)
+    or missing required columns. Old databases should be reset, not migrated.
+    """
+    try:
+        result = await conn.execute(text("PRAGMA table_info(workunit)"))
+        columns = {row[1] for row in result.fetchall()}
+    except SQLAlchemyError:
         return
+    
+    legacy_columns = {"targets_json", "targets_hash"}
+    if legacy_columns.intersection(columns):
+        raise SchemaMigrationRequired(
+            "Legacy WorkUnit schema detected (has targets_json/targets_hash columns). "
+            "The multi-agent kernel requires a fresh schema. "
+            f"Run: kodiak migrate --reset"
+        )
+    
+    required_columns = {"target", "target_kind", "tool_family", "scope_key"}
+    missing = required_columns - columns
+    if missing:
+        raise SchemaMigrationRequired(
+            f"WorkUnit schema is incomplete. Missing columns: {', '.join(missing)}. "
+            "The database may be corrupted or from an incompatible version. "
+            "Run: kodiak migrate --reset"
+        )
 
-    await conn.execute(
-        text(
-            """
-            UPDATE workunit
-            SET
-                target = CASE
-                    WHEN target IS NULL OR target = '' THEN
-                        COALESCE(
-                            NULLIF(
-                                REPLACE(REPLACE(REPLACE(REPLACE(targets_json, '["', ''), '"]', ''), '\"', ''), '\\', ''),
-                                ''
-                            ),
-                            ''
-                        )
-                    ELSE target
-                END
-            """
+
+async def reset_database() -> None:
+    """Destructively reset the database by dropping all tables and recreating.
+    
+    This is the only supported path for migrating to the multi-agent kernel schema.
+    """
+    global _engine
+    
+    logger.warning("🔄 Starting database reset...")
+    
+    if not settings.is_sqlite:
+        raise SchemaMigrationRequired(
+            "Database reset is only supported for SQLite. "
+            "For PostgreSQL, manually run: DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
         )
-    )
-    await conn.execute(
-        text(
-            """
-            UPDATE workunit
-            SET target_kind = CASE
-                WHEN target_kind IS NULL OR target_kind = '' OR target_kind = 'scope' THEN
-                    CASE
-                        WHEN instr(target, '://') > 0 AND (instr(substr(target, instr(target, '://') + 3), '/') > 0 OR instr(target, '?') > 0) THEN 'url'
-                        WHEN instr(target, '://') > 0 THEN 'origin'
-                        ELSE 'host'
-                    END
-                ELSE target_kind
-            END
-            """
-        )
-    )
-    await conn.execute(
-        text(
-            """
-            UPDATE workunit
-            SET tool_family = CASE
-                WHEN tool_family IS NULL OR tool_family = '' THEN
-                    CASE
-                        WHEN instr(trim(command_template), ' ') > 0 THEN lower(substr(trim(command_template), 1, instr(trim(command_template), ' ') - 1))
-                        WHEN trim(command_template) <> '' THEN lower(trim(command_template))
-                        WHEN instr(technique, '_') > 0 THEN lower(substr(technique, 1, instr(technique, '_') - 1))
-                        ELSE lower(technique)
-                    END
-                ELSE tool_family
-            END
-            """
-        )
-    )
-    await conn.execute(
-        text(
-            """
-            UPDATE workunit
-            SET scope_key = CASE
-                WHEN scope_key IS NULL OR scope_key = '' THEN COALESCE(NULLIF(target, ''), targets_hash)
-                ELSE scope_key
-            END
-            """
-        )
-    )
+    
+    try:
+        async with get_engine().begin() as conn:
+            from kodiak.database import models
+            await conn.run_sync(SQLModel.metadata.drop_all)
+            await conn.run_sync(SQLModel.metadata.create_all)
+        
+        logger.info("✅ Database reset complete")
+        
+    except SQLAlchemyError as e:
+        logger.error(f"Database reset failed: {e}")
+        raise SchemaMigrationRequired(f"Database reset failed: {e}")
 
 
 

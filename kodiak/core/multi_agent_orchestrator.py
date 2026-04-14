@@ -50,17 +50,8 @@ def _tool_name_for_unit(unit: WorkUnit) -> str:
 
 
 def _unit_primary_target(unit: WorkUnit) -> str:
-    """Read the canonical scope from the single-scope fields first."""
-    if unit.target:
-        return unit.target
-    if unit.targets_json:
-        try:
-            targets = json.loads(unit.targets_json)
-        except json.JSONDecodeError:
-            return ""
-        if targets:
-            return str(targets[0])
-    return ""
+    """Read the canonical scope from the single-scope target field."""
+    return unit.target if unit.target else ""
 
 
 # ---------------------------------------------------------------------------

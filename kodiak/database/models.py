@@ -296,7 +296,11 @@ class EngagementNote(SQLModel, table=True):
 
 
 class WorkUnit(SQLModel, table=True):
-    """A discrete unit of work for the multi-agent pipeline."""
+    """A discrete unit of work for the multi-agent pipeline.
+    
+    Single-scope only: each WorkUnit operates on exactly one target.
+    Use scope_key for deduplication (typically the target value).
+    """
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     scan_id: UUID = Field(foreign_key="scanjob.id", index=True)
     project_id: UUID = Field(foreign_key="project.id")
@@ -305,9 +309,7 @@ class WorkUnit(SQLModel, table=True):
     target: str = Field(default="", index=True)  # Canonical single scope for this work unit
     target_kind: str = Field(default="scope", index=True)  # host, origin, url, or scope
     tool_family: str = Field(default="", index=True)
-    scope_key: str = Field(default="", index=True)
-    targets_json: str  # JSON array of target hostnames/URLs
-    targets_hash: str = Field(index=True)  # SHA256 of sorted targets for dedup
+    scope_key: str = Field(default="", index=True)  # Used for deduplication
     context: str = ""  # Extra context for the worker (e.g. "Laravel detected")
     command_template: str = ""  # Shell command template with {target} placeholder
     priority: int = Field(default=50)  # 0=highest, 100=lowest
@@ -325,7 +327,7 @@ class WorkUnit(SQLModel, table=True):
     completed_at: Optional[datetime] = None
 
     __table_args__ = (
-        UniqueConstraint("scan_id", "technique", "targets_hash", name="uq_work_unit_dedup"),
+        UniqueConstraint("scan_id", "technique", "scope_key", name="uq_work_unit_dedup"),
     )
 
 

@@ -474,12 +474,12 @@ class AnalystAgent:
     ) -> None:
         """Persist deterministic observations, capabilities, and hypotheses."""
         for unit in work_units:
-            targets = json.loads(unit.targets_json) if unit.targets_json else []
+            target = unit.target if unit.target else ""
             combined_output = self._clean_text("\n".join(
                 part for part in [unit.result_stdout or "", unit.result_stderr or ""] if part
             ))
 
-            for target in targets:
+            if target:
                 normalized_target = self._normalize_target(target)
                 if "://" in normalized_target:
                     await self.store.add_observation(
@@ -864,8 +864,8 @@ class AnalystAgent:
 
         targets: List[str] = []
         for unit in work_units:
-            unit_targets = json.loads(unit.targets_json) if unit.targets_json else []
-            for target in unit_targets:
+            target = unit.target if unit.target else ""
+            if target:
                 normalized = self._normalize_target(target)
                 if "://" in normalized:
                     targets.append(normalized)
@@ -1045,8 +1045,8 @@ class AnalystAgent:
         """Format work unit results for the Analyst to review."""
         lines = ["<tool_results>"]
         for unit in work_units:
-            targets = json.loads(unit.targets_json) if unit.targets_json else []
-            lines.append(f"\n<result technique=\"{unit.technique}\" targets=\"{','.join(targets[:5])}\">")
+            target = unit.target if unit.target else ""
+            lines.append(f"\n<result technique=\"{unit.technique}\" target=\"{target}\">")
 
             stdout = (unit.result_stdout or "").strip()
             stderr = (unit.result_stderr or "").strip()

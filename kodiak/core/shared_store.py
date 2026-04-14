@@ -43,12 +43,6 @@ from kodiak.database.models import (
 )
 
 
-def _targets_hash(targets: List[str]) -> str:
-    """Deterministic hash for a set of targets (order-independent)."""
-    canonical = json.dumps(sorted(targets), separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
-
-
 def _target_kind(target: str) -> str:
     if "://" in target:
         parsed_path = target.split("://", 1)[-1]
@@ -57,15 +51,9 @@ def _target_kind(target: str) -> str:
 
 
 def _unit_targets(unit: WorkUnit) -> List[str]:
-    """Compatibility accessor while the schema still carries targets_json."""
+    """Get the single target from a WorkUnit as a list (for compatibility)."""
     if unit.target:
         return [unit.target]
-    if unit.targets_json:
-        try:
-            parsed = json.loads(unit.targets_json)
-        except json.JSONDecodeError:
-            return []
-        return [str(item) for item in parsed]
     return []
 
 
@@ -220,17 +208,24 @@ class SharedScanStore:
         priority: int = 50,
         phase: str = "recon",
     ) -> Optional[WorkUnit]:
-        """Add a work unit. Returns None if duplicate (dedup by technique+targets)."""
+        """Add a work unit. Returns None if duplicate (dedup by technique+scope_key).
+        
+        Single-scope only: takes first target from list for single-target execution.
+        Use enqueue_work_units_bulk for multiple targets.
+        """
+        if not targets:
+            logger.warning("enqueue_work_unit called with empty targets list")
+            return None
+        
+        primary_target = sorted(targets)[0]
         unit = WorkUnit(
             scan_id=self.scan_id,
             project_id=self.project_id,
             technique=technique,
-            target=(sorted(targets)[0] if targets else ""),
-            target_kind=_target_kind(sorted(targets)[0]) if targets else "scope",
+            target=primary_target,
+            target_kind=_target_kind(primary_target),
             tool_family=_tool_family(technique, command_template),
-            scope_key=(sorted(targets)[0] if targets else ""),
-            targets_json=json.dumps(sorted(targets)),
-            targets_hash=_targets_hash(targets),
+            scope_key=primary_target,
             command_template=command_template,
             context=context,
             priority=priority,
@@ -246,7 +241,7 @@ class SharedScanStore:
                 entity_id=str(unit.id),
                 payload={
                     "technique": technique,
-                    "targets": [unit.target] if unit.target else sorted(targets),
+                    "target": primary_target,
                     "priority": priority,
                     "phase": phase,
                 },
@@ -254,16 +249,15 @@ class SharedScanStore:
             )
             await session.commit()
             await session.refresh(unit)
-            logger.debug(f"📋 WorkUnit queued: {technique} → {targets[:3]}")
+            logger.debug(f"📋 WorkUnit queued: {technique} → {primary_target}")
             return unit
         except IntegrityError:
             await session.rollback()
-            logger.debug(f"📋 WorkUnit dedup: {technique} already queued for these targets")
+            logger.debug(f"📋 WorkUnit dedup: {technique} already queued for {primary_target}")
             return None
         except SQLAlchemyError as e:
             await session.rollback()
-            logger.error(f"Failed to enqueue work unit: {e}")
-            return None
+            return _handle_db_error("enqueue_work_unit", e)
 
     async def claim_work_unit(
         self, session: AsyncSession, worker_id: str
@@ -284,7 +278,7 @@ class SharedScanStore:
             active_locks = {
                 (
                     unit.tool_family or _tool_family(unit.technique, unit.command_template or ""),
-                    unit.scope_key or unit.target or unit.targets_hash,
+                    unit.scope_key or unit.target,
                 )
                 for unit in active_result.scalars().all()
             }
@@ -307,7 +301,7 @@ class SharedScanStore:
             claim_started_at = datetime.now(timezone.utc)
             for candidate in result.scalars().all():
                 family = _tool_family(candidate.technique, candidate.command_template or "")
-                scope_key = candidate.scope_key or candidate.target or candidate.targets_hash
+                scope_key = candidate.scope_key or candidate.target
                 if (
                     family in _SERIALIZED_TOOL_FAMILIES
                     and (family, scope_key) in active_locks

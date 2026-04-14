@@ -85,7 +85,6 @@ class KodiakSettings(BaseSettings):
             "nuclei", "ffuf", "katana", "gau", "sqlmap",
             "nmap", "commix", "wpscan", "hydra", "nikto",
         }),
-        exclude_from_public_api=True,
     )
 
     # Security/runtime

@@ -94,15 +94,9 @@ class PlannerAgent:
 
     @staticmethod
     def _unit_targets(unit: WorkUnit) -> List[str]:
-        """Compatibility accessor while WorkUnit keeps targets_json."""
+        """Get the single target from a WorkUnit as a list."""
         if unit.target:
             return [unit.target]
-        if unit.targets_json:
-            try:
-                parsed = json.loads(unit.targets_json)
-            except json.JSONDecodeError:
-                return []
-            return [str(item) for item in parsed]
         return []
 
     def request_stop(self) -> None:

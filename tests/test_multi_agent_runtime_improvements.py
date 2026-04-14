@@ -28,6 +28,30 @@ from kodiak.database.models import (
 from kodiak.tui.state import AgentState, AppState, ScanState, ScanStatus
 
 
+def make_workunit(
+    scan_id,
+    project_id,
+    technique,
+    target,
+    status=WorkUnitStatus.PENDING,
+    command_template="",
+    scope_key=None,
+    **kwargs,
+) -> WorkUnit:
+    """Create a WorkUnit with single-scope target fields."""
+    scope = scope_key or target
+    return WorkUnit(
+        scan_id=scan_id,
+        project_id=project_id,
+        technique=technique,
+        target=target,
+        scope_key=scope,
+        status=status,
+        command_template=command_template,
+        **kwargs,
+    )
+
+
 class RecordingStore:
     def __init__(self):
         self.scan_id = uuid4()
@@ -94,25 +118,23 @@ async def test_planner_updates_http_origins_and_parameterized_urls_from_complete
     store = SimpleNamespace(scan_id=uuid4())
     planner = PlannerAgent(store=store, target="https://example.com")
 
-    httpx_unit = WorkUnit(
+    httpx_unit = make_workunit(
         scan_id=store.scan_id,
         project_id=uuid4(),
         technique="httpx_primary",
-        targets_json='["https://app.example.com"]',
-        targets_hash="hash-httpx",
-        command_template="httpx ...",
+        target="https://app.example.com",
         status=WorkUnitStatus.COMPLETED,
+        command_template="httpx ...",
         result_stdout="https://app.example.com [200] [Example App]\nhttps://app.example.com/search?q=test",
         result_stderr="",
     )
-    gau_unit = WorkUnit(
+    gau_unit = make_workunit(
         scan_id=store.scan_id,
         project_id=uuid4(),
         technique="gau",
-        targets_json='["example.com"]',
-        targets_hash="hash-gau",
-        command_template="gau example.com --subs",
+        target="example.com",
         status=WorkUnitStatus.COMPLETED,
+        command_template="gau example.com --subs",
         result_stdout="https://app.example.com/api/items?id=42",
         result_stderr="",
     )
@@ -178,40 +200,40 @@ async def test_claim_work_unit_serializes_same_scope_heavy_tool_families():
     project_id = uuid4()
     store = SharedScanStore(project_id=project_id, scan_id=scan_id)
 
-    active = WorkUnit(
+    active = make_workunit(
         scan_id=scan_id,
         project_id=project_id,
         technique="nuclei_critical",
-        targets_json='["https://a.example.com"]',
-        targets_hash="scope-a",
+        target="https://a.example.com",
+        scope_key="scope-a",
         command_template="nuclei -u https://a.example.com -severity critical",
         status=WorkUnitStatus.CLAIMED,
     )
-    blocked = WorkUnit(
+    blocked = make_workunit(
         scan_id=scan_id,
         project_id=project_id,
         technique="nuclei_cves",
-        targets_json='["https://a.example.com"]',
-        targets_hash="scope-a",
+        target="https://a.example.com",
+        scope_key="scope-a",
         command_template="nuclei -u https://a.example.com -tags cve",
         status=WorkUnitStatus.PENDING,
     )
-    allowed = WorkUnit(
+    allowed = make_workunit(
         scan_id=scan_id,
         project_id=project_id,
         technique="nuclei_config",
-        targets_json='["https://b.example.com"]',
-        targets_hash="scope-b",
+        target="https://b.example.com",
+        scope_key="scope-b",
         command_template="nuclei -u https://b.example.com -tags config",
         status=WorkUnitStatus.PENDING,
     )
-    claimed_allowed = WorkUnit(
+    claimed_allowed = make_workunit(
         id=allowed.id,
         scan_id=scan_id,
         project_id=project_id,
         technique="nuclei_config",
-        targets_json='["https://b.example.com"]',
-        targets_hash="scope-b",
+        target="https://b.example.com",
+        scope_key="scope-b",
         command_template="nuclei -u https://b.example.com -tags config",
         status=WorkUnitStatus.CLAIMED,
         claimed_by="worker-1",
@@ -268,23 +290,23 @@ async def test_claim_work_unit_does_not_double_claim_same_unit():
     store = SharedScanStore(project_id=project_id, scan_id=scan_id)
     unit_id = uuid4()
 
-    pending_unit = WorkUnit(
+    pending_unit = make_workunit(
         id=unit_id,
         scan_id=scan_id,
         project_id=project_id,
         technique="subfinder",
-        targets_json='["example.com"]',
-        targets_hash="scope-example",
+        target="example.com",
+        scope_key="scope-example",
         command_template="subfinder -d example.com -silent",
         status=WorkUnitStatus.PENDING,
     )
-    claimed_unit = WorkUnit(
+    claimed_unit = make_workunit(
         id=unit_id,
         scan_id=scan_id,
         project_id=project_id,
         technique="subfinder",
-        targets_json='["example.com"]',
-        targets_hash="scope-example",
+        target="example.com",
+        scope_key="scope-example",
         command_template="subfinder -d example.com -silent",
         status=WorkUnitStatus.CLAIMED,
         claimed_by="worker-1",
@@ -399,12 +421,11 @@ async def test_analyst_persists_structured_state_from_urls_and_tech():
 
     analyst = AnalystAgent(store=RecordingStructuredStore())
     parsed = AnalystResponse(analysis="structured")
-    work_unit = WorkUnit(
+    work_unit = make_workunit(
         scan_id=uuid4(),
         project_id=uuid4(),
         technique="httpx_primary",
-        targets_json=json.dumps(["https://app.example.com"]),
-        targets_hash="hash-1",
+        target="https://app.example.com",
         command_template="httpx ...",
         status=WorkUnitStatus.COMPLETED,
         result_stdout=(
@@ -461,12 +482,11 @@ async def test_analyst_extracts_tls_names_services_and_legacy_stack_hypotheses()
 
     analyst = AnalystAgent(store=RecordingStructuredStore())
     parsed = AnalystResponse(analysis="structured")
-    work_unit = WorkUnit(
+    work_unit = make_workunit(
         scan_id=uuid4(),
         project_id=uuid4(),
         technique="nmap_initial",
-        targets_json=json.dumps(["metservice.intnet.mu"]),
-        targets_hash="hash-legacy",
+        target="metservice.intnet.mu",
         command_template="nmap ...",
         status=WorkUnitStatus.COMPLETED,
         result_stdout=(
@@ -540,12 +560,11 @@ async def test_analyst_derives_waf_followup_directives():
             directives.append(kwargs)
 
     analyst = AnalystAgent(store=DirectiveStore())
-    work_unit = WorkUnit(
+    work_unit = make_workunit(
         scan_id=uuid4(),
         project_id=uuid4(),
         technique="httpx_primary",
-        targets_json=json.dumps(["https://app.example.com"]),
-        targets_hash="hash-1",
+        target="https://app.example.com",
         command_template="httpx ...",
         status=WorkUnitStatus.COMPLETED,
     )
@@ -608,12 +627,11 @@ async def test_analyst_strips_ansi_sequences_from_discovered_urls():
 
     analyst = AnalystAgent(store=StructuredStore())
     parsed = AnalystResponse(analysis="ansi-safe")
-    work_unit = WorkUnit(
+    work_unit = make_workunit(
         scan_id=uuid4(),
         project_id=uuid4(),
         technique="httpx_primary",
-        targets_json=json.dumps(["https://priceguru.mu"]),
-        targets_hash="hash-ansi",
+        target="https://priceguru.mu",
         command_template="httpx ...",
         status=WorkUnitStatus.COMPLETED,
         result_stdout="https://priceguru.mu\x1b[0m/login [403]",
@@ -800,13 +818,13 @@ async def test_shared_store_emits_scan_events_for_work_unit_lifecycle():
 
     store.append_event = fake_append_event
 
-    unit = WorkUnit(
+    unit = make_workunit(
         id=uuid4(),
         scan_id=scan_id,
         project_id=project_id,
         technique="httpx_primary",
-        targets_json='["https://app.example.com"]',
-        targets_hash="scope-app",
+        target="https://app.example.com",
+        scope_key="scope-app",
         command_template="httpx -u https://app.example.com",
         status=WorkUnitStatus.PENDING,
     )
@@ -1063,12 +1081,11 @@ async def test_core_interface_returns_scan_projection_by_scan_id(monkeypatch):
 
 
 def test_tool_name_for_unit_prefers_last_piped_command():
-    unit = WorkUnit(
+    unit = make_workunit(
         scan_id=uuid4(),
         project_id=uuid4(),
         technique="httpx_primary",
-        targets_json='["https://example.com"]',
-        targets_hash="hash-httpx",
+        target="https://example.com",
         command_template="echo 'https://example.com' | httpx -sc -title -tech-detect -silent",
         status=WorkUnitStatus.PENDING,
     )
@@ -1077,7 +1094,7 @@ def test_tool_name_for_unit_prefers_last_piped_command():
 
 
 def test_unit_primary_target_prefers_single_scope_field():
-    unit = WorkUnit(
+    unit = make_workunit(
         scan_id=uuid4(),
         project_id=uuid4(),
         technique="httpx_primary",
@@ -1085,8 +1102,6 @@ def test_unit_primary_target_prefers_single_scope_field():
         target_kind="origin",
         tool_family="httpx",
         scope_key="https://single.example.com",
-        targets_json='["https://legacy.example.com"]',
-        targets_hash="hash-httpx",
         command_template="echo 'https://single.example.com' | httpx -sc -title -tech-detect -silent",
         status=WorkUnitStatus.PENDING,
     )
