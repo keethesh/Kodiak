@@ -273,3 +273,76 @@ All settings via environment variables or `.env`:
 - `KODIAK_MULTI_AGENT_WORKERS`: Worker pool size
 - `KODIAK_GLOBAL_CONCURRENCY`: Tool execution limit
 - `KODIAK_TOOL_TIMEOUT`: Default tool timeout
+
+## Database Schema
+
+### WorkUnit (Single-Scope)
+
+The `WorkUnit` model uses single-scope targeting:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `target` | string | Canonical single target |
+| `target_kind` | string | host, origin, url, or scope |
+| `tool_family` | string | Tool family for serialization |
+| `scope_key` | string | Used for deduplication |
+
+**Deduplication**: Unique by `(scan_id, technique, scope_key)`
+
+**Migration**: Legacy databases with `targets_json`/`targets_hash` will fail fast with explicit reset guidance. Run `kodiak migrate --reset` to recreate.
+
+## Tool Availability
+
+### Preflight Checking
+
+Before scan start, the kernel checks tool availability:
+
+1. **Docker container check** - Verify tool binaries exist
+2. **PATH fallback** - Check host system PATH
+3. **Hard-gating** - Unavailable tools block work unit creation
+
+### Configuration
+
+```bash
+# Agent model settings
+KODIAK_PLANNER_MODEL=gemini/gemini-3-flash-preview
+KODIAK_ANALYST_MODEL=gemini/gemini-3.1-pro-preview
+
+# Agent cycle settings
+KODIAK_PLANNER_CYCLE_INTERVAL=8.0
+KODIAK_ANALYST_POLL_INTERVAL=15.0
+
+# Failure handling
+KODIAK_FAILURE_THRESHOLD=3
+```
+
+## Graceful Shutdown
+
+The orchestrator supports graceful shutdown:
+
+1. Cancels all running tasks
+2. Cleans up orphaned Docker containers (by label)
+3. Logs DB operation metrics
+4. Reports task errors in `KernelResult`
+
+### Container Labeling
+
+Docker containers are labeled with `kodiak.scan` for cleanup tracking:
+```bash
+docker run --label kodiak.scan ...
+```
+
+## ScanResult Structure
+
+```python
+@dataclass
+class ScanResult:
+    status: str
+    summary: str
+    nodes_discovered: int  # Deprecated: use asset_count
+    asset_count: int      # Primary asset count
+    findings_count: int
+    duration_seconds: float
+    iterations: int
+    total_cost_usd: float
+```
