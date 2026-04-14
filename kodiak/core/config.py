@@ -64,6 +64,21 @@ class KodiakSettings(BaseSettings):
     multi_agent_workers: int = Field(default=4, alias="KODIAK_MULTI_AGENT_WORKERS")
     multi_agent_max_duration: int = Field(default=3600, alias="KODIAK_MULTI_AGENT_MAX_DURATION")
 
+    # Planner agent settings
+    planner_model: str = Field(default="gemini/gemini-3-flash-preview", alias="KODIAK_PLANNER_MODEL")
+    planner_cycle_interval: float = Field(default=8.0, alias="KODIAK_PLANNER_CYCLE_INTERVAL")
+    planner_max_cycles: int = Field(default=200, alias="KODIAK_PLANNER_MAX_CYCLES")
+
+    # Analyst agent settings
+    analyst_model: str = Field(default="gemini/gemini-3.1-pro-preview", alias="KODIAK_ANALYST_MODEL")
+    analyst_poll_interval: float = Field(default=15.0, alias="KODIAK_ANALYST_POLL_INTERVAL")
+    analyst_max_cycles: int = Field(default=100, alias="KODIAK_ANALYST_MAX_CYCLES")
+    analyst_settle_cycles: int = Field(default=2, alias="KODIAK_ANALYST_SETTLE_CYCLES")
+    analyst_min_results_per_batch: int = Field(default=1, alias="KODIAK_ANALYST_MIN_RESULTS")
+
+    # Failure handling
+    failure_threshold: int = Field(default=3, alias="KODIAK_FAILURE_THRESHOLD")
+
     # Security/runtime
     enable_safety_checks: bool = Field(default=True, alias="KODIAK_ENABLE_SAFETY")
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")
@@ -147,6 +162,21 @@ class KodiakSettings(BaseSettings):
             "temperature": self.llm_temperature,
             "max_tokens": self.llm_max_tokens,
             "thinking_level": llm.resolve_gemini_thinking_level(model, self.gemini_thinking_level),
+        }
+
+    def get_planner_model(self) -> str:
+        """Get the model for the Planner agent (typically Flash for speed)."""
+        return llm.normalize_model_name(self.planner_model)
+
+    def get_analyst_model(self) -> str:
+        """Get the model for the Analyst agent (typically Pro for depth)."""
+        return llm.normalize_model_name(self.analyst_model)
+
+    def get_agent_models(self) -> Dict[str, str]:
+        """Get both agent models normalized."""
+        return {
+            "planner": self.get_planner_model(),
+            "analyst": self.get_analyst_model(),
         }
 
     def validate_llm_config(self) -> List[str]:

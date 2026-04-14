@@ -22,6 +22,8 @@ from urllib.parse import urlparse
 from loguru import logger
 
 from kodiak.api.events import TUIEventManager
+from kodiak.core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
+from kodiak.core.config import settings
 from kodiak.core.methodology import (
     MethodologyRule,
     TriggerType,
@@ -78,7 +80,12 @@ class PlannerAgent:
         self._total_output_tokens: int = 0
         self._total_thinking_tokens: int = 0
         self._total_cached_tokens: int = 0
-        self._degraded = False
+        self._circuit_breaker = CircuitBreaker(
+            name="planner",
+            config=CircuitBreakerConfig(
+                failure_threshold=settings.failure_threshold,
+            ),
+        )
 
         if "://" in target:
             self._remember_live_http_target(target)
@@ -120,9 +127,13 @@ class PlannerAgent:
             self._cycle_count += 1
 
             try:
-                if self._degraded:
-                    await self._record_component_recovered()
-                    self._degraded = False
+                if self._circuit_breaker.is_open:
+                    logger.warning("📋 Planner: circuit breaker open, skipping cycle")
+                    await self._sleep(cycle_interval)
+                    continue
+
+                if self._circuit_breaker.state == CircuitState.HALF_OPEN:
+                    await self._record_component_recovered("Planner recovered, testing with half-open circuit")
 
                 # Consume Analyst directives
                 await self._process_directives()
@@ -174,11 +185,15 @@ class PlannerAgent:
                         )
                     except Exception:
                         pass
+
+                self._circuit_breaker.record_success()
             except Exception:
                 logger.exception("Planner cycle failed")
-                if not self._degraded:
-                    await self._record_component_degraded("Planner cycle failed")
-                    self._degraded = True
+                circuit_opened = self._circuit_breaker.record_failure()
+                if circuit_opened:
+                    await self._record_component_paused(
+                        f"Planner circuit breaker opened after {settings.failure_threshold} consecutive failures"
+                    )
                 self._idle_cycles = 0
 
             await self._sleep(cycle_interval)
@@ -190,6 +205,7 @@ class PlannerAgent:
             "techniques_completed": len(self._completed_techniques),
             "input_tokens": self._total_input_tokens,
             "output_tokens": self._total_output_tokens,
+            "circuit_breaker": self._circuit_breaker.get_stats(),
         }
 
     async def _sleep(self, seconds: float) -> None:
@@ -208,14 +224,24 @@ class PlannerAgent:
                 payload={"component": "planner", "reason": reason},
             )
 
-    async def _record_component_recovered(self) -> None:
+    async def _record_component_recovered(self, reason: str = "Planner resumed successful cycles") -> None:
         async for session in get_session():
             await self.store.append_event(
                 session,
                 event_type=ScanEventType.COMPONENT_RECOVERED,
                 entity_type="component",
                 entity_id="planner",
-                payload={"component": "planner", "reason": "Planner resumed successful cycles"},
+                payload={"component": "planner", "reason": reason},
+            )
+
+    async def _record_component_paused(self, reason: str) -> None:
+        async for session in get_session():
+            await self.store.append_event(
+                session,
+                event_type=ScanEventType.COMPONENT_PAUSED,
+                entity_type="component",
+                entity_id="planner",
+                payload={"component": "planner", "reason": reason},
             )
 
     # ------------------------------------------------------------------

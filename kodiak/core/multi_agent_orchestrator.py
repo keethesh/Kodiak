@@ -276,7 +276,10 @@ class MultiAgentOrchestrator:
 
         async def _run_planner() -> Dict[str, Any]:
             try:
-                return await planner.run(cycle_interval=8.0, max_cycles=200)
+                return await planner.run(
+                    cycle_interval=settings.planner_cycle_interval,
+                    max_cycles=settings.planner_max_cycles,
+                )
             finally:
                 planner_done.set()
 
@@ -288,9 +291,11 @@ class MultiAgentOrchestrator:
 
         analyst_task = asyncio.create_task(
             analyst.run(
-                poll_interval=15.0,
-                max_cycles=100,
+                poll_interval=settings.analyst_poll_interval,
+                max_cycles=settings.analyst_max_cycles,
                 planner_done_event=planner_done,
+                settle_cycles=settings.analyst_settle_cycles,
+                min_results_per_batch=settings.analyst_min_results_per_batch,
             ),
             name="analyst",
         )
@@ -396,12 +401,14 @@ class MultiAgentOrchestrator:
         analyst_thinking = analyst_result.thinking_tokens if analyst_result else 0
 
         from kodiak.services.llm import calculate_cost
+        planner_model = settings.get_planner_model()
+        analyst_model = settings.get_analyst_model()
         total_cost = calculate_cost(
-            model="gemini/gemini-3-flash-preview",
+            model=planner_model,
             input_tokens=planner_input,
             output_tokens=planner_output,
         ) + calculate_cost(
-            model="gemini/gemini-3.1-pro-preview",
+            model=analyst_model,
             input_tokens=analyst_input,
             output_tokens=analyst_output,
             thinking_tokens=analyst_thinking,

@@ -115,6 +115,7 @@ class ScanEventType(StrEnum):
     ATTEMPT_RECORDED = "attempt_recorded"
     COMPONENT_DEGRADED = "component_degraded"
     COMPONENT_RECOVERED = "component_recovered"
+    COMPONENT_PAUSED = "component_paused"
 
 
 def utc_now():

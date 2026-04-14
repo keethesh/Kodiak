@@ -22,6 +22,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from kodiak.api.events import TUIEventManager
+from kodiak.core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 from kodiak.core.config import settings
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.engine import get_session
@@ -127,7 +128,12 @@ class AnalystAgent:
         self._total_cached_tokens = 0
         self._cycle_count = 0
         self._stop_requested = False
-        self._degraded = False
+        self._circuit_breaker = CircuitBreaker(
+            name="analyst",
+            config=CircuitBreakerConfig(
+                failure_threshold=settings.failure_threshold,
+            ),
+        )
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -191,16 +197,24 @@ class AnalystAgent:
             # Process batch. Keep the Analyst alive if one batch hits an
             # unexpected persistence/parsing edge case.
             try:
-                if self._degraded:
-                    await self._record_component_recovered()
-                    self._degraded = False
+                if self._circuit_breaker.is_open:
+                    logger.warning("🧠 Analyst: circuit breaker open, skipping cycle")
+                    await self._sleep(poll_interval)
+                    continue
+
+                if self._circuit_breaker.state == CircuitState.HALF_OPEN:
+                    await self._record_component_recovered("Analyst recovered, testing with half-open circuit")
+
                 result = await self._analyze_batch(unanalyzed)
+                self._circuit_breaker.record_success()
             except Exception:
                 self._cycle_count += 1
                 logger.exception("Analyst batch processing failed")
-                if not self._degraded:
-                    await self._record_component_degraded("Analyst batch processing failed")
-                    self._degraded = True
+                circuit_opened = self._circuit_breaker.record_failure()
+                if circuit_opened:
+                    await self._record_component_paused(
+                        f"Analyst circuit breaker opened after {settings.failure_threshold} consecutive failures"
+                    )
                 idle_cycles = 0
                 await self._sleep(poll_interval)
                 continue
@@ -247,14 +261,24 @@ class AnalystAgent:
                 payload={"component": "analyst", "reason": reason},
             )
 
-    async def _record_component_recovered(self) -> None:
+    async def _record_component_recovered(self, reason: str = "Analyst resumed successful batch processing") -> None:
         async for session in get_session():
             await self.store.append_event(
                 session,
                 event_type=ScanEventType.COMPONENT_RECOVERED,
                 entity_type="component",
                 entity_id="analyst",
-                payload={"component": "analyst", "reason": "Analyst resumed successful batch processing"},
+                payload={"component": "analyst", "reason": reason},
+            )
+
+    async def _record_component_paused(self, reason: str) -> None:
+        async for session in get_session():
+            await self.store.append_event(
+                session,
+                event_type=ScanEventType.COMPONENT_PAUSED,
+                entity_type="component",
+                entity_id="analyst",
+                payload={"component": "analyst", "reason": reason},
             )
 
     # ------------------------------------------------------------------
@@ -295,7 +319,7 @@ class AnalystAgent:
 
         # Call LLM
         try:
-            model = llm.normalize_model_name(settings.llm_model)
+            model = settings.get_analyst_model()
             thinking_level = llm.resolve_gemini_thinking_level(
                 model, settings.gemini_thinking_level
             )
