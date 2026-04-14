@@ -67,7 +67,6 @@ class KodiakSettings(BaseSettings):
     # Security/runtime
     enable_safety_checks: bool = Field(default=True, alias="KODIAK_ENABLE_SAFETY")
     max_concurrent_agents: int = Field(default=5, alias="KODIAK_MAX_AGENTS")
-    default_agent_count: int = Field(default=3, alias="KODIAK_DEFAULT_AGENTS")
     tool_timeout: int = Field(default=300, alias="KODIAK_TOOL_TIMEOUT")
     global_tool_concurrency: int = Field(default=6, alias="KODIAK_GLOBAL_CONCURRENCY")
     heavy_tool_parallel_limit: int = Field(default=2, alias="KODIAK_HEAVY_TOOL_PARALLEL_LIMIT")
@@ -222,12 +221,7 @@ def validate_startup_config() -> None:
     logger.info(f"🗄️  Database: {'SQLite' if settings.is_sqlite else 'PostgreSQL'} - {settings.database_url}")
     logger.info(f"🐛 Debug Mode: {settings.debug}")
     logger.info(f"🛡️  Safety Checks: {settings.enable_safety_checks}")
-    logger.info(f"🐝 Hive Mind: {settings.enable_hive_mind}")
+    logger.info(f"🤖 Runtime: multi-agent kernel ({settings.multi_agent_workers} workers)")
     logger.info(f"⚙️  Tool Timeout: {settings.tool_timeout}s")
-    logger.info(
-        f"📡 Event Scheduler: {'enabled' if settings.event_scheduler_enabled else 'disabled'} "
-        f"(heartbeat={settings.event_scheduler_heartbeat_seconds}s, "
-        f"cooldown={settings.event_scheduler_replan_cooldown_seconds}s)"
-    )
-    logger.info(f"🧠 Insight Memory: {'enabled' if settings.memory_enabled else 'disabled'}")
-    logger.info(f"👥 Max Agents: {settings.max_concurrent_agents}")
+    logger.info(f"🔧 Global Tool Concurrency: {settings.global_tool_concurrency}")
+    logger.info(f"🧰 Heavy Tool Parallel Limit: {settings.heavy_tool_parallel_limit}")
