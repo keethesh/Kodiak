@@ -56,10 +56,12 @@ class PlannerAgent:
         self,
         store: SharedScanStore,
         target: str,
+        instructions: str = "",
         event_manager: Optional[TUIEventManager] = None,
     ):
         self.store = store
         self.target = target
+        self._instructions = (instructions or "").strip()
         self.event_manager = event_manager
 
         # Track state for rule triggering
@@ -312,7 +314,6 @@ class PlannerAgent:
         """Convert an Analyst attack_hint into work units."""
         technique = content.get("technique", "analyst_hint")
         targets = content.get("targets", [])
-        context = content.get("context", "")
 
         if not targets:
             targets = list(self._live_http_hosts - self._skip_targets)
@@ -326,10 +327,13 @@ class PlannerAgent:
         async for session in get_session():
             for spec in work_specs:
                 resolved_target = spec["target"]
-                command = spec["command"].format(
-                    target=resolved_target,
-                    domain=self._extract_domain(resolved_target),
-                )
+                try:
+                    safe_target = self._sanitize_template_value(resolved_target, "attack_hint target")
+                    safe_domain = self._sanitize_template_value(self._extract_domain(resolved_target), "attack_hint domain")
+                except ValueError as exc:
+                    logger.warning(f"Planner skipped unsafe attack_hint target '{resolved_target}': {exc}")
+                    continue
+                command = spec["command"].format(target=safe_target, domain=safe_domain)
                 await self.store.enqueue_work_unit(
                     session,
                     technique=spec["technique"],
@@ -391,7 +395,7 @@ class PlannerAgent:
                         "technique": f"hint_{technique}",
                         "target": self._canonical_hint_target(target),
                         "command": command,
-                        "context": context,
+                        "context": self._compose_context(context),
                         "priority": 15,
                         "phase": self._current_phase,
                     }
@@ -412,7 +416,7 @@ class PlannerAgent:
                 "technique": "hint_waf_detection_followup",
                 "target": resolved_target,
                 "command": "wafw00f {target} -a",
-                "context": context,
+                "context": self._compose_context(context),
                 "priority": 15,
                 "phase": self._current_phase,
             }
@@ -423,7 +427,7 @@ class PlannerAgent:
                 "technique": "hint_browser_like_probe_followup",
                 "target": resolved_target,
                 "command": "curl -skL -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36' {target} | head -200",
-                "context": context,
+                "context": self._compose_context(context),
                 "priority": 15,
                 "phase": self._current_phase,
             }
@@ -437,17 +441,22 @@ class PlannerAgent:
             self._canonical_hint_target(target),
             self._extract_domain(target),
         )
+        try:
+            safe_target = self._sanitize_template_value(normalized_target, "hint target")
+            safe_domain = self._sanitize_template_value(self._extract_domain(normalized_target), "hint domain")
+        except ValueError:
+            return None
         return {
             "technique": f"hint_{technique}",
             "target": normalized_target,
             "command": self._apply_rate_limit(rule.command_template.format(
-                target=normalized_target,
-                domain=self._extract_domain(normalized_target),
+                target=safe_target,
+                domain=safe_domain,
             ), rule) if self._rate_limit else rule.command_template.format(
-                target=normalized_target,
-                domain=self._extract_domain(normalized_target),
+                target=safe_target,
+                domain=safe_domain,
             ),
-            "context": context,
+            "context": self._compose_context(context),
             "priority": min(rule.priority, 15),
             "phase": rule.phase or self._current_phase,
         }
@@ -459,6 +468,9 @@ class PlannerAgent:
 
         if not target or not action:
             return
+        if any(ch in action for ch in ("\x00", "\n", "\r")):
+            logger.warning("Planner rejected unsafe escalation action containing control characters")
+            return
 
         async for session in get_session():
             await self.store.enqueue_work_unit(
@@ -466,7 +478,7 @@ class PlannerAgent:
                 technique=f"escalate_{target[:20]}",
                 targets=[target],
                 command_template=action,
-                context=f"URGENT: {content.get('finding', '')}",
+                context=self._compose_context(f"URGENT: {content.get('finding', '')}"),
                 priority=5,  # Highest priority
                 phase="exploitation",
             )
@@ -679,7 +691,7 @@ class PlannerAgent:
                 "technique": "hypothesis_sqlmap_followup",
                 "target": target,
                 "command": f"sqlmap -u '{target}' --batch --random-agent --level 2 --risk 2 --threads 3",
-                "context": hypothesis.rationale,
+                "context": self._compose_context(hypothesis.rationale),
                 "priority": 18,
                 "phase": "vuln_scan",
             }
@@ -689,7 +701,7 @@ class PlannerAgent:
                 "technique": "hypothesis_auth_panel_followup",
                 "target": target,
                 "command": f"nuclei -u {target} -tags default-login,auth-bypass,exposed-panels -rl 10 -silent",
-                "context": hypothesis.rationale,
+                "context": self._compose_context(hypothesis.rationale),
                 "priority": 16,
                 "phase": "vuln_scan",
             }
@@ -699,7 +711,7 @@ class PlannerAgent:
                 "technique": "hypothesis_admin_surface_followup",
                 "target": target,
                 "command": f"nuclei -u {target} -tags exposed-panels,default-login,auth-bypass -rl 10 -silent",
-                "context": hypothesis.rationale,
+                "context": self._compose_context(hypothesis.rationale),
                 "priority": 14,
                 "phase": "vuln_scan",
             }
@@ -709,7 +721,7 @@ class PlannerAgent:
                 "technique": "hypothesis_api_surface_followup",
                 "target": target,
                 "command": f"nuclei -u {target} -tags api,swagger,graphql,cors -rl 10 -silent",
-                "context": hypothesis.rationale,
+                "context": self._compose_context(hypothesis.rationale),
                 "priority": 17,
                 "phase": "vuln_scan",
             }
@@ -721,7 +733,7 @@ class PlannerAgent:
                     "technique": "hypothesis_wordpress_followup",
                     "target": self._canonical_hint_target(target),
                     "command": f"wpscan --url {self._canonical_hint_target(target)} --enumerate vp,vt,u --random-user-agent --throttle 500",
-                    "context": hypothesis.rationale,
+                    "context": self._compose_context(hypothesis.rationale),
                     "priority": 20,
                     "phase": "enumeration",
                 }
@@ -731,7 +743,7 @@ class PlannerAgent:
                     "technique": f"hypothesis_{tech}_followup",
                     "target": web_target,
                     "command": f"nuclei -u {web_target} -tags cve,{tech} -rl 10 -silent",
-                    "context": hypothesis.rationale,
+                    "context": self._compose_context(hypothesis.rationale),
                     "priority": 19,
                     "phase": "vuln_scan",
                 }
@@ -744,7 +756,7 @@ class PlannerAgent:
                 "technique": "hypothesis_hidden_host_followup",
                 "target": host,
                 "command": f"nmap -sV -sC -T3 -p 80,443,8080,8443 {host}",
-                "context": hypothesis.rationale,
+                "context": self._compose_context(hypothesis.rationale),
                 "priority": 12,
                 "phase": "recon",
             }
@@ -755,7 +767,7 @@ class PlannerAgent:
                 "technique": "hypothesis_legacy_stack_rce_followup",
                 "target": web_target,
                 "command": f"nuclei -u {web_target} -tags cve,shellshock,apache,php -rl 10 -silent",
-                "context": hypothesis.rationale,
+                "context": self._compose_context(hypothesis.rationale),
                 "priority": 13,
                 "phase": "vuln_scan",
             }
@@ -820,7 +832,13 @@ class PlannerAgent:
         count = 0
         for target in self._dedupe_preserve_order(targets)[:rule.max_targets]:
             normalized_target = self._normalize_target_for_rule(rule, target, domain)
-            cmd = rule.command_template.format(target=normalized_target, domain=domain)
+            try:
+                safe_target = self._sanitize_template_value(normalized_target, "target")
+                safe_domain = self._sanitize_template_value(domain, "domain")
+            except ValueError as exc:
+                logger.warning(f"Planner skipped unsafe target '{normalized_target}' for rule '{rule.technique}': {exc}")
+                continue
+            cmd = rule.command_template.format(target=safe_target, domain=safe_domain)
             if self._rate_limit:
                 cmd = self._apply_rate_limit(cmd, rule)
 
@@ -829,6 +847,7 @@ class PlannerAgent:
                 technique=rule.technique,
                 targets=[normalized_target],
                 command_template=cmd,
+                context=self._compose_context(rule.description),
                 priority=rule.priority,
                 phase=rule.phase,
             )
@@ -953,3 +972,24 @@ class PlannerAgent:
             seen.add(value)
             result.append(value)
         return result
+
+    def _compose_context(self, base_context: str = "") -> str:
+        base = (base_context or "").strip()
+        instruction = self._instruction_context()
+        if base and instruction:
+            return f"{base} | {instruction}"
+        return base or instruction
+
+    def _instruction_context(self) -> str:
+        if not self._instructions:
+            return ""
+        excerpt = self._instructions[:300]
+        return f"operator_instructions: {excerpt}"
+
+    @staticmethod
+    def _sanitize_template_value(value: str, field_name: str) -> str:
+        sanitized = str(value or "").strip()
+        forbidden_tokens = ("`", "$(", "${", ";", "&&", "||", "<", ">", "\n", "\r", "\x00")
+        if any(token in sanitized for token in forbidden_tokens):
+            raise ValueError(f"unsafe characters in {field_name}")
+        return sanitized

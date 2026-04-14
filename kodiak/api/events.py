@@ -5,14 +5,13 @@ Provides event broadcasting and management for the TUI interface.
 Adapted from the original WebSocket-based event system.
 """
 
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Callable
 import asyncio
-import json
 import time
 from loguru import logger
 
 from kodiak.core.error_handling import (
-    ErrorHandler, EventBroadcastingError, handle_errors, ErrorCategory
+    EventBroadcastingError, handle_errors, ErrorCategory
 )
 
 
@@ -82,6 +81,69 @@ class TUIEventManager:
         if not scan_id or not self.tui_bridge or not hasattr(self.tui_bridge, "send_finding_update"):
             return
         await self.tui_bridge.send_finding_update(scan_id=scan_id, finding=finding)
+
+    @staticmethod
+    def _normalize_tool_result(result: Any) -> Dict[str, Any]:
+        """Normalize different tool result shapes into one payload."""
+        if hasattr(result, "success"):
+            success = bool(getattr(result, "success"))
+            status = "completed" if success else "failed"
+            output = getattr(result, "output", None)
+            error = getattr(result, "error", None)
+            data = dict(getattr(result, "data", {}) or {})
+            exit_code = getattr(result, "exit_code", None)
+            timed_out = bool(getattr(result, "timed_out", False))
+            if output is None and hasattr(result, "stdout"):
+                output = getattr(result, "stdout", None)
+            if error is None and hasattr(result, "stderr"):
+                error = getattr(result, "stderr", None)
+            if exit_code is not None:
+                data.setdefault("exit_code", exit_code)
+            if timed_out:
+                data.setdefault("timed_out", timed_out)
+                status = "timeout"
+                success = False
+            return {
+                "success": success,
+                "status": status,
+                "output": output,
+                "error": error,
+                "data": data,
+            }
+
+        exit_code = getattr(result, "exit_code", None)
+        timed_out = bool(getattr(result, "timed_out", False))
+        stdout = getattr(result, "stdout", None)
+        stderr = getattr(result, "stderr", None)
+
+        if timed_out:
+            return {
+                "success": False,
+                "status": "timeout",
+                "output": stdout,
+                "error": stderr or "Command timed out",
+                "data": {
+                    "exit_code": exit_code,
+                    "timed_out": True,
+                    "duration_seconds": getattr(result, "duration_seconds", None),
+                },
+            }
+
+        success = bool(exit_code == 0)
+        error = stderr if not success else None
+        if not error and not success and exit_code is not None:
+            error = f"Command exited with code {exit_code}"
+        return {
+            "success": success,
+            "status": "completed" if success else "failed",
+            "output": stdout,
+            "error": error,
+            "data": {
+                "exit_code": exit_code,
+                "timed_out": timed_out,
+                "duration_seconds": getattr(result, "duration_seconds", None),
+            },
+        }
     
     def subscribe(self, event_type: str, handler: Callable):
         """Subscribe to global events"""
@@ -201,20 +263,21 @@ class TUIEventManager:
     async def emit_tool_complete(self, tool_name: str, result, scan_id: str = None):
         """Broadcast tool execution completion"""
         try:
-            status = "completed" if result.success else "failed"
-            
-            if not result.success and hasattr(result, 'error') and result.error:
-                logger.error(f"Tool {tool_name} failed: {result.error}")
+            normalized = self._normalize_tool_result(result)
+            status = normalized["status"]
+             
+            if not normalized["success"] and normalized["error"]:
+                logger.error(f"Tool {tool_name} failed: {normalized['error']}")
             else:
                 logger.info(f"Tool {tool_name} {status}")
-            
+             
             event = TUIEvent("tool_complete", {
                 "tool_name": tool_name,
                 "status": status,
-                "success": result.success,
-                "output": result.output if hasattr(result, 'output') else None,
-                "error": result.error if hasattr(result, 'error') else None,
-                "data": result.data if hasattr(result, 'data') else None
+                "success": normalized["success"],
+                "output": normalized["output"],
+                "error": normalized["error"],
+                "data": normalized["data"],
             })
             
             await self._send_bridge_tool_update(
@@ -222,10 +285,10 @@ class TUIEventManager:
                 tool_name,
                 status,
                 {
-                    "success": getattr(result, "success", None),
-                    "output": getattr(result, "output", None),
-                    "error": getattr(result, "error", None),
-                    "data": getattr(result, "data", None),
+                    "success": normalized["success"],
+                    "output": normalized["output"],
+                    "error": normalized["error"],
+                    "data": normalized["data"],
                 },
             )
             await self.emit(event, scan_id)
@@ -236,7 +299,7 @@ class TUIEventManager:
                 event_type="tool_complete",
                 details={
                     "tool_name": tool_name,
-                    "result_success": getattr(result, 'success', None),
+                    "result_success": normalized["success"] if 'normalized' in locals() else None,
                     "scan_id": scan_id,
                     "original_error": str(e)
                 }

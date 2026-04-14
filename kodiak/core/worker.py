@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, List, Optional
 from uuid import uuid4
 
 from loguru import logger
 
 from kodiak.api.events import TUIEventManager
+
+if TYPE_CHECKING:
+    from kodiak.services.executor import DockerExecutor
 
 
 # ---------------------------------------------------------------------------
@@ -30,6 +33,7 @@ class CommandTask:
     timeout: int = 600
     task_id: str = field(default_factory=lambda: uuid4().hex[:12])
     stdin: Optional[str] = None
+    container_label: Optional[str] = None
 
 
 @dataclass
@@ -115,9 +119,13 @@ async def execute_command(
             "docker", "run", "--rm",
             "--memory", settings.docker_memory_limit,
             "--cpus", str(settings.docker_cpu_limit),
+            "--network", "bridge",
+            "--security-opt", "no-new-privileges",
             "-v", f"{work_dir}:/workspace",
             "-w", "/workspace",
         ]
+        if task.container_label:
+            docker_cmd.extend(["--label", f"kodiak.scan={task.container_label}"])
         if task.stdin is not None:
             docker_cmd.append("-i")
         docker_cmd.extend([

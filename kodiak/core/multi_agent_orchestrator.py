@@ -27,7 +27,7 @@ from kodiak.core.config import settings
 from kodiak.core.kernel_result import KernelResult
 from kodiak.core.planner import PlannerAgent
 from kodiak.core.shared_store import SharedScanStore
-from kodiak.core.worker import CommandResult, CommandTask, execute_command
+from kodiak.core.worker import CommandTask, execute_command
 from kodiak.database.engine import get_session
 from kodiak.database.models import WorkUnit, WorkUnitStatus
 
@@ -75,6 +75,7 @@ async def _worker_loop(
     event_manager: Optional[TUIEventManager] = None,
     idle_timeout: float = 30.0,
     scan_id_str: str = "",
+    container_label: str = "",
 ) -> Dict[str, Any]:
     """
     A single worker loop:
@@ -147,6 +148,7 @@ async def _worker_loop(
             command=command,
             rationale=unit.context or unit.technique,
             timeout=timeout,
+            container_label=container_label or "",
         )
 
         async for session in get_session():
@@ -201,7 +203,15 @@ async def _worker_loop(
                 },
             )
 
-        # Note: emit_tool_complete expects a different result shape; skip it here.
+        if event_manager:
+            try:
+                await event_manager.emit_tool_complete(
+                    tool_name=tool_name,
+                    result=result,
+                    scan_id=scan_id_str,
+                )
+            except Exception:
+                pass
 
     return stats
 
@@ -235,7 +245,7 @@ class MultiAgentOrchestrator:
         self.worker_idle_timeout = worker_idle_timeout
         self.max_scan_duration = max_scan_duration
         self._running = False
-        self._container_label = f"kodiak-scan"
+        self._container_label = "kodiak-scan"
 
     async def shutdown(self) -> None:
         """
@@ -333,11 +343,13 @@ class MultiAgentOrchestrator:
         planner = PlannerAgent(
             store=store,
             target=target,
+            instructions=instructions,
             event_manager=self.event_manager,
         )
 
         analyst = AnalystAgent(
             store=store,
+            instructions=instructions,
             event_manager=self.event_manager,
         )
 
@@ -382,6 +394,7 @@ class MultiAgentOrchestrator:
                     event_manager=self.event_manager,
                     idle_timeout=self.worker_idle_timeout,
                     scan_id_str=scan_id_str,
+                    container_label=self._container_label,
                 ),
                 name=f"worker-{i}",
             )
@@ -397,11 +410,21 @@ class MultiAgentOrchestrator:
         all_tasks = [planner_task, analyst_task] + worker_tasks
 
         status = "completed"
+        task_errors: Dict[str, str] = {}
         try:
-            await asyncio.wait_for(
+            gathered = await asyncio.wait_for(
                 asyncio.gather(*all_tasks, return_exceptions=True),
                 timeout=self.max_scan_duration,
             )
+            for task, outcome in zip(all_tasks, gathered):
+                if isinstance(outcome, Exception) and not isinstance(outcome, asyncio.CancelledError):
+                    task_errors[task.get_name()] = repr(outcome)
+            if task_errors:
+                status = "failed"
+                logger.error(
+                    "Multi-agent pipeline task failures detected: "
+                    + ", ".join(f"{name}={err}" for name, err in task_errors.items())
+                )
         except asyncio.TimeoutError:
             status = "max_duration"
             logger.warning("⏱️ Multi-agent pipeline hit max_scan_duration; cancelling remaining tasks")
@@ -458,12 +481,14 @@ class MultiAgentOrchestrator:
         analyst_cycles = analyst._cycle_count
 
         summary = (
-            f"Multi-agent scan completed in {elapsed:.0f}s. "
+            f"Multi-agent scan {status} in {elapsed:.0f}s. "
             f"Planner: {planner_stats.get('cycles', 0)} cycles, "
             f"Workers: {total_executed} commands ({total_failed} failed), "
             f"Analyst: {analyst_cycles} cycles, "
             f"Findings: {findings_count}"
         )
+        if task_errors:
+            summary += f". Runtime task failures: {len(task_errors)}"
 
         logger.info(f"✅ {summary}")
 

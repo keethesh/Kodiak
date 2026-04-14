@@ -12,10 +12,11 @@ Uses the powerful model (Gemini Pro) with high thinking for thorough analysis.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -27,10 +28,10 @@ from kodiak.core.config import settings
 from kodiak.core.shared_store import SharedScanStore
 from kodiak.database.engine import get_session
 from kodiak.database.models import (
+    Capability,
     CapabilityType,
     DirectiveType,
     FindingSeverity,
-    HypothesisStatus,
     HypothesisType,
     NoteCategory,
     ObservationType,
@@ -117,9 +118,11 @@ class AnalystAgent:
     def __init__(
         self,
         store: SharedScanStore,
+        instructions: str = "",
         event_manager: Optional[TUIEventManager] = None,
     ):
         self.store = store
+        self._instructions = (instructions or "").strip()
         self.event_manager = event_manager
         self._gemini = GeminiClient()
         self._total_input_tokens = 0
@@ -312,9 +315,11 @@ class AnalystAgent:
         async for session in get_session():
             state_summary = await self.store.build_state_summary(session)
 
+        instruction_context = self._instruction_context_block()
+        user_segments = [segment for segment in [instruction_context, state_summary, user_content] if segment]
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{state_summary}\n\n{user_content}"},
+            {"role": "user", "content": "\n\n".join(user_segments)},
         ]
 
         # Call LLM
@@ -1023,6 +1028,17 @@ class AnalystAgent:
             "Set phase_recommendation to 'advance' when the current phase's goals are met.",
             "Set phase_recommendation to 'complete' only when ALL phases are exhausted.",
             "</output_format>",
+        ])
+
+    def _instruction_context_block(self) -> str:
+        if not self._instructions:
+            return ""
+        excerpt = self._instructions[:600]
+        return "\n".join([
+            "<operator_instructions>",
+            excerpt,
+            "Treat these instructions as scan-level policy constraints unless they conflict with legality/safety.",
+            "</operator_instructions>",
         ])
 
     def _build_results_prompt(self, work_units: List[WorkUnit]) -> str:
