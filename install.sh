@@ -589,7 +589,24 @@ install_from_source() {
     # Checkout specific branch/version if specified
     if [[ "$KODIAK_VERSION" != "latest" ]]; then
         print_status "Checking out version $KODIAK_VERSION..."
-        run_cmd_allow_fail "Checking out version $KODIAK_VERSION" git checkout "$KODIAK_VERSION"
+        
+        # Fetch the branch/tag first to ensure we have it
+        run_cmd_allow_fail "Fetching $KODIAK_VERSION" git fetch origin "$KODIAK_VERSION" 2>/dev/null || true
+        
+        # Check if it's a branch (contains /) or a tag
+        if [[ "$KODIAK_VERSION" == *"="* ]] || [[ "$KODIAK_VERSION" == *"/"* ]]; then
+            # It's a branch - use --track to set up remote tracking
+            if git rev-parse --verify --quiet "origin/$KODIAK_VERSION" >/dev/null 2>&1; then
+                run_cmd_allow_fail "Checking out branch $KODIAK_VERSION" git checkout -b "$KODIAK_VERSION" "origin/$KODIAK_VERSION"
+            else
+                # Fallback: just try to checkout
+                run_cmd_allow_fail "Checking out $KODIAK_VERSION" git checkout "$KODIAK_VERSION" 2>/dev/null || true
+            fi
+        else
+            # It's a tag/version
+            run_cmd_allow_fail "Checking out $KODIAK_VERSION" git checkout "$KODIAK_VERSION"
+        fi
+        
         if [[ "$DRY_RUN" != "true" ]] && ! git rev-parse --verify --quiet "$KODIAK_VERSION" >/dev/null 2>&1; then
             print_warning "Version $KODIAK_VERSION not found"
         fi
@@ -650,7 +667,9 @@ install_from_source() {
         cd "$source_dir"
 
         if [[ "$KODIAK_VERSION" != "latest" ]]; then
-            run_cmd_allow_fail "Checking out version $KODIAK_VERSION after re-clone" git checkout "$KODIAK_VERSION"
+            # Fetch and checkout branch properly
+            run_cmd_allow_fail "Fetching $KODIAK_VERSION" git fetch origin "$KODIAK_VERSION" 2>/dev/null || true
+            run_cmd_allow_fail "Checking out $KODIAK_VERSION after re-clone" git checkout "$KODIAK_VERSION" 2>/dev/null || git checkout -b "$KODIAK_VERSION" "origin/$KODIAK_VERSION" 2>/dev/null || true
         elif git show-ref --verify --quiet refs/remotes/origin/main; then
             run_cmd_allow_fail "Checking out main after re-clone" git checkout main
         fi
