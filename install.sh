@@ -16,6 +16,7 @@ DRY_RUN="${DRY_RUN:-false}"
 VERBOSE="${VERBOSE:-false}"
 INSTALL_LOG="${INSTALL_LOG:-/tmp/kodiak-install.log}"
 TOOLBOX_IMAGE="ghcr.io/keethesh/kodiak-toolbox:latest"
+TOOLBOX_DIR="${TOOLBOX_DIR:-}"
 INSTALL_STATE_FILE="$INSTALL_DIR/install-state.env"
 
 # Colors and text effects
@@ -170,6 +171,7 @@ show_help() {
     print_item "--force, -f        Force reinstall even if already installed"
     print_item "--update, -u       Update Kodiak via git pull or PyPI upgrade"
     print_item "--skip-docker      Skip building the Kodiak toolbox Docker image"
+    print_item "--toolbox-dir DIR  Directory containing Dockerfile for local toolbox build"
     print_item "--reset-db         Reset database after installation"
     print_item "--dry-run          Print planned actions without executing them"
     print_item "--verbose, -v      Show full command output (default is concise)"
@@ -860,12 +862,15 @@ setup_docker() {
                 image_exists=true
             fi
             
+            local image_installed=false
+            
             if [[ "$image_exists" == "false" ]] || [[ "$FORCE_INSTALL" == "true" ]]; then
                 local pulled=false
                 print_status "Attempting to pull pre-built Kodiak toolbox image from GHCR..."
                 if run_cmd "Pulling pre-built toolbox image" docker pull "$TOOLBOX_IMAGE"; then
                     print_success "Kodiak toolbox Docker image pulled successfully from GHCR"
                     pulled=true
+                    image_installed=true
                 else
                     print_warning "Could not pull pre-built image from GHCR. Falling back to local build..."
                 fi
@@ -873,20 +878,34 @@ setup_docker() {
                 if [[ "$pulled" == "false" ]]; then
                     print_status "Building Kodiak toolbox Docker image locally (this may take a while)..."
                     
-                    # Check if we are in the source directory (either from git clone or manual download)
+                    # Determine Dockerfile location: explicit --toolbox-dir, source directory, or INSTALL_DIR/source
                     local dockerfile_path=""
                     local build_context=""
-                    if [[ -f "containers/Dockerfile" ]]; then
-                        dockerfile_path="containers/Dockerfile"
-                        build_context="containers"
-                    elif [[ -f "$INSTALL_DIR/source/containers/Dockerfile" ]]; then
-                        dockerfile_path="$INSTALL_DIR/source/containers/Dockerfile"
-                        build_context="$INSTALL_DIR/source/containers"
+                    
+                    if [[ -n "$TOOLBOX_DIR" ]]; then
+                        if [[ -f "$TOOLBOX_DIR/Dockerfile" ]]; then
+                            dockerfile_path="$TOOLBOX_DIR/Dockerfile"
+                            build_context="$TOOLBOX_DIR"
+                            print_status "Using toolbox directory: $TOOLBOX_DIR"
+                        else
+                            print_error "Dockerfile not found in specified toolbox directory: $TOOLBOX_DIR"
+                        fi
+                    fi
+                    
+                    if [[ -z "$dockerfile_path" ]]; then
+                        if [[ -f "containers/Dockerfile" ]]; then
+                            dockerfile_path="containers/Dockerfile"
+                            build_context="containers"
+                        elif [[ -f "$INSTALL_DIR/source/containers/Dockerfile" ]]; then
+                            dockerfile_path="$INSTALL_DIR/source/containers/Dockerfile"
+                            build_context="$INSTALL_DIR/source/containers"
+                        fi
                     fi
                     
                     if [[ -n "$dockerfile_path" ]]; then
                         if run_cmd "Building toolbox image locally" docker build -t "$TOOLBOX_IMAGE" -f "$dockerfile_path" "$build_context"; then
                             print_success "Kodiak toolbox Docker image built successfully"
+                            image_installed=true
                         else
                             print_warning "Failed to build Docker image locally"
                             print_status "You can build it later by running: docker build -t $TOOLBOX_IMAGE -f containers/Dockerfile containers/"
@@ -899,13 +918,18 @@ setup_docker() {
             else
                 print_success "Kodiak toolbox image already exists locally. Skipping build."
                 print_status "Use --force to rebuild the image."
+                image_installed=true
             fi
 
-            # Validate critical tools expected by the agent loop.
-            if ! verify_toolbox_tools "$TOOLBOX_IMAGE"; then
-                print_error "Toolbox image is missing required tools (nmap/nuclei/subfinder/httpx/katana/ffuf/whatweb/sqlmap/wpscan/commix/searchsploit)."
-                print_status "Rebuild with: docker build -t $TOOLBOX_IMAGE -f containers/Dockerfile containers/"
-                return 1
+            # Only validate tools if the image was successfully installed
+            if [[ "$image_installed" == "true" ]]; then
+                if ! verify_toolbox_tools "$TOOLBOX_IMAGE"; then
+                    print_error "Toolbox image is missing required tools (nmap/nuclei/subfinder/httpx/katana/ffuf/whatweb/sqlmap/wpscan/commix/searchsploit)."
+                    print_status "Rebuild with: docker build -t $TOOLBOX_IMAGE -f containers/Dockerfile containers/"
+                    return 1
+                fi
+            else
+                print_warning "Skipping tool validation - toolbox image not installed."
             fi
         else
             print_warning "Docker is installed but the daemon is not running."
@@ -1020,6 +1044,15 @@ handle_arguments() {
             --skip-docker)
                 SKIP_DOCKER=true
                 shift
+                ;;
+            --toolbox-dir)
+                if [[ -n "${2:-}" ]]; then
+                    TOOLBOX_DIR="$2"
+                    shift 2
+                else
+                    print_error "--toolbox-dir requires a directory path"
+                    exit 1
+                fi
                 ;;
             --reset-db)
                 RESET_DB=true
