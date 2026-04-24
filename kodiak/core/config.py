@@ -19,11 +19,11 @@ ERROR_MESSAGES = {
         "Supported: anthropic/claude-3.5-sonnet, openai/gpt-4o, etc. (via OpenRouter)"
     ),
     "missing_api_key": "KODIAK_OPENROUTER_API_KEY is required for OpenRouter.",
-    "invalid_provider": "KODIAK_LLM_PROVIDER must be 'openrouter' or 'gemini'.",
+    "invalid_provider": "KODIAK_LLM_PROVIDER must be omitted or set to 'openrouter'.",
 }
 
 
-SUPPORTED_PROVIDERS = ["openrouter", "gemini"]
+SUPPORTED_PROVIDERS = ["openrouter"]
 
 SUPPORTED_MODELS = {
     "openrouter": [
@@ -34,10 +34,6 @@ SUPPORTED_MODELS = {
         "x-ai/grok-2",
         "meta-llama/llama-3.1-70b-instruct",
         "google/gemini-2.0-flash-exp",
-    ],
-    "gemini": [
-        "gemini/gemini-3.1-pro-preview",
-        "gemini/gemini-3-flash-preview",
     ],
 }
 
@@ -67,7 +63,6 @@ class KodiakSettings(BaseSettings):
     llm_provider: str = Field(default="openrouter", alias="KODIAK_LLM_PROVIDER")
     openrouter_api_key: Optional[str] = Field(default=None, alias="KODIAK_OPENROUTER_API_KEY")
     openrouter_base_url: Optional[str] = Field(default=None, alias="KODIAK_OPENROUTER_BASE_URL")
-    google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
     llm_temperature: float = Field(default=1.0, alias="KODIAK_LLM_TEMPERATURE")
     llm_max_tokens: int = Field(default=8192, alias="KODIAK_LLM_MAX_TOKENS")
     llm_model: str = Field(default="anthropic/claude-3.5-sonnet-20241022", alias="KODIAK_LLM_MODEL")

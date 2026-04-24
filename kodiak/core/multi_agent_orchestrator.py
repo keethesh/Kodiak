@@ -315,6 +315,7 @@ class MultiAgentOrchestrator:
         instructions: str = "",
         project_id: UUID,
         scan_id: UUID,
+        tool_availability: Any = None,
     ) -> KernelResult:
         """
         Run the active multi-agent kernel and return a runtime-neutral result.
@@ -330,9 +331,11 @@ class MultiAgentOrchestrator:
         # 1. Create shared store
         store = SharedScanStore(project_id=project_id, scan_id=scan_id)
 
-        # 2. Check tool availability
-        from kodiak.core.tool_availability import check_tool_availability, get_default_tools_to_check
-        tool_availability = await check_tool_availability(get_default_tools_to_check())
+        # 2. Use the scan-runner preflight result when provided; otherwise
+        # fall back to a direct availability check for programmatic callers.
+        if tool_availability is None:
+            from kodiak.core.tool_availability import check_tool_availability, get_default_tools_to_check
+            tool_availability = await check_tool_availability(get_default_tools_to_check())
 
         # 3. Create agents with tool availability
         planner = PlannerAgent(
@@ -493,6 +496,8 @@ class MultiAgentOrchestrator:
         planner_output = planner_stats.get("output_tokens", 0)
         analyst_input = analyst_result.input_tokens if analyst_result else 0
         analyst_output = analyst_result.output_tokens if analyst_result else 0
+        analyst_thinking = analyst_result.thinking_tokens if analyst_result else 0
+        analyst_cached = analyst_result.cached_tokens if analyst_result else 0
         analyst_cost = analyst_result.total_cost if analyst_result else 0.0
 
         from kodiak.services.llm import calculate_cost
@@ -517,5 +522,7 @@ class MultiAgentOrchestrator:
             task_errors=task_errors,
             total_input_tokens=planner_input + analyst_input,
             total_output_tokens=planner_output + analyst_output,
+            total_thinking_tokens=planner_stats.get("thinking_tokens", 0) + analyst_thinking,
+            total_cached_tokens=planner_stats.get("cached_tokens", 0) + analyst_cached,
             total_cost_usd=total_cost,
         )

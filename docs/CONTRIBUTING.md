@@ -21,7 +21,7 @@ We welcome contributions to Kodiak! Since this is a security tool, please follow
 2. **Configure Environment**:
    ```bash
    cp .env.example .env
-   # Edit .env with your Gemini API key
+   # Edit .env with your OpenRouter API key
    kodiak config  # Interactive configuration
    ```
 
@@ -243,8 +243,11 @@ poetry run pytest tests/integration/ -v
 Key environment variables for development:
 ```bash
 # LLM Configuration
-KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
-GOOGLE_API_KEY=your_api_key
+KODIAK_LLM_PROVIDER=openrouter
+KODIAK_OPENROUTER_API_KEY=your_openrouter_api_key
+KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022
+KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022
+KODIAK_LLM_MODEL=anthropic/claude-3.5-sonnet-20241022
 
 # Database
 POSTGRES_SERVER=localhost

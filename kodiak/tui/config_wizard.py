@@ -23,14 +23,17 @@ from rich.panel import Panel
 from rich.text import Text
 
 
-# Gemini model configurations (Gemini-only runtime)
+# OpenRouter model configuration for the current MVP runtime.
 LLM_PROVIDERS = {
-    "gemini": {
-        "name": "Google Gemini",
-        "description": "Gemini-only mode",
-        "env_var": "GOOGLE_API_KEY",
-        "default_model": "gemini/gemini-3.1-pro-preview",
-        "models": ["gemini/gemini-3.1-pro-preview", "gemini/gemini-3-flash-preview"],
+    "openrouter": {
+        "name": "OpenRouter",
+        "description": "OpenRouter-only mode",
+        "env_var": "KODIAK_OPENROUTER_API_KEY",
+        "default_model": "anthropic/claude-3.5-sonnet-20241022",
+        "models": [
+            "anthropic/claude-3.5-sonnet-20241022",
+            "anthropic/claude-3.5-haiku-20241022",
+        ],
     }
 }
 
@@ -75,7 +78,7 @@ class WelcomeScreen(Screen):
             Static(
                 "This wizard will help you configure Kodiak for first use.\n\n"
                 "You'll need:\n"
-                "• A Google Gemini API key\n"
+                "• An OpenRouter API key\n"
                 "• Docker installed (for security tools)\n\n"
                 "Configuration will be saved to ~/.kodiak/config.env",
                 id="welcome-description"
@@ -134,9 +137,9 @@ class ProviderScreen(Screen):
     
     def compose(self) -> ComposeResult:
         yield Container(
-            Static("Step 1: Select LLM Provider", id="provider-title"),
+            Static("Step 1: Confirm LLM Provider", id="provider-title"),
             RadioSet(
-                RadioButton("🌟 Google Gemini (Recommended)", id="gemini"),
+                RadioButton("OpenRouter (Required)", id="openrouter", value=True),
                 id="provider-radio"
             ),
             Horizontal(
@@ -190,17 +193,17 @@ class ApiKeyScreen(Screen):
     """
     
     def compose(self) -> ComposeResult:
-        provider = self.app.config_data.get("provider", "gemini")
-        provider_info = LLM_PROVIDERS.get(provider, LLM_PROVIDERS["gemini"])
+        provider = self.app.config_data.get("provider", "openrouter")
+        provider_info = LLM_PROVIDERS.get(provider, LLM_PROVIDERS["openrouter"])
         
         yield Container(
             Static(f"Step 2: Enter {provider_info['name']} API Key", id="apikey-title"),
             Static(f"Environment variable: {provider_info['env_var']}"),
             Input(placeholder="Paste your API key here...", password=True, id="api-key-input"),
-            Static("Choose default Gemini model:"),
+            Static("Choose default OpenRouter model:"),
             RadioSet(
-                RadioButton("Gemini 3.1 Pro (Recommended)", id="gemini-pro", value=True),
-                RadioButton("Gemini 3 Flash", id="gemini-flash"),
+                RadioButton("Claude 3.5 Sonnet (Recommended)", id="sonnet", value=True),
+                RadioButton("Claude 3.5 Haiku", id="haiku"),
                 id="model-radio",
             ),
             Static("[dim]Your key is stored locally and never shared.[/dim]"),
@@ -219,9 +222,9 @@ class ApiKeyScreen(Screen):
             api_key_input = self.query_one("#api-key-input", Input)
             api_key = api_key_input.value.strip()
             model_radio = self.query_one("#model-radio", RadioSet)
-            selected_model = "gemini/gemini-3.1-pro-preview"
-            if model_radio.pressed_button and model_radio.pressed_button.id == "gemini-flash":
-                selected_model = "gemini/gemini-3-flash-preview"
+            selected_model = "anthropic/claude-3.5-sonnet-20241022"
+            if model_radio.pressed_button and model_radio.pressed_button.id == "haiku":
+                selected_model = "anthropic/claude-3.5-haiku-20241022"
             
             if api_key:
                 self.app.config_data["api_key"] = api_key
@@ -418,12 +421,15 @@ class ConfigWizardApp(App):
             ""
         ]
         
-        provider = self.config_data.get("provider", "gemini")
-        provider_info = LLM_PROVIDERS.get(provider, LLM_PROVIDERS["gemini"])
+        provider = self.config_data.get("provider", "openrouter")
+        provider_info = LLM_PROVIDERS.get(provider, LLM_PROVIDERS["openrouter"])
         
         # LLM Configuration
         selected_model = self.config_data.get("llm_model", provider_info["default_model"])
+        lines.append("KODIAK_LLM_PROVIDER=openrouter")
         lines.append(f"KODIAK_LLM_MODEL={selected_model}")
+        lines.append("KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022")
+        lines.append("KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022")
         
         if self.config_data.get("api_key"):
             lines.append(f"{provider_info['env_var']}={self.config_data['api_key']}")

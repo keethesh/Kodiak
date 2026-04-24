@@ -75,7 +75,7 @@ async def test_scan_runner_uses_projection_data_for_summary(monkeypatch):
             self.scan_id = scan_id
 
         async def build_projection(self, _session):
-            return {"asset_count": 9, "work_queue": {"PENDING": 2, "COMPLETED": 4}}
+            return {"asset_count": 9, "work_queue": {"pending": 2, "completed": 4}}
 
     class FakeOrchestrator:
         def __init__(self, event_manager, num_workers, max_scan_duration):
@@ -84,6 +84,9 @@ async def test_scan_runner_uses_projection_data_for_summary(monkeypatch):
             self.max_scan_duration = max_scan_duration
 
         async def run(self, **_kwargs):
+            availability = _kwargs["tool_availability"]
+            assert availability.is_checked()
+            assert availability.is_unavailable("nikto")
             return KernelResult(
                 status="completed",
                 summary="ok",
@@ -101,7 +104,7 @@ async def test_scan_runner_uses_projection_data_for_summary(monkeypatch):
         return scan_job
 
     async def fake_preflight_tools(self, inventory):
-        return [], []
+        return ["httpx"], ["nikto"]
 
     async def fake_preflight_dns(self):
         return None
@@ -115,6 +118,12 @@ async def test_scan_runner_uses_projection_data_for_summary(monkeypatch):
     async def fake_get_attempts(session, scan_id, limit=400):
         return []
 
+    captured_report = {}
+
+    def fake_write_scan_report(**kwargs):
+        captured_report.update(kwargs["report_data"])
+        return {}
+
     monkeypatch.setattr(runtime, "get_session", fake_get_session)
     monkeypatch.setattr(runtime, "SharedScanStore", FakeStore)
     monkeypatch.setattr(runtime.ScanRunner, "_get_or_create_project", fake_get_or_create_project)
@@ -125,9 +134,19 @@ async def test_scan_runner_uses_projection_data_for_summary(monkeypatch):
     monkeypatch.setattr(runtime.crud.scan_job, "update_status", fake_update_status)
     monkeypatch.setattr(runtime.crud.node, "get_nodes_by_project", fake_get_nodes)
     monkeypatch.setattr(runtime.crud.attempt, "get_attempts_by_scan", fake_get_attempts)
-    monkeypatch.setattr(runtime, "write_scan_report", lambda **kwargs: {})
+    monkeypatch.setattr(runtime, "write_scan_report", fake_write_scan_report)
 
     runner = runtime.ScanRunner(event_manager=FakeEventManager())
     result = await runner.run(target="https://example.com")
     assert result.status == "completed"
     assert result.asset_count == 9
+    assert captured_report["summary"]["work_pending"] == 2
+    assert captured_report["summary"]["work_completed"] == 4
+    assert captured_report["summary"]["unavailable_tools"] == {"nikto": "not found in Docker container"}
+
+
+def test_kernel_result_exposes_extended_token_accounting_defaults():
+    result = KernelResult(status="completed", summary="ok", findings_count=0, iterations=1)
+
+    assert result.total_thinking_tokens == 0
+    assert result.total_cached_tokens == 0

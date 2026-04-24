@@ -737,9 +737,11 @@ KODIAK_DB_TYPE=sqlite
 
 # LLM Provider (OpenRouter via LiteLLM)
 # Get your API key at https://openrouter.ai/keys
+KODIAK_LLM_PROVIDER=openrouter
 KODIAK_OPENROUTER_API_KEY=your_openrouter_api_key_here
 
 # Agent Model Settings (OpenRouter models)
+KODIAK_LLM_MODEL=anthropic/claude-3.5-sonnet-20241022
 KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022
 KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022
 

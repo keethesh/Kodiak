@@ -404,6 +404,19 @@ async def test_enqueue_work_unit_populates_single_scope_fields():
 
 
 @pytest.mark.asyncio
+async def test_enqueue_work_unit_rejects_multiple_targets():
+    store = SharedScanStore(project_id=uuid4(), scan_id=uuid4())
+
+    with pytest.raises(ValueError, match="exactly one target"):
+        await store.enqueue_work_unit(
+            object(),
+            technique="httpx_primary",
+            targets=["https://one.example.com", "https://two.example.com"],
+            command_template="httpx -u {target}",
+        )
+
+
+@pytest.mark.asyncio
 async def test_analyst_persists_structured_state_from_urls_and_tech():
     calls = {"observations": [], "capabilities": [], "hypotheses": []}
 

@@ -41,6 +41,16 @@ env/
 logs/
 *.log
 
+# Test artifacts
+.pytest_cache/
+.pytest-home-config/
+.pytest-report-output/
+.pytest-tmp*/
+pytesttmp*/
+
+# Local orchestration state
+.omx/
+
 # Database
 *.db
 *.sqlite3

@@ -123,14 +123,18 @@ class ConfigView(Static):
 
     def _render_llm_info(self) -> None:
         w = self.query_one("#llm-info", Static)
-        model = getattr(settings, "GEMINI_MODEL", None) or getattr(settings, "model", "unknown")
-        api_key = getattr(settings, "GEMINI_API_KEY", "") or ""
-        key_status = "✅ Set" if api_key else "❌ Missing"
-        key_ok     = bool(api_key)
+        model = settings.llm_model
+        provider = settings.llm_provider
+        api_key = settings.get_resolved_api_key()
+        key_status = "Set" if api_key else "Missing"
+        key_ok = bool(api_key)
 
         lines = [
-            self._kv("Model",   str(model)),
+            self._kv("Provider", str(provider), ok=provider == "openrouter"),
+            self._kv("Model", str(model)),
             self._kv("API Key", key_status, ok=key_ok),
+            self._kv("Planner Model", settings.planner_model),
+            self._kv("Analyst Model", settings.analyst_model),
         ]
 
         max_iter = getattr(settings, "MAX_ITERATIONS", None)

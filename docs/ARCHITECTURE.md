@@ -32,9 +32,9 @@ Kodiak uses a three-component pipeline architecture:
 
 | Component | Model | Role |
 |-----------|-------|------|
-| **Planner** | Gemini Flash | Fast, methodology-driven work unit generation |
+| **Planner** | OpenRouter `anthropic/claude-3.5-haiku-20241022` | Fast, methodology-driven work unit generation |
 | **Workers** | None (stateless) | Execute security tools in Docker containers |
-| **Analyst** | Gemini Pro | Deep vulnerability analysis and hypothesis generation |
+| **Analyst** | OpenRouter `anthropic/claude-3.5-sonnet-20241022` | Deep vulnerability analysis and hypothesis generation |
 
 ### Data Flow
 
@@ -56,59 +56,35 @@ The shared database store serves as the sole IPC mechanism:
 - **Observations**: Extracted facts from tool output
 - **Capabilities**: Derived asset properties (auth_surface, admin_surface, etc.)
 
-## Event Abstraction Layer
+## Event and Projection Model
 
-The system uses a **transport-agnostic event architecture** via `RuntimeEventPublisher`:
+Kodiak uses two complementary state layers:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Components                               │
-│   ┌────────────┐    ┌────────────┐    ┌────────────────┐   │
-│   │  Planner   │    │  Workers   │    │    Analyst     │   │
-│   └─────┬──────┘    └─────┬──────┘    └───────┬────────┘   │
-│         │                  │                   │            │
-│         └──────────────────┼───────────────────┘            │
-│                            │                                │
-│                   ┌────────▼────────┐                       │
-│                   │RuntimeEventPublisher│                   │
-│                   │    (Protocol)     │                      │
-│                   └────────┬────────┘                       │
-│                            │                                │
-│         ┌──────────────────┼──────────────────┐             │
-│         │                  │                  │             │
-│  ┌──────▼──────┐    ┌──────▼──────┐    ┌─────▼─────┐     │
-│  │TUIEventManager│    │SharedScanStore│   │ FileLogger│     │
-│  └─────────────┘    └──────────────┘   └───────────┘     │
-└─────────────────────────────────────────────────────────────┘
-```
+- **Scan events**: append-only operational events such as work queued/claimed/completed, findings added, directives added, and component degraded/recovered
+- **Scan projections**: the canonical read model used by CLI and TUI
 
-### RuntimeEventPublisher Protocol
+The active runtime does not rely on a manager-era event scheduler or transport abstraction. Instead:
 
-Components communicate through this interface without knowing the transport:
+1. workers, planner, and analyst write through `SharedScanStore`
+2. `SharedScanStore` appends `ScanEvent` records
+3. `build_projection()` derives the current scan view from kernel state tables plus recent events
 
-```python
-class RuntimeEventPublisher(Protocol):
-    async def emit_tool_start(...) -> None: ...
-    async def emit_tool_complete(...) -> None: ...
-    async def emit_agent_thinking(...) -> None: ...
-    async def emit_agent_thought(...) -> None: ...
-    async def emit_scan_started(...) -> None: ...
-    async def emit_scan_completed(...) -> None: ...
-    async def emit_scan_failed(...) -> None: ...
-    async def emit_note_saved(...) -> None: ...
-    async def emit_finding_saved(...) -> None: ...
-    async def emit_phase_advanced(...) -> None: ...
-```
+### Projection Shape
 
-### Event Types
+The current scan projection includes:
 
-| Category | Events |
-|----------|--------|
-| **Scan** | `scan_started`, `scan_completed`, `scan_failed` |
-| **Tool** | `tool_start`, `tool_complete` |
-| **Agent** | `agent_thinking`, `agent_thought` |
-| **Data** | `note_saved`, `finding_saved` |
-| **Phase** | `phase_advanced`, `prior_knowledge_loaded` |
+- `work_queue`
+- `assets`
+- `asset_count`
+- `findings`
+- `attempts`
+- `notes`
+- `capabilities`
+- `hypotheses`
+- `recent_events`
+- `degraded_components`
+
+`nodes` and `node_count` still exist only as compatibility fields for older UI surfaces.
 
 ## Scan Phases
 
@@ -129,16 +105,18 @@ Rules activate based on:
 
 ## State Persistence
 
-PostgreSQL serves as the source of truth:
-- **Resumability**: Scans can be stopped and resumed
-- **Audit Trail**: Every action committed to ScanEvents table
-- **Atomic Dedup**: WorkUnits deduplicated via `IntegrityError` handling
+SQLite is the default and most common runtime store.
+
+- **Resumability**: scans can be stopped and resumed
+- **Audit Trail**: operational changes are appended to `ScanEvent`
+- **Atomic Dedup**: single-scope `WorkUnit` records are deduplicated by `scan_id + technique + scope_key`
+- **Projection Reads**: product surfaces consume `ScanProjection`, not raw orchestration state
 
 ## Tech Stack
 
 - **Application**: Python 3.10+, asyncio
 - **Database**: PostgreSQL / SQLite via SQLModel
-- **LLM**: Google Gemini (Flash for Planner, Pro for Analyst)
+- **LLM**: OpenRouter via LiteLLM
 - **Tools**: Docker sandboxed execution (nmap, nuclei, sqlmap, ffuf, etc.)
 - **Interface**: Textual TUI + CoreInterface for programmatic access
 
@@ -151,7 +129,6 @@ kodiak/
 ├── core/
 │   ├── analyst.py          # Analyst agent (deep thinking)
 │   ├── config.py           # Settings management
-│   ├── event_publisher.py  # Runtime event publisher protocol
 │   ├── failure_policy.py   # Error handling policies
 │   ├── interface.py        # Frontend-agnostic API
 │   ├── kernel_result.py    # Runtime result type
@@ -168,10 +145,10 @@ kodiak/
 │   └── models.py          # SQLModel entity definitions
 ├── services/
 │   ├── executor.py        # Docker command execution
-│   ├── gemini_client.py   # Gemini API client
+│   ├── litellm_client.py  # OpenRouter/LiteLLM API client
 │   └── llm.py             # LLM utilities
 ├── tui/                    # Terminal user interface
-└── skills/                 # Dynamic skill loading (planned)
+└── skills/                 # Dynamic skill loading
 ```
 
 ## Concurrency Control
@@ -203,12 +180,14 @@ Components track their health state:
 - **Degraded**: Recoverable failure, continues with warning
 - **Paused**: Circuit breaker triggered, awaiting recovery
 
-### Circuit Breaker
+### Component Degradation
 
-If a component fails N consecutive cycles (configurable via `failure_threshold`), it is paused:
-- Emits `COMPONENT_PAUSED` event
-- Stops generating work until timeout or manual resume
-- Prevents cascade failures from repeatedly failing components
+Planner and Analyst can mark themselves degraded when a cycle or analysis batch fails unexpectedly.
+That degraded state is:
+
+- appended to `ScanEvent`
+- reduced into `degraded_components` in scan projections
+- surfaced in the TUI status bar, dashboard, and mission control views
 
 ## Security Architecture
 
@@ -228,10 +207,14 @@ Frontend-agnostic interface for scan orchestration:
 
 ```python
 interface = CoreInterface()
-run_id = await interface.start_scan(target="https://example.com")
+run_id = await interface.start_scan(
+    target="https://example.com",
+    worker_count=4,
+)
 async for event in interface.subscribe_events(run_id):
     print(event)
 result = await interface.get_scan_result(run_id)
+projection = await interface.get_scan_projection(result.scan_id)
 ```
 
 ### Event Types
@@ -253,10 +236,22 @@ result = await interface.get_scan_result(run_id)
 
 ### Resource Management
 
-- Connection pooling for database
-- Memory management for large scans
+- Per-session SQLite connections via `NullPool`
+- WAL mode and busy timeouts for concurrent async writers
 - Tool timeout enforcement
-- Cleanup of completed work units
+- Global tool concurrency plus heavy-tool serialization
+
+## Schema Compatibility
+
+Kodiak now expects the kernel-era `WorkUnit` schema.
+
+- Old SQLite databases with legacy `workunit` columns are rejected at startup
+- In-place migration is not supported for those legacy schemas
+- Reset with:
+
+```bash
+kodiak migrate --reset --force
+```
 
 ## Development
 
@@ -269,7 +264,7 @@ result = await interface.get_scan_result(run_id)
 ### Configuration
 
 All settings via environment variables or `.env`:
-- `KODIAK_LLM_PROVIDER`: LLM provider (`openrouter`)
+- `KODIAK_LLM_PROVIDER`: omit or set to `openrouter`
 - `KODIAK_OPENROUTER_API_KEY`: OpenRouter API key
 - `KODIAK_PLANNER_MODEL`: Fast model (e.g., `anthropic/claude-3.5-haiku`)
 - `KODIAK_ANALYST_MODEL`: Deep model (e.g., `anthropic/claude-3.5-sonnet`)
@@ -298,8 +293,8 @@ response = await client.generate(
 
 | Agent | Recommended Model | Reason |
 |-------|-----------------|--------|
-| **Planner** | `anthropic/claude-3.5-haiku` | Fast, cheap, good for rules-based work |
-| **Analyst** | `anthropic/claude-3.5-sonnet` | Deep reasoning for vulnerability analysis |
+| **Planner** | `anthropic/claude-3.5-haiku-20241022` | Fast, cheap, good for rules-based work |
+| **Analyst** | `anthropic/claude-3.5-sonnet-20241022` | Deep reasoning for vulnerability analysis |
 
 ### Cost Tracking
 
@@ -340,8 +335,8 @@ Before scan start, the kernel checks tool availability:
 
 ```bash
 # Agent model settings
-KODIAK_PLANNER_MODEL=gemini/gemini-3-flash-preview
-KODIAK_ANALYST_MODEL=gemini/gemini-3.1-pro-preview
+KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022
+KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022
 
 # Agent cycle settings
 KODIAK_PLANNER_CYCLE_INTERVAL=8.0

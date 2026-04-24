@@ -13,6 +13,8 @@ class KernelResult:
     task_errors: Dict[str, str] = field(default_factory=dict)
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_thinking_tokens: int = 0
+    total_cached_tokens: int = 0
     total_cost_usd: float = 0.0
 
     @property

@@ -98,6 +98,8 @@ class AnalystResult:
     scan_summary: Optional[str] = None
     input_tokens: int = 0
     output_tokens: int = 0
+    thinking_tokens: int = 0
+    cached_tokens: int = 0
     total_cost: float = 0.0
 
 
@@ -125,6 +127,8 @@ class AnalystAgent:
         self._llm = LiteLLMClient()
         self._total_input_tokens = 0
         self._total_output_tokens = 0
+        self._total_thinking_tokens = 0
+        self._total_cached_tokens = 0
         self._total_cost = 0.0
         self._cycle_count = 0
         self._stop_requested = False

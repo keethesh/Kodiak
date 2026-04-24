@@ -13,7 +13,7 @@ Kodiak is an advanced LLM-powered penetration testing suite that uses AI agents 
 **Prerequisites:**
 - Python 3.11+
 - Docker (for security toolbox container)
-- A Google Gemini API key
+- An OpenRouter API key
 
 ### One-Command Installation
 
@@ -32,7 +32,7 @@ This installs:
 ```bash
 # Launch interactive configuration wizard
 kodiak config
-# Choose Gemini model → Enter API key → Select SQLite (default)
+# Enter OpenRouter API key → Choose model → Select SQLite (default)
 
 # Initialize database
 kodiak init
@@ -42,7 +42,7 @@ kodiak init
 kodiak
 
 # Or scan a target directly
-kodiak --target ./my-application
+kodiak scan https://example.com
 ```
 
 ## 🎯 Core Features
@@ -54,10 +54,10 @@ kodiak --target ./my-application
 - **Multi-view Dashboard**: Dedicated screens for projects, agents, and reporting
 
 ### 🤖 AI-Powered Execution
-- **Phased Manager-Worker**: Single LLM brain drives parallel tool workers
-- **Structured Scanning**: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING
-- **Persistent State**: SQLite-backed sessions with pause/resume capability
-- **Intelligent Reasoning**: LLM-powered decision making and adaptation
+- **Kernel-First Runtime**: Planner + Analyst + parallel worker pool
+- **Structured Scanning**: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION
+- **Persistent State**: SQLite-backed shared store with scan projections
+- **Intelligent Reasoning**: Planner handles execution strategy, Analyst interprets evidence
 
 ### 🛠️ Comprehensive Security Toolkit (Dockerized)
 All security tools run in a Kali Linux container - **no local installation needed**:
@@ -122,10 +122,10 @@ kodiak doctor
 kodiak tui
 
 # Quick scan
-kodiak --target https://example.com
+kodiak scan https://example.com
 
 # Explicit scan command
-kodiak scan https://example.com --instructions "Passive recon only"
+kodiak scan https://example.com --instructions "Passive recon only" --workers 6
 ```
 
 ### TUI Navigation
@@ -144,19 +144,27 @@ kodiak scan https://example.com --instructions "Passive recon only"
 ### Multi-Agent Pipeline
 - **Planner + Analyst Agents**: Specialized reasoning stages coordinate scan strategy
 - **Parallel Workers**: Stateless tool executors run concurrently
-- **Phased Execution**: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION → REPORTING
+- **Phased Execution**: RECON → ENUMERATION → VULN_SCAN → EXPLOITATION
 - **Per-Tool Concurrency**: Limits prevent WAF tripping and resource exhaustion
 
 ### Execution State
-- **Structured Scan State**: Bounded context replaces unbounded conversation history
+- **Single Runtime Path**: Manager-era runtime has been removed from the active code path
 - **Persistent Shared Store**: Planner, workers, and analyst coordinate through DB-backed state
-- **Persistent Memory**: Complete audit trail and session state
+- **Projection-Backed Reads**: CLI/TUI consume derived scan projections
 
 ### Database Schema
-- **Graph-Based**: Nodes and edges represent attack surface
-- **Audit Trail**: Complete logging of agent actions and decisions
-- **Findings Management**: Structured vulnerability data with evidence
-- **Session Persistence**: Resume scans across application restarts
+- **Kernel Work Queue**: Single-scope `WorkUnit` records drive execution
+- **Evidence Model**: Observations, capabilities, hypotheses, findings, notes, attempts
+- **Audit Trail**: Complete logging through `ScanEvent`
+- **Session Persistence**: Resume scan state across application restarts
+
+### Database Compatibility
+- Existing old SQLite schemas are not migrated in place.
+- If Kodiak detects a legacy database, reset it with:
+
+```bash
+kodiak migrate --reset --force
+```
 
 ## 🔒 Security & Safety
 
@@ -165,16 +173,17 @@ kodiak scan https://example.com --instructions "Passive recon only"
 - **Configurable Safety**: Adjustable safety levels for different environments
 - **Audit Logging**: Complete trail of all actions for compliance
 
-## 🌐 Gemini Model Support
+## 🌐 OpenRouter Model Support
 
-Kodiak is Gemini-only and supports:
-- **Google Gemini**: `gemini/gemini-3.1-pro-preview`, `gemini/gemini-3-flash-preview`
+Kodiak's current MVP runtime is OpenRouter-only. Direct Gemini, OpenAI, or Anthropic provider setup is unsupported for this milestone; use their models through OpenRouter model IDs.
 
 ### Configuration Examples
 ```bash
-# Gemini (Recommended)
-export KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
-export GOOGLE_API_KEY=your_api_key
+export KODIAK_LLM_PROVIDER=openrouter
+export KODIAK_OPENROUTER_API_KEY=your_openrouter_api_key
+export KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022
+export KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022
+export KODIAK_LLM_MODEL=anthropic/claude-3.5-sonnet-20241022
 ```
 
 ## 🐳 Docker Usage
@@ -228,7 +237,7 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 ## 🙏 Acknowledgments
 
 - Built with [Textual](https://textual.textualize.io/) for the modern TUI
-- Powered by native Google Gemini API integration
+- Powered by OpenRouter-backed LLM integration
 - Integrates industry-standard security tools (nmap, nuclei, sqlmap, etc.)
 
 ---

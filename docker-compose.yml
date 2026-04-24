@@ -28,20 +28,12 @@ services:
       - POSTGRES_DB=kodiak_db
       - POSTGRES_PORT=5432
       
-      # LLM Configuration - Gemini (Default)
-      - KODIAK_LLM_PROVIDER=gemini
-      - KODIAK_LLM_MODEL=gemini/gemini-1.5-pro
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      
-      # Alternative: OpenAI Configuration
-      # - KODIAK_LLM_PROVIDER=openai
-      # - KODIAK_LLM_MODEL=openai/gpt-4
-      # - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      
-      # Alternative: Claude Configuration  
-      # - KODIAK_LLM_PROVIDER=claude
-      # - KODIAK_LLM_MODEL=claude-3-5-sonnet-20241022
-      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # LLM Configuration - OpenRouter only
+      - KODIAK_LLM_PROVIDER=openrouter
+      - KODIAK_OPENROUTER_API_KEY=${KODIAK_OPENROUTER_API_KEY:-}
+      - KODIAK_LLM_MODEL=anthropic/claude-3.5-sonnet-20241022
+      - KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022
+      - KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022
       
       # LLM Settings
       - KODIAK_LLM_TEMPERATURE=0.1

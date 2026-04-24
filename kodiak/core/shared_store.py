@@ -208,16 +208,18 @@ class SharedScanStore:
         priority: int = 50,
         phase: str = "recon",
     ) -> Optional[WorkUnit]:
-        """Add a work unit. Returns None if duplicate (dedup by technique+scope_key).
-        
-        Single-scope only: takes first target from list for single-target execution.
-        Use enqueue_work_units_bulk for multiple targets.
+        """Add a single-scope work unit. Returns None if duplicate.
+
+        Empty targets preserve the legacy no-op behavior. Multiple targets are
+        rejected so callers do not accidentally enqueue only one target.
         """
         if not targets:
             logger.warning("enqueue_work_unit called with empty targets list")
             return None
+        if len(targets) > 1:
+            raise ValueError("enqueue_work_unit accepts exactly one target; enqueue one work unit per target")
         
-        primary_target = sorted(targets)[0]
+        primary_target = targets[0]
         unit = WorkUnit(
             scan_id=self.scan_id,
             project_id=self.project_id,

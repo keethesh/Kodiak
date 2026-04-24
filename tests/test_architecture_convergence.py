@@ -7,6 +7,7 @@ Tests for Phase 1-4 architecture changes:
 """
 
 import pytest
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -18,6 +19,48 @@ from kodiak.core.tool_availability import (
     get_default_tools_to_check,
 )
 from kodiak.database.engine import SchemaMigrationRequired, _validate_sqlite_schema
+
+
+class TestOpenRouterConfig:
+    """Tests for OpenRouter-only configuration."""
+
+    def test_only_openrouter_provider_is_supported(self):
+        from kodiak.core.config import SUPPORTED_PROVIDERS
+
+        assert SUPPORTED_PROVIDERS == ["openrouter"]
+
+    def test_rejects_direct_gemini_provider(self):
+        from kodiak.core.config import KodiakSettings
+
+        cfg = KodiakSettings(
+            KODIAK_LLM_PROVIDER="gemini",
+            KODIAK_OPENROUTER_API_KEY="sk-test",
+            KODIAK_LLM_MODEL="gemini/gemini-3.1-pro-preview",
+            _env_file=None,
+        )
+
+        assert "KODIAK_LLM_PROVIDER must be omitted or set to 'openrouter'." in cfg.validate_llm_config()
+
+    def test_config_wizard_emits_openrouter_env(self, monkeypatch):
+        from kodiak.tui.config_wizard import ConfigWizardApp
+
+        home_dir = Path.cwd() / ".pytest-home-config"
+        home_dir.mkdir(exist_ok=True)
+        monkeypatch.setattr(Path, "home", lambda: home_dir)
+        app = ConfigWizardApp()
+        app.config_data = {
+            "provider": "openrouter",
+            "api_key": "sk-openrouter",
+            "llm_model": "anthropic/claude-3.5-sonnet-20241022",
+            "db_type": "sqlite",
+        }
+
+        app.save_configuration()
+
+        config_text = (home_dir / ".kodiak" / "config.env").read_text()
+        assert "KODIAK_LLM_PROVIDER=openrouter" in config_text
+        assert "KODIAK_OPENROUTER_API_KEY=sk-openrouter" in config_text
+        assert "GOOGLE_API_KEY" not in config_text
 
 
 class TestToolAvailability:

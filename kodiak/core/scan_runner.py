@@ -16,10 +16,16 @@ from kodiak.core.config import settings
 from kodiak.core.event_publisher import RuntimeEventPublisher
 from kodiak.core.reporting import write_scan_report
 from kodiak.core.shared_store import SharedScanStore
+from kodiak.core.tool_availability import ToolAvailability
 from kodiak.database.engine import get_session
 from kodiak.database.models import Project, ScanJob, ScanStatus
 from kodiak.database import crud
 from kodiak.services.executor import get_docker_executor
+
+
+def _work_queue_count(work_queue: Dict[str, Any], key: str) -> int:
+    """Read canonical lowercase projection keys with legacy uppercase fallback."""
+    return int(work_queue.get(key, work_queue.get(key.upper(), 0)) or 0)
 
 
 @dataclass
@@ -127,6 +133,11 @@ class ScanRunner:
                 tool_inventory = ToolInventory()
                 tool_inventory.initialize_tools()
                 allowed_tools, missing_tools = await self._preflight_available_tools(tool_inventory)
+                tool_availability = ToolAvailability(
+                    available_tools={tool.strip().lower() for tool in allowed_tools},
+                    unavailable_tools={tool.strip().lower() for tool in missing_tools},
+                    _checked=True,
+                )
                 if missing_tools:
                     logger.warning(
                         "Tool preflight disabled unavailable toolbox tools: "
@@ -155,6 +166,7 @@ class ScanRunner:
                     instructions=instructions,
                     project_id=project.id,
                     scan_id=scan_job.id,
+                    tool_availability=tool_availability,
                 )
                 
                 # 4. Finalize
@@ -204,8 +216,9 @@ class ScanRunner:
                         "findings_count": kernel_result.findings_count,
                         "duration_seconds": duration,
                         "iterations": kernel_result.iterations,
-                        "work_pending": int(work_queue.get("PENDING", 0)),
-                        "work_completed": int(work_queue.get("COMPLETED", 0)),
+                        "work_pending": _work_queue_count(work_queue, "pending"),
+                        "work_completed": _work_queue_count(work_queue, "completed"),
+                        "unavailable_tools": {tool: "not found in Docker container" for tool in sorted(missing_tools)},
                         "task_errors": kernel_result.task_errors if hasattr(kernel_result, 'task_errors') else {},
                     },
                     "findings": list(self._finding_records.values()),
@@ -243,8 +256,9 @@ class ScanRunner:
                         "findings_count": kernel_result.findings_count,
                         "duration": duration,
                         "report_paths": report_paths,
-                        "work_pending": int(work_queue.get("PENDING", 0)),
-                        "work_completed": int(work_queue.get("COMPLETED", 0)),
+                        "work_pending": _work_queue_count(work_queue, "pending"),
+                        "work_completed": _work_queue_count(work_queue, "completed"),
+                        "unavailable_tools": {tool: "not found in Docker container" for tool in sorted(missing_tools)},
                     }
                 )
                 

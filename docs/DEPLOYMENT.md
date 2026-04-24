@@ -14,9 +14,9 @@ Kodiak TUI is designed for:
 
 ### System Requirements
 - **Python 3.11+**
-- **PostgreSQL 12+** (or Docker for easy setup)
+- **Docker** (for the toolbox container)
 - **Terminal Emulator** with Unicode support
-- **Google Gemini API Key**
+- **OpenRouter API Key**
 
 ### Supported Platforms
 - ✅ **Linux** (Ubuntu 20.04+, Debian 11+, CentOS 8+)
@@ -61,16 +61,13 @@ pip install -e .
 git clone https://github.com/yourusername/kodiak.git
 cd kodiak
 
-# Start database
-docker-compose up -d db
-
 # Build and run Kodiak
 docker-compose up --build kodiak
 ```
 
 ## Configuration
 
-### 1. Gemini Setup
+### 1. OpenRouter Setup
 
 #### Interactive Configuration (Recommended)
 ```bash
@@ -81,58 +78,38 @@ kodiak config
 Create a `.env` file in the project root:
 
 ```bash
-# Gemini (Recommended)
-KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
-GOOGLE_API_KEY=your_google_api_key_here
-
-# Database Configuration
-POSTGRES_SERVER=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=kodiak_db
-POSTGRES_USER=kodiak
-POSTGRES_PASSWORD=secure_password_here
+# OpenRouter (required)
+KODIAK_LLM_PROVIDER=openrouter
+KODIAK_OPENROUTER_API_KEY=your_openrouter_api_key_here
+KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022
+KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022
+KODIAK_LLM_MODEL=anthropic/claude-3.5-sonnet-20241022
 
 # Application Settings
 KODIAK_DEBUG=false
 KODIAK_LOG_LEVEL=INFO
-KODIAK_MAX_AGENTS=5
+KODIAK_MULTI_AGENT_WORKERS=4
 ```
 
 ### 2. Database Setup
 
-#### Option A: Docker (Easiest)
-```bash
-# Start PostgreSQL container
-docker-compose up -d db
+Kodiak uses SQLite by default and initializes the database automatically when needed.
 
-# Initialize database
-kodiak init
+Fresh reset path:
+
+```bash
+kodiak migrate --reset --force
 ```
 
-#### Option B: Local PostgreSQL
-```bash
-# Install PostgreSQL (Ubuntu/Debian)
-sudo apt update
-sudo apt install postgresql postgresql-contrib
-
-# Create database and user
-sudo -u postgres psql
-CREATE DATABASE kodiak_db;
-CREATE USER kodiak WITH PASSWORD 'secure_password';
-GRANT ALL PRIVILEGES ON DATABASE kodiak_db TO kodiak;
-\q
-
-# Initialize Kodiak database
-kodiak init
-```
+If Kodiak detects a legacy SQLite schema, it will refuse to start and tell you to run that reset command.
 
 ### 3. Verify Installation
 ```bash
 # Check version
-kodiak version
+kodiak --version
 
 # Test configuration
-kodiak config --help
+kodiak doctor
 
 # Launch TUI
 kodiak
@@ -155,27 +132,7 @@ sudo useradd -m -s /bin/bash kodiak
 sudo usermod -aG sudo kodiak
 ```
 
-#### 2. Database Configuration
-```bash
-# Configure PostgreSQL
-sudo -u postgres psql
-CREATE DATABASE kodiak_db;
-CREATE USER kodiak WITH PASSWORD 'your_secure_password';
-GRANT ALL PRIVILEGES ON DATABASE kodiak_db TO kodiak;
-ALTER USER kodiak CREATEDB;
-\q
-
-# Configure PostgreSQL for network access (if needed)
-sudo nano /etc/postgresql/14/main/postgresql.conf
-# Uncomment: listen_addresses = 'localhost'
-
-sudo nano /etc/postgresql/14/main/pg_hba.conf
-# Add: local   kodiak_db   kodiak   md5
-
-sudo systemctl restart postgresql
-```
-
-#### 3. Application Deployment
+#### 2. Application Deployment
 ```bash
 # Switch to kodiak user
 sudo su - kodiak
@@ -191,14 +148,14 @@ pip install -e .
 cp .env.example .env
 nano .env  # Add your configuration
 
-# Initialize database
-kodiak init
+# Reset/create fresh schema
+kodiak migrate --reset --force
 
 # Test installation
-kodiak version
+kodiak --version
 ```
 
-#### 4. Process Management with systemd
+#### 3. Process Management with systemd
 Create a systemd service for persistent operation:
 
 ```bash
@@ -262,8 +219,11 @@ services:
     environment:
       - POSTGRES_SERVER=db
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - KODIAK_LLM_MODEL=gemini/gemini-3.1-pro-preview
+      - KODIAK_LLM_PROVIDER=openrouter
+      - KODIAK_OPENROUTER_API_KEY=${KODIAK_OPENROUTER_API_KEY}
+      - KODIAK_LLM_MODEL=anthropic/claude-3.5-sonnet-20241022
+      - KODIAK_PLANNER_MODEL=anthropic/claude-3.5-haiku-20241022
+      - KODIAK_ANALYST_MODEL=anthropic/claude-3.5-sonnet-20241022
     depends_on:
       - db
     restart: unless-stopped
@@ -285,7 +245,7 @@ networks:
 # Create production environment file
 cat > .env.prod << EOF
 POSTGRES_PASSWORD=your_very_secure_password
-GOOGLE_API_KEY=your_google_api_key
+KODIAK_OPENROUTER_API_KEY=your_openrouter_api_key
 EOF
 
 # Deploy

@@ -1,5 +1,9 @@
 # What Kodiak Can Learn from Strix and Shannon
 
+> Historical research note: this comparison describes Kodiak before the kernel-first
+> Planner/Workers/Analyst architecture and OpenRouter-only MVP setup. Treat it as
+> background research, not canonical current architecture or setup guidance.
+
 ## Deep Comparative Analysis
 
 ---
