@@ -6,8 +6,6 @@ Uses LiteLLM to support OpenRouter and other providers with a unified interface.
 
 from __future__ import annotations
 
-import asyncio
-import json
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -82,10 +80,7 @@ class LiteLLMClient:
             completion_kwargs["base_url"] = self.config.base_url
         
         try:
-            response = await asyncio.to_thread(
-                self._litellm.acompletion,
-                **completion_kwargs
-            )
+            response = await self._litellm.acompletion(**completion_kwargs)
             return self._parse_response(response, model)
         except Exception as exc:
             logger.error(f"LiteLLM generation failed: {exc}")

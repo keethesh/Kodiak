@@ -6,6 +6,8 @@ import pytest
 from kodiak.core.kernel_result import KernelResult
 from kodiak.core.tool_availability import ToolAvailability, get_default_tools_to_check
 from kodiak.database.engine import _validate_sqlite_schema
+from kodiak.services.base import LLMConfig
+from kodiak.services.litellm_client import LiteLLMClient
 
 
 class _FakeResult:
@@ -150,3 +152,35 @@ def test_kernel_result_exposes_extended_token_accounting_defaults():
 
     assert result.total_thinking_tokens == 0
     assert result.total_cached_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_litellm_client_awaits_async_completion():
+    class FakeLiteLLM:
+        async def acompletion(self, **kwargs):
+            assert kwargs["model"] == "test/model"
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="analysis complete", tool_calls=[]),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=3, completion_tokens=4),
+                _response_cost=0.001,
+            )
+
+    client = LiteLLMClient.__new__(LiteLLMClient)
+    client.config = LLMConfig(api_key="test-key", base_url="https://openrouter.ai/api/v1")
+    client._litellm = FakeLiteLLM()
+
+    response = await client.generate(
+        model="test/model",
+        system_prompt="system",
+        messages=[{"role": "user", "content": "analyze"}],
+    )
+
+    assert response.content == "analysis complete"
+    assert response.finish_reason == "stop"
+    assert response.input_tokens == 3
+    assert response.output_tokens == 4
