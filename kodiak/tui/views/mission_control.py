@@ -5,16 +5,14 @@ Main dashboard showing agents, attack surface graph, and activity log.
 Implements split layout with tab navigation between panels.
 """
 
-from typing import Optional
 from textual.screen import Screen
 from textual.app import ComposeResult
-from textual.widgets import Header, Footer, Static, TabbedContent, TabPane
+from textual.widgets import Header, Footer, Static
 from textual.containers import Vertical, Horizontal, Container
 from textual.binding import Binding
-from loguru import logger
 
-from kodiak.tui.state import app_state, ScanState, ScanStatus
-from kodiak.tui.widgets import AgentPanel, GraphTree, ActivityLog, StatusBar
+from kodiak.tui.state import app_state, ScanStatus
+from kodiak.tui.widgets import AgentPanel, GraphTree, ActivityLog
 
 
 class MissionControlScreen(Screen):

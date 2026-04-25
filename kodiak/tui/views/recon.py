@@ -2,13 +2,11 @@
 Recon & Surface View — Attack surface tree, node details, tool attempts.
 """
 
-from typing import Optional, Any, Dict
+from typing import Dict
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import DataTable, Label, Static, Tree
-from textual.widgets.tree import TreeNode
-from loguru import logger
+from textual.containers import Container, Horizontal
+from textual.widgets import DataTable, Static, Tree
 
 from kodiak.tui.state import app_state
 
@@ -150,7 +148,7 @@ class ReconView(Static):
             for node in nodes:
                 name = getattr(node, "name", "?")
                 node_id = str(getattr(node, "id", ""))
-                leaf = parent.add_leaf(
+                parent.add_leaf(
                     f"  {name}",
                     data={"type": "node", "node": node, "id": node_id},
                 )

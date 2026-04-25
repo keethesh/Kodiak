@@ -5,15 +5,15 @@ Direct communication interface with individual agents.
 Supports chat history, message input, and agent switching.
 """
 
-from typing import Optional, List
+from typing import List
 from textual.screen import Screen
 from textual.app import ComposeResult
 from textual.widgets import Header, Footer, Static
-from textual.containers import Vertical, Horizontal, Container
+from textual.containers import Container
 from textual.binding import Binding
 from loguru import logger
 
-from kodiak.tui.state import app_state, AgentState, AgentStatus
+from kodiak.tui.state import app_state, AgentStatus
 from kodiak.tui.widgets import ChatHistory
 
 
@@ -239,11 +239,6 @@ class AgentChatScreen(Screen):
         self._switch_to_agent(new_agent_id)
         self.notify(f"Switched to Agent {new_agent_id}")
     
-    def action_show_help(self) -> None:
-        """Show help overlay"""
-        from kodiak.tui.views.help import HelpScreen
-        self.app.push_screen(HelpScreen())
-    
     def on_message_sent(self, event) -> None:
         """Handle message sent from chat history"""
         # TODO: Send message to actual agent via core bridge
@@ -268,6 +263,6 @@ class AgentChatScreen(Screen):
         elif "help" in user_message.lower():
             response = "I can help with security testing. Ask me about specific vulnerabilities or targets."
         else:
-            response = f"Understood. I'll take that into consideration for my analysis."
+            response = "Understood. I'll take that into consideration for my analysis."
         
         chat_history.add_agent_response(response, self.agent_id)

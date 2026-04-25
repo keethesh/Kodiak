@@ -11,7 +11,6 @@ from kodiak.database.models import (
     ScanJob,
     Node,
     Finding,
-    ScanStatus,
     Attempt,
     InsightMemory,
     VerificationQueue,
@@ -19,7 +18,7 @@ from kodiak.database.models import (
     EngagementNote,
 )
 from kodiak.core.error_handling import (
-    ErrorHandler, DatabaseError, handle_errors, ErrorCategory
+    ErrorHandler, handle_errors, ErrorCategory
 )
 
 
@@ -249,7 +248,7 @@ class CRUDNode:
         try:
             statement = select(Node).where(
                 Node.project_id == project_id,
-                Node.scanned == False
+                Node.scanned.is_(False)
             )
             result = await session.execute(statement)
             return list(result.scalars().all())

@@ -5,7 +5,6 @@ Provides dynamic skill loading capabilities for agents to specialize
 in specific vulnerability types, technologies, and testing methodologies.
 """
 
-import os
 import yaml
 from typing import Dict, List, Optional, Any
 from pathlib import Path

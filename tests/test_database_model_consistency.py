@@ -5,13 +5,11 @@ Feature: core-integration-fixes, Property 6: Database model consistency
 """
 
 import pytest
-import asyncio
 from uuid import uuid4
-from unittest.mock import AsyncMock, MagicMock
-from typing import Dict, Any
+from unittest.mock import MagicMock
 
-from kodiak.database.models import Project, Node, ScanJob
-from kodiak.database.crud import node, project, scan_job
+from kodiak.database.models import Project, Node
+from kodiak.database.crud import node
 from kodiak.core.error_handling import DatabaseError
 
 
@@ -127,7 +125,7 @@ class TestDatabaseModelConsistencyProperties:
             
             # Verify session operations
             assert test_node in session.added_objects
-            assert session.committed == True
+            assert session.committed is True
             
             # Reset session for next iteration
             session.added_objects = []
@@ -264,7 +262,7 @@ class TestDatabaseModelConsistencyProperties:
         for unscanned_node in result_unscanned:
             assert isinstance(unscanned_node, Node)
             assert unscanned_node.project_id == test_project.id
-            assert unscanned_node.scanned == False
+            assert unscanned_node.scanned is False
 
     @pytest.mark.asyncio
     async def test_database_model_consistency_node_deletion(self):
@@ -286,9 +284,9 @@ class TestDatabaseModelConsistencyProperties:
             result = await node.delete(session, test_node.id)
             
             # Verify deletion was successful
-            assert result == True
+            assert result is True
             assert test_node in session.deleted_objects
-            assert session.committed == True
+            assert session.committed is True
             
             # Reset session for next iteration
             session.deleted_objects = []
@@ -321,7 +319,7 @@ class TestDatabaseModelConsistencyProperties:
             await node.create(error_session, test_nodes[0])
         
         # Verify rollback was called
-        assert error_session.rolled_back == True
+        assert error_session.rolled_back is True
         
         # Test error handling in get operation
         with pytest.raises(DatabaseError, match="Query execution failed"):

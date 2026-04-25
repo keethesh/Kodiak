@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4

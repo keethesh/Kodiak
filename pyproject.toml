@@ -47,6 +47,7 @@ python = "^3.11"
 # Core CLI dependencies (always installed)
 pydantic = {extras = ["email"], version = "^2.6.0"}
 pydantic-settings = "^2.1.0"
+click = "^8.1.7"
 textual = "^0.48.2"
 rich = "^13.0.0"
 httpx = "^0.28.1"
@@ -72,6 +73,7 @@ psycopg = {extras = ["binary"], version = "^3.1.18", optional = true}
 fastapi = {version = "^0.109.0", optional = true}
 uvicorn = {extras = ["standard"], version = "^0.27.0", optional = true}
 websockets = {version = "^14.0.0", optional = true}
+playwright = {version = "^1.57.0", optional = true}
 python-multipart = {version = "^0.0.9", optional = true}
 python-jose = {extras = ["cryptography"], version = "^3.3.0", optional = true}
 passlib = {extras = ["bcrypt"], version = "^1.7.4", optional = true}
@@ -82,13 +84,15 @@ sentry-sdk = {version = "^1.40.0", optional = true}
 
 [tool.poetry.extras]
 # Full installation with all features (PostgreSQL + all tools)
-full = ["sqlalchemy", "sqlmodel", "alembic", "asyncpg", "psycopg", "fastapi", "uvicorn", "websockets", "python-multipart", "python-jose", "passlib", "sentry-sdk"]
+full = ["sqlalchemy", "sqlmodel", "alembic", "asyncpg", "psycopg", "fastapi", "uvicorn", "websockets", "playwright", "python-multipart", "python-jose", "passlib", "sentry-sdk"]
 # Local mode: SQLite-based, zero external dependencies
 local = ["sqlalchemy", "sqlmodel", "alembic"]
 # Database support for PostgreSQL persistent storage
 database = ["sqlalchemy", "sqlmodel", "alembic", "asyncpg", "psycopg"]
 # API server mode
 api = ["fastapi", "uvicorn", "websockets", "python-multipart", "python-jose", "passlib"]
+# Browser automation tools
+browser = ["playwright"]
 # Monitoring and telemetry
 monitoring = ["sentry-sdk"]
 

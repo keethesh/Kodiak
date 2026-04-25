@@ -4,7 +4,7 @@ Skill Registry for Kodiak
 Provides a centralized registry of all available skills and their metadata.
 """
 
-from typing import Dict, List, Set
+from typing import Dict, List
 from .skill_loader import skill_loader
 
 

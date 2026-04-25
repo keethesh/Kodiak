@@ -4,13 +4,11 @@ GraphScreen View
 Full-screen attack surface graph view with search and navigation.
 """
 
-from typing import Optional
 from textual.screen import Screen
 from textual.app import ComposeResult
 from textual.widgets import Header, Footer, Static, Input
-from textual.containers import Vertical, Horizontal, Container
+from textual.containers import Container
 from textual.binding import Binding
-from loguru import logger
 
 from kodiak.tui.state import app_state
 from kodiak.tui.widgets import GraphTree
@@ -214,11 +212,6 @@ class GraphScreen(Screen):
         if node and node.node.type == "vulnerability":
             from kodiak.tui.views.finding_detail import FindingDetailScreen
             self.app.push_screen(FindingDetailScreen(node_id=node.id))
-    
-    def action_show_help(self) -> None:
-        """Show help overlay"""
-        from kodiak.tui.views.help import HelpScreen
-        self.app.push_screen(HelpScreen())
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle search input"""

@@ -5,13 +5,10 @@ Provides comprehensive HTTP proxy functionality for request/response manipulatio
 traffic analysis, and web application security testing.
 """
 
-import asyncio
-import json
 import time
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from urllib.parse import urlparse, parse_qs
-import base64
 import re
 
 from kodiak.core.tools.base import KodiakTool, ToolResult
@@ -391,7 +388,7 @@ class ProxyRequestTool(KodiakTool):
 
     def _generate_request_summary(self, request: Dict[str, Any], response: Dict[str, Any], analysis: Dict[str, Any]) -> str:
         """Generate human-readable summary of the request/response"""
-        summary = f"HTTP Request Analysis\n"
+        summary = "HTTP Request Analysis\n"
         summary += "=" * 30 + "\n\n"
         
         # Request details
@@ -518,7 +515,7 @@ class ProxyHistoryTool(KodiakTool):
 
     def _generate_history_summary(self, pairs: List[Dict[str, Any]], total_count: int) -> str:
         """Generate summary of proxy history"""
-        summary = f"Proxy History Summary\n"
+        summary = "Proxy History Summary\n"
         summary += "=" * 25 + "\n\n"
         summary += f"Total Requests: {total_count}\n"
         summary += f"Showing: {len(pairs)} requests\n\n"
@@ -590,11 +587,11 @@ class ProxyStopTool(KodiakTool):
         except Exception:
             pass  # WebSocket not available in CLI mode
         
-        summary = f"Proxy session stopped.\n"
+        summary = "Proxy session stopped.\n"
         summary += f"Session ID: {_proxy_session.session_id}\n"
         summary += f"Total Requests: {total_requests}\n"
         summary += f"Total Responses: {total_responses}\n"
-        summary += f"Session data preserved for analysis.\n"
+        summary += "Session data preserved for analysis.\n"
         
         return ToolResult(
             success=True,

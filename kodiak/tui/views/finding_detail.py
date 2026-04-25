@@ -17,7 +17,7 @@ from typing import Optional
 import json
 from textual.screen import Screen
 from textual.app import ComposeResult
-from textual.widgets import Header, Footer, Static, Button, TextArea
+from textual.widgets import Header, Footer, Static, Button
 from textual.containers import Vertical, Horizontal, Container, ScrollableContainer
 from textual.binding import Binding
 from loguru import logger
@@ -537,14 +537,6 @@ class FindingDetailScreen(Screen):
         
         self.notify(f"Re-test triggered for: {self.finding.title}", severity="information")
         logger.info(f"Re-test triggered for finding: {self.finding_id}")
-    
-    def action_show_help(self) -> None:
-        """Show help overlay"""
-        try:
-            from kodiak.tui.views.help import HelpScreen
-            self.app.push_screen(HelpScreen())
-        except ImportError:
-            self.notify("Help screen not available", severity="warning")
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses"""

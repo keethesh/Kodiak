@@ -5,7 +5,7 @@ A widget that renders the attack surface as a navigable tree structure.
 Supports expand/collapse, navigation, and selection with node type icons.
 """
 
-from typing import Optional, List, Dict, Set, Any
+from typing import Optional, List, Dict, Any
 from textual.widget import Widget
 from textual.widgets import Tree, Static
 from textual.containers import Vertical

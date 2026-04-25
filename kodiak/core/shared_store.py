@@ -7,8 +7,6 @@ It wraps the existing DB models with atomic dedup and query helpers.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
@@ -415,7 +413,7 @@ class SharedScanStore:
                 .where(
                     WorkUnit.scan_id == self.scan_id,
                     WorkUnit.status == WorkUnitStatus.COMPLETED,
-                    WorkUnit.analyzed == False,
+                    WorkUnit.analyzed.is_(False),
                 )
                 .order_by(WorkUnit.completed_at.asc())
                 .limit(limit)
@@ -496,7 +494,7 @@ class SharedScanStore:
                 .where(
                     WorkUnit.scan_id == self.scan_id,
                     WorkUnit.status == WorkUnitStatus.COMPLETED,
-                    WorkUnit.analyzed == False,
+                    WorkUnit.analyzed.is_(False),
                 )
             )
             result = await session.execute(stmt)
@@ -550,7 +548,7 @@ class SharedScanStore:
                 select(Directive)
                 .where(
                     Directive.scan_id == self.scan_id,
-                    Directive.consumed == False,
+                    Directive.consumed.is_(False),
                 )
                 .order_by(Directive.created_at.asc())
             )
@@ -575,7 +573,7 @@ class SharedScanStore:
                 select(func.count(Directive.id))
                 .where(
                     Directive.scan_id == self.scan_id,
-                    Directive.consumed == False,
+                    Directive.consumed.is_(False),
                 )
             )
             result = await session.execute(stmt)

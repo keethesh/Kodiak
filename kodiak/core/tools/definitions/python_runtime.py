@@ -6,7 +6,6 @@ proof-of-concept creation, and advanced security testing workflows.
 """
 
 import asyncio
-import json
 import sys
 import traceback
 import time
@@ -14,7 +13,6 @@ import uuid
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from io import StringIO
-import contextlib
 
 from kodiak.core.tools.base import KodiakTool, ToolResult
 
@@ -64,7 +62,7 @@ class PythonSession:
                 except ImportError:
                     pass  # Skip if library not available
                     
-        except Exception as e:
+        except Exception:
             pass  # Continue even if some imports fail
     
     def execute_code(self, code: str) -> Dict[str, Any]:
@@ -194,7 +192,7 @@ class PythonStartTool(KodiakTool):
         except Exception:
             pass  # WebSocket not available in CLI mode
 
-        summary = f"Python Runtime Session Started\n"
+        summary = "Python Runtime Session Started\n"
         summary += "=" * 35 + "\n\n"
         summary += f"Session ID: {session_id}\n"
         summary += f"Session Name: {session_name}\n"
@@ -425,7 +423,7 @@ class PythonExecuteTool(KodiakTool):
 
     def _generate_execution_summary(self, code: str, result: Dict[str, Any], analysis: Dict[str, Any]) -> str:
         """Generate human-readable summary of Python execution"""
-        summary = f"Python Code Execution\n"
+        summary = "Python Code Execution\n"
         summary += "=" * 25 + "\n\n"
         
         summary += f"Code Type: {analysis.get('code_type', 'Unknown')}\n"
@@ -624,7 +622,7 @@ class PythonStopTool(KodiakTool):
         summary += f"Session Duration: {duration} minutes\n"
         summary += f"Code Executions: {len(session.execution_history)}\n"
         summary += f"Global Variables: {len(session.globals_dict)}\n"
-        summary += f"Session data preserved for analysis.\n"
+        summary += "Session data preserved for analysis.\n"
         
         return ToolResult(
             success=True,

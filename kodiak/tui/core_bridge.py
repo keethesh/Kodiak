@@ -7,25 +7,22 @@ It handles database initialization, runtime integration, and event conversion.
 
 import asyncio
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 from uuid import UUID
 from loguru import logger
 
 from kodiak.database.engine import init_db, get_session
 from kodiak.database.crud import project as crud_project, scan_job as crud_scan
-from kodiak.database.models import Project, ScanJob, Finding, Node
+from kodiak.database.models import Project, ScanJob
 from kodiak.core.interface import CoreInterface
-from kodiak.core.shared_store import SharedScanStore
 from kodiak.core.config import settings
 from kodiak.core.error_handling import (
-    ErrorHandler, DatabaseError, KodiakError, ErrorCategory, ErrorSeverity,
-    handle_errors
+    ErrorHandler, DatabaseError, ErrorCategory, handle_errors
 )
 from kodiak.api.events import event_manager as core_event_manager
 
 from kodiak.tui.state import app_state, AgentStatus, ScanStatus
 from kodiak.tui.events import (
-    AgentStatusChanged, AssetDiscovered, FindingCreated, ScanStatusChanged,
+    FindingCreated, ScanStatusChanged,
     ToolStarted, ToolCompleted, AgentThinking, LogMessage, ErrorOccurred
 )
 
@@ -225,7 +222,7 @@ class CoreBridge:
             logger.info("Initializing database...")
             await init_db()
             logger.info("Database initialized successfully")
-        except Exception as e:
+        except Exception:
             # Let the decorator handle the error
             raise
     

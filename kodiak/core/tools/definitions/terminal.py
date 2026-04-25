@@ -6,12 +6,11 @@ and custom security testing workflows.
 """
 
 import asyncio
-import json
 import re
 import shlex
 import time
 import uuid
-from typing import Dict, Any, List, Optional, AsyncGenerator
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
 from kodiak.core.tools.base import KodiakTool, ToolResult
@@ -228,7 +227,7 @@ class TerminalStartTool(KodiakTool):
             except Exception:
                 pass  # WebSocket not available in CLI mode
             
-            summary = f"Terminal session started successfully\n"
+            summary = "Terminal session started successfully\n"
             summary += f"Session ID: {session_id}\n"
             summary += f"Shell: {shell_type}\n"
             summary += f"Working Directory: {working_directory}\n"
@@ -628,7 +627,7 @@ class TerminalExecuteTool(KodiakTool):
 
     def _generate_execution_summary(self, command: str, result, analysis: Dict[str, Any]) -> str:
         """Generate human-readable summary of command execution"""
-        summary = f"Terminal Command Execution\n"
+        summary = "Terminal Command Execution\n"
         summary += "=" * 30 + "\n\n"
         
         summary += f"Command: {command}\n"
@@ -822,7 +821,7 @@ class TerminalStopTool(KodiakTool):
         summary += f"Commands Executed: {len(session.history)}\n"
         summary += f"Final Working Directory: {session.working_directory}\n"
         summary += f"Environment Variables: {len(session.environment)}\n"
-        summary += f"Session data preserved for analysis.\n"
+        summary += "Session data preserved for analysis.\n"
         
         return ToolResult(
             success=True,

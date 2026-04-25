@@ -1,6 +1,5 @@
 import asyncio
 import os
-import shutil
 from abc import ABC, abstractmethod
 from typing import AsyncGenerator
 
@@ -8,7 +7,6 @@ from loguru import logger
 from pydantic import BaseModel
 
 # Import settings for Docker config if needed
-from kodiak.core.config import settings
 
 
 class CommandResult(BaseModel):

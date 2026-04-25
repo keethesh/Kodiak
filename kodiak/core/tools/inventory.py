@@ -1,6 +1,7 @@
 from typing import Dict, Optional
 
 from kodiak.core.tools.base import KodiakTool
+from kodiak.core.tools.registry import get_available_tools as _get_available_tools
 
 
 class ToolInventory:
@@ -115,7 +116,6 @@ def get_legacy_inventory() -> ToolInventory:
 inventory = get_legacy_inventory()
 # Derived from the single source of truth in registry.py.
 # Covers Core + Extended tools (not Utility — those are implicit Kali builtins).
-from kodiak.core.tools.registry import get_available_tools as _get_available_tools
 AVAILABLE_TOOLS = _get_available_tools()
 
 

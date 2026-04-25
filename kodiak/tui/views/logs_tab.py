@@ -2,12 +2,10 @@
 Logs & Execution Tab — Single-agent status, execution log, tool table, engagement notes.
 """
 
-from typing import Any, Optional
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.widgets import DataTable, RichLog, Static
-from loguru import logger
 
 from kodiak.tui.state import app_state, AgentStatus
 

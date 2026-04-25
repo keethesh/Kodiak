@@ -7,6 +7,7 @@ import sys
 import asyncio
 import subprocess
 import shlex
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -40,22 +41,9 @@ HAS_DATABASE = True
 HAS_BROWSER = True
 HAS_API = True
 
-try:
-    import sqlalchemy
-    import sqlmodel
-except ImportError:
-    HAS_DATABASE = False
-
-try:
-    import playwright
-except ImportError:
-    HAS_BROWSER = False
-
-try:
-    import uvicorn
-    import fastapi
-except ImportError:
-    HAS_API = False
+HAS_DATABASE = find_spec("sqlalchemy") is not None and find_spec("sqlmodel") is not None
+HAS_BROWSER = find_spec("playwright") is not None
+HAS_API = find_spec("uvicorn") is not None and find_spec("fastapi") is not None
 
 
 def check_docker_available() -> bool:
@@ -201,6 +189,7 @@ def scan(
         console.print(f"👤 [bold]Architecture:[/bold] {architecture_label}")
         console.print(f"📝 [bold]Report:[/bold] format={report_format} path={report_path or settings.report_output_path}")
         console.print("")
+        max_iterations = settings.planner_max_cycles
         
         interface = CoreInterface()
         run_id = await interface.start_scan(
@@ -605,6 +594,42 @@ def scan(
         raise click.exceptions.Exit(exit_code)
 
 
+@main.command(name="config")
+@click.option("--advanced", is_flag=True, help="Reserved for future advanced configuration options")
+@click.pass_context
+def configure(ctx, advanced: bool):
+    """Launch the interactive configuration wizard."""
+    try:
+        from kodiak.tui.config_wizard import run_config_wizard
+    except Exception as e:
+        console.print(f"[red]Failed to load configuration wizard: {e}[/red]")
+        raise click.exceptions.Exit(1)
+
+    if advanced:
+        console.print("[dim]Advanced configuration currently uses the same guided wizard.[/dim]")
+
+    result = run_config_wizard()
+    if result and result.get("launch_tui"):
+        ctx.invoke(tui)
+
+
+@main.command(name="init")
+def init_command():
+    """Initialize the Kodiak database."""
+    if not HAS_DATABASE:
+        console.print("[red]Database dependencies not installed! Please install sqlalchemy and sqlmodel.[/red]")
+        raise click.exceptions.Exit(1)
+
+    from kodiak.database.engine import init_db
+
+    try:
+        asyncio.run(init_db())
+        console.print("[green]Database initialized![/green]")
+    except Exception as e:
+        console.print(f"[red]Database initialization failed: {e}[/red]")
+        raise click.exceptions.Exit(1)
+
+
 @main.command()
 @click.option("--reset", is_flag=True, help="Destructive reset: drops all tables and recreates (required for multi-agent kernel schema)")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt for destructive reset")
@@ -616,7 +641,7 @@ def migrate(reset: bool, force: bool):
     
     For non-SQLite databases, this command will fail unless --reset is specified.
     """
-    import inquirer
+    from kodiak.core.config import settings
     
     if not reset:
         console.print("[yellow]⚠️  The multi-agent kernel requires a fresh schema.[/yellow]")
@@ -626,13 +651,7 @@ def migrate(reset: bool, force: bool):
         return
 
     if not force and settings.is_sqlite:
-        questions = [
-            inquirer.Confirm("destructive", 
-                message="⚠️  This will DELETE all existing data. Continue?",
-                default=False)
-        ]
-        answers = inquirer.prompt(questions)
-        if not answers or not answers.get("destructive"):
+        if not click.confirm("This will DELETE all existing SQLite data. Continue?", default=False):
             console.print("[yellow]Cancelled.[/yellow]")
             return
 

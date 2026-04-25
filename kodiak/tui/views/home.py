@@ -6,16 +6,14 @@ Implements keyboard shortcuts for navigation and project management.
 """
 
 from typing import Optional, List
-from datetime import datetime
 from textual.screen import Screen
 from textual.app import ComposeResult
 from textual.widgets import Header, Footer, Static, DataTable, Button
 from textual.containers import Vertical, Horizontal, Container
 from textual.binding import Binding
 from textual.message import Message
-from loguru import logger
 
-from kodiak.tui.state import app_state, ProjectState, ScanState, ScanStatus
+from kodiak.tui.state import app_state, ScanState, ScanStatus
 
 
 class ProjectSelected(Message):
@@ -227,7 +225,6 @@ class HomeScreen(Screen):
             latest_scan = scans[-1] if scans else None
             
             status = "No scans"
-            status_class = ""
             finding_count = 0
             
             if latest_scan:
@@ -240,16 +237,12 @@ class HomeScreen(Screen):
                     status = f"🔄 {status}"
                     if pending_jobs:
                         status += f" ({pending_jobs}q)"
-                    status_class = "status-running"
                 elif latest_scan.status == ScanStatus.COMPLETED:
                     status = f"✅ {status}"
-                    status_class = "status-completed"
                 elif latest_scan.status == ScanStatus.FAILED:
                     status = f"❌ {status}"
-                    status_class = "status-failed"
                 elif latest_scan.status == ScanStatus.PAUSED:
                     status = f"⏸️ {status}"
-                    status_class = "status-paused"
             
             # Format updated time
             updated = project.updated_at.strftime("%Y-%m-%d %H:%M")

@@ -5,8 +5,7 @@ Config Tab — System info, health status, scan configuration overview.
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Button, DataTable, Label, Static
-from loguru import logger
+from textual.widgets import Button, Static
 
 from kodiak.core.config import settings
 

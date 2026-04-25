@@ -122,7 +122,7 @@ class TestErrorHandlingProperties:
         
         # Verify error handling
         assert isinstance(result, ToolResult)
-        assert result.success == False
+        assert result.success is False
         assert result.output == ""
         assert result.error == "Connection timeout after 30 seconds"
         assert result.data == {}
@@ -161,7 +161,7 @@ class TestErrorHandlingProperties:
         
         # Verify error handling
         assert isinstance(result, ToolResult)
-        assert result.success == False
+        assert result.success is False
         assert result.output == ""
         assert result.error == "Invalid target format: expected IP address"
         assert result.data == {}
@@ -192,7 +192,7 @@ class TestErrorHandlingProperties:
         
         # Verify error handling
         assert isinstance(result, ToolResult)
-        assert result.success == False
+        assert result.success is False
         assert result.output == ""
         assert result.error == "Access denied: requires root privileges"
         assert result.data == {}
@@ -220,7 +220,7 @@ class TestErrorHandlingProperties:
         
         # Verify error handling
         assert isinstance(result, ToolResult)
-        assert result.success == False
+        assert result.success is False
         assert result.output == ""
         assert result.error == "No event manager error"
         assert result.data == {}
@@ -256,7 +256,7 @@ class TestErrorHandlingProperties:
             
             # Verify consistent error handling
             assert isinstance(result, ToolResult)
-            assert result.success == False
+            assert result.success is False
             assert result.output == ""
             assert result.error == expected_error
             assert result.data == {}
@@ -288,7 +288,7 @@ class TestErrorHandlingProperties:
         
         # Verify error handling
         assert isinstance(result, ToolResult)
-        assert result.success == False
+        assert result.success is False
         assert result.error == "Context preservation test"
         
         # Verify events were emitted with correct context
@@ -333,7 +333,7 @@ class TestErrorHandlingProperties:
         # Verify all results have consistent error handling
         for i, (result, (tool, expected_error)) in enumerate(zip(results, tools_and_errors)):
             assert isinstance(result, ToolResult)
-            assert result.success == False
+            assert result.success is False
             assert result.output == ""
             assert result.error == expected_error
             assert result.data == {}

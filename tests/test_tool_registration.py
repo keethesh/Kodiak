@@ -5,9 +5,6 @@ Feature: core-integration-fixes, Property 4: Tool registration validation
 """
 
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
-from abc import ABC
 
 from kodiak.core.tools.base import BaseTool, ToolResult
 from kodiak.core.tools.inventory import ToolInventory
@@ -137,7 +134,7 @@ class TestToolRegistrationProperties:
             # Test that the tool can be executed without errors
             result = await valid_tool._execute(target="test")
             assert isinstance(result, ToolResult)
-            assert result.success == True
+            assert result.success is True
             
             # Register the tool
             inventory.register(valid_tool)
@@ -212,7 +209,7 @@ class TestToolRegistrationProperties:
             # Verify that execution fails gracefully
             result = await abstract_tool.execute(target="test")
             assert isinstance(result, ToolResult)
-            assert result.success == False
+            assert result.success is False
             assert "not implemented" in result.error.lower()
         finally:
             self.cleanup_inventory()
@@ -242,7 +239,7 @@ class TestToolRegistrationProperties:
             # Verify that execution fails gracefully through the public interface
             result = await broken_tool.execute(target="test")
             assert isinstance(result, ToolResult)
-            assert result.success == False
+            assert result.success is False
             assert "This tool is broken" in result.error
         finally:
             self.cleanup_inventory()
@@ -281,13 +278,13 @@ class TestToolRegistrationProperties:
             
             # Verify results
             valid_result = next(r for name, r in results if name == "valid_tool")
-            assert valid_result.success == True
+            assert valid_result.success is True
             
             abstract_result = next(r for name, r in results if name == "abstract_tool")
-            assert abstract_result.success == False
+            assert abstract_result.success is False
             
             broken_result = next(r for name, r in results if name == "broken_tool")
-            assert broken_result.success == False
+            assert broken_result.success is False
         finally:
             self.cleanup_inventory()
 
@@ -400,7 +397,7 @@ class TestToolRegistrationProperties:
                 
                 # Verify result structure
                 assert isinstance(result, ToolResult)
-                assert result.success == True
+                assert result.success is True
                 assert isinstance(result.output, str)
                 assert isinstance(result.data, dict)
                 

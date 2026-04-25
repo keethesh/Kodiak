@@ -8,7 +8,7 @@ this manager is a no-op that silently drops WebSocket calls.
 For actual event broadcasting, use kodiak.api.events.EventManager instead.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from loguru import logger
 
 

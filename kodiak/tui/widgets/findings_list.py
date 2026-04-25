@@ -5,10 +5,10 @@ A widget that displays findings grouped by severity with summary counts.
 Supports filtering and color-coding by severity.
 """
 
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional
 from textual.widget import Widget
 from textual.widgets import ListView, ListItem, Static, Collapsible
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.app import ComposeResult
 from textual.message import Message

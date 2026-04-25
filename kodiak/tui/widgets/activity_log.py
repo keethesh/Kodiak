@@ -13,7 +13,6 @@ from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.app import ComposeResult
 from rich.text import Text
-from rich.console import Console
 
 from kodiak.tui.state import app_state, ScanState
 

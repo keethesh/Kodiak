@@ -6,7 +6,7 @@ Displays error messages and recovery options to the user.
 
 from typing import Dict, Any, Optional
 from textual.app import ComposeResult
-from textual.containers import Container, Vertical, Horizontal
+from textual.containers import Container, Horizontal
 from textual.screen import Screen
 from textual.widgets import Static, Button, Markdown
 from textual.binding import Binding

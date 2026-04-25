@@ -1,10 +1,8 @@
 import re
-import json
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 from kodiak.core.tools.base import KodiakTool, ToolResult
-from kodiak.services.executor import get_executor
 
 
 class NmapArgs(BaseModel):
@@ -242,11 +240,9 @@ class NmapTool(KodiakTool):
                     parsed["os_info"]["os_guesses"].append(os_guess)
         
         # Extract script results (potential vulnerabilities)
-        script_section = False
         current_script = None
         for line in lines:
             if line.startswith("|"):
-                script_section = True
                 if line.startswith("|_"):
                     # Script result
                     script_result = line[2:].strip()
@@ -260,7 +256,6 @@ class NmapTool(KodiakTool):
                     # Script name
                     current_script = line[2:].strip().rstrip(":")
             else:
-                script_section = False
                 current_script = None
         
         return parsed

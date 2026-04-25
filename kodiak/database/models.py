@@ -7,7 +7,7 @@ from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 
 if TYPE_CHECKING:
-    from sqlalchemy.sql.schema import ForeignKey
+    pass
 
 
 # --- Enums & Helpers ---

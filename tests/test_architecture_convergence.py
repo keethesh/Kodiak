@@ -8,12 +8,10 @@ Tests for Phase 1-4 architecture changes:
 
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from unittest.mock import MagicMock
 
 from kodiak.core.tool_availability import (
     ToolAvailability,
-    check_tool_availability,
     filter_available_tools,
     filter_unavailable_tools,
     get_default_tools_to_check,

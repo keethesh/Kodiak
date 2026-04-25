@@ -7,11 +7,10 @@ from typing import List
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import DataTable, Label, ListItem, ListView, Static
-from loguru import logger
+from textual.containers import Container, Horizontal
+from textual.widgets import DataTable, Static
 
-from kodiak.tui.state import app_state, ScanStatus, ProjectState, ScanState
+from kodiak.tui.state import app_state, ScanStatus, ScanState
 
 
 # ── Severity bar helpers ──────────────────────────────────────────────────────
@@ -382,4 +381,4 @@ class DashboardView(Static):
             if scans:
                 app_state.set_current_scan(scans[-1].id)
             self._refresh_all()
-            self.notify(f"Project selected — use 🏠 Dashboard to manage, 🔒 Findings to review", timeout=3)
+            self.notify("Project selected — use 🏠 Dashboard to manage, 🔒 Findings to review", timeout=3)

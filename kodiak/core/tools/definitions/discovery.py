@@ -1,10 +1,8 @@
 import json
-import re
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
 from kodiak.core.tools.base import KodiakTool, ToolResult
-from kodiak.services.executor import get_executor
 
 
 class SubfinderArgs(BaseModel):
@@ -875,7 +873,7 @@ class FfufTool(KodiakTool):
         return results
 
     def _generate_ffuf_summary(self, url: str, wordlist: str, results: List[Dict[str, Any]]) -> str:
-        summary = f"FFUF Directory/File Fuzzing Results\n"
+        summary = "FFUF Directory/File Fuzzing Results\n"
         summary += "=" * 50 + "\n\n"
         summary += f"Target:   {url}\n"
         summary += f"Wordlist: {wordlist}\n"

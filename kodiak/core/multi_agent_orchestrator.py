@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import shlex
 import time
 from typing import Any, Dict, List, Optional
@@ -502,7 +501,6 @@ class MultiAgentOrchestrator:
 
         from kodiak.services.llm import calculate_cost
         planner_model = settings.get_planner_model()
-        analyst_model = settings.get_analyst_model()
         
         # Estimate planner cost (fast model)
         planner_cost = calculate_cost(

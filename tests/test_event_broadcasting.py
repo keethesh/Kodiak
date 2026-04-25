@@ -5,9 +5,7 @@ Feature: core-integration-fixes, Property 2: Event broadcasting completeness
 """
 
 import pytest
-import asyncio
-import time
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 from kodiak.api.events import TUIEventManager
 
@@ -99,7 +97,7 @@ class TestEventBroadcastingProperties:
         assert complete_event.type == "tool_complete"
         assert complete_event.data['tool_name'] == tool_name
         assert complete_event.data['status'] == "completed"
-        assert complete_event.data['success'] == True
+        assert complete_event.data['success'] is True
         assert complete_event.data['output'] == "test output"
 
     @pytest.mark.asyncio
@@ -141,7 +139,7 @@ class TestEventBroadcastingProperties:
         assert failure_call[1]['scan_id'] == scan_id
         assert failure_call[1]['tool_name'] == tool_name
         assert failure_call[1]['status'] == "failed"
-        assert failure_call[1]['data']['success'] == False
+        assert failure_call[1]['data']['success'] is False
         assert failure_call[1]['data']['error'] == error_message
 
     @pytest.mark.asyncio

@@ -79,7 +79,7 @@ class LoadingIndicator(Widget):
         try:
             spinner_widget = self.query_one("#spinner", Static)
             spinner_widget.update("")
-        except:
+        except Exception:
             pass
     
     async def _animate_spinner(self) -> None:
@@ -156,7 +156,7 @@ class ProgressIndicator(Widget):
             
             percentage_widget = self.query_one("#progress-percentage", Static)
             percentage_widget.update(f"{int(progress * 100)}%")
-        except:
+        except Exception:
             pass
     
     def watch_message(self, message: str) -> None:
@@ -164,7 +164,7 @@ class ProgressIndicator(Widget):
         try:
             message_widget = self.query_one("#progress-message", Static)
             message_widget.update(message)
-        except:
+        except Exception:
             pass
     
     def update_progress(self, progress: float, message: str = None) -> None:

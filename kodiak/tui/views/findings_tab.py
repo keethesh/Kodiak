@@ -5,9 +5,8 @@ Findings Tab View — Split-pane: findings list (left) + finding detail (right).
 from typing import Optional, Any
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import DataTable, Label, Static, Button
-from loguru import logger
+from textual.containers import Container, Horizontal
+from textual.widgets import DataTable, Static, Button
 
 from kodiak.tui.state import app_state
 

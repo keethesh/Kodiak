@@ -5,18 +5,16 @@ A widget that displays chat messages between user and agents.
 Shows messages with timestamps and sender identification, supports scrolling.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from datetime import datetime
 from dataclasses import dataclass
 from textual.widget import Widget
 from textual.widgets import RichLog, Static, Input
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.app import ComposeResult
 from textual.message import Message
 from rich.text import Text
-from rich.panel import Panel
-from rich.console import Console
 
 from kodiak.tui.state import app_state, ScanState, AgentState
 

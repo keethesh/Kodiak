@@ -1,6 +1,5 @@
 from typing import Dict, Any
 import asyncio
-import json
 from pydantic import BaseModel, Field
 from kodiak.core.tools.base import KodiakTool, ToolResult
 
@@ -72,7 +71,7 @@ class WebSearchTool(KodiakTool):
                 # Fallback to mock results if web search fails
                 return await self._fallback_mock_search(query, max_results)
             
-        except Exception as e:
+        except Exception:
             # Fallback to mock results on any error
             return await self._fallback_mock_search(query, max_results)
 

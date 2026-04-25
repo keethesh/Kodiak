@@ -8,7 +8,7 @@ Supports selection and navigation.
 from typing import Optional, List, Dict
 from textual.widget import Widget
 from textual.widgets import ListView, ListItem, Static
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.app import ComposeResult
 from textual.message import Message

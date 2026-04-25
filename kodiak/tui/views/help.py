@@ -4,9 +4,9 @@ Help Screen — Modal overlay with keyboard shortcuts reference.
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical
+from textual.containers import Container
 from textual.screen import ModalScreen
-from textual.widgets import Button, Label, Static
+from textual.widgets import Static
 from textual.widgets import Rule
 
 

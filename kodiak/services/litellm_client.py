@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from kodiak.services.base import LLMConfig, LLMProvider, LLMResponse
+from kodiak.services.base import LLMConfig, LLMResponse
 
 
 class LiteLLMClient:

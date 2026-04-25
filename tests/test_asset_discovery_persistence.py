@@ -5,14 +5,11 @@ Feature: core-integration-fixes, Property 7: Asset discovery persistence
 """
 
 import pytest
-import asyncio
 from uuid import uuid4
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
-from typing import Dict, Any, List
+from unittest.mock import MagicMock
 
-from kodiak.database.models import Project, Node, ScanJob
-from kodiak.database.crud import node, project
+from kodiak.database.models import Project, Node
+from kodiak.database.crud import node
 from kodiak.core.error_handling import DatabaseError
 
 
@@ -177,7 +174,7 @@ class TestAssetDiscoveryPersistenceProperties:
             
             # Verify the node was added to the session
             assert asset in session.added_objects
-            assert session.committed == True
+            assert session.committed is True
             
             # Verify foreign key relationship is maintained
             assert hasattr(result, 'project_id')
@@ -453,11 +450,11 @@ class TestAssetDiscoveryPersistenceProperties:
             await node.create(failing_session, test_asset)
         
         # Verify rollback was called to maintain data integrity
-        assert failing_session.rolled_back == True
+        assert failing_session.rolled_back is True
         
         # Verify the asset was added but not committed
         assert test_asset in failing_session.added_objects
-        assert failing_session.committed == False
+        assert failing_session.committed is False
 
     @pytest.mark.asyncio
     async def test_asset_discovery_persistence_concurrent_discovery(self):
@@ -493,7 +490,7 @@ class TestAssetDiscoveryPersistenceProperties:
                 assert isinstance(result, Node)
                 assert result.project_id == test_project.id
                 assert result.properties['agent_id'] == agent_id
-                assert result.properties['concurrent_discovery'] == True
+                assert result.properties['concurrent_discovery'] is True
         
         # Verify all concurrent discoveries are persisted
         assert len(concurrent_results) == len(discovered_assets)

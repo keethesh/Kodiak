@@ -4,7 +4,7 @@ TUI State Management
 This module provides reactive state management for the Kodiak TUI.
 """
 
-from typing import Dict, List, Optional, Any, Callable, Set
+from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 import asyncio

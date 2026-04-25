@@ -1,12 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import logging
-import threading
-from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any
 
-# Ensure we have playwright installed
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+if TYPE_CHECKING:
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class BrowserInstance:
     """
     def __init__(self) -> None:
         self.is_running = True
-        self._execution_lock = asyncio.Lock() # Changed to asyncio Lock for pure async
+        self._execution_lock = asyncio.Lock()  # Changed to asyncio Lock for pure async
 
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
@@ -49,7 +49,15 @@ class BrowserInstance:
     async def launch(self, url: str | None = None) -> dict[str, Any]:
         async with self._execution_lock:
             if self.browser:
-                 return await self._get_page_state()
+                return await self._get_page_state()
+
+            try:
+                from playwright.async_api import async_playwright
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Playwright browser support is not installed. "
+                    "Install Kodiak with the 'browser' or 'full' extra."
+                ) from exc
             
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch(
@@ -74,7 +82,8 @@ class BrowserInstance:
     async def goto(self, url: str, tab_id: str | None = None) -> dict[str, Any]:
         async with self._execution_lock:
             tab_id = tab_id or self.current_page_id
-            if not tab_id or tab_id not in self.pages: raise ValueError("Tab not found")
+            if not tab_id or tab_id not in self.pages:
+                raise ValueError("Tab not found")
             
             page = self.pages[tab_id]
             try:
@@ -85,7 +94,8 @@ class BrowserInstance:
 
     async def _get_page_state(self, tab_id: str | None = None) -> dict[str, Any]:
         tab_id = tab_id or self.current_page_id
-        if not tab_id or tab_id not in self.pages: return {"error": "No page"}
+        if not tab_id or tab_id not in self.pages:
+            return {"error": "No page"}
         
         page = self.pages[tab_id]
         
@@ -93,7 +103,7 @@ class BrowserInstance:
         try:
             screenshot_bytes = await page.screenshot(type="png")
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-        except:
+        except Exception:
             screenshot_b64 = ""
             
         return {
@@ -105,9 +115,12 @@ class BrowserInstance:
         }
         
     async def close(self):
-        if self.context: await self.context.close()
-        if self.browser: await self.browser.close()
-        if self.playwright: await self.playwright.stop()
+        if self.context:
+            await self.context.close()
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
         
 # Global Singleton
 browser_service = BrowserInstance()

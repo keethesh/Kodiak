@@ -20,10 +20,9 @@ import os
 from datetime import datetime
 from textual.screen import Screen
 from textual.app import ComposeResult
-from textual.widgets import Header, Footer, Static, Button, Input, Select
-from textual.containers import Vertical, Horizontal, Container
+from textual.widgets import Header, Footer, Static, Button
+from textual.containers import Horizontal, Container
 from textual.binding import Binding
-from loguru import logger
 
 from kodiak.tui.state import app_state
 from kodiak.tui.widgets import FindingsList
@@ -366,11 +365,6 @@ class FindingsScreen(Screen):
     def action_export_findings(self) -> None:
         """Export findings (default to JSON)"""
         self._export_json()
-    
-    def action_show_help(self) -> None:
-        """Show help overlay"""
-        from kodiak.tui.views.help import HelpScreen
-        self.app.push_screen(HelpScreen())
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle export button presses"""

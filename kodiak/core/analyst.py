@@ -326,7 +326,6 @@ class AnalystAgent:
         # Call LLM
         try:
             model = settings.get_analyst_model()
-            api_key = settings.get_resolved_api_key()
 
             response = await self._llm.generate(
                 model=model,

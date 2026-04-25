@@ -5,7 +5,6 @@ Feature: core-integration-fixes, Property 1: Tool execution returns structured r
 """
 
 import pytest
-import asyncio
 from typing import Dict, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -114,7 +113,7 @@ class TestToolExecutionProperties:
         assert hasattr(result, 'error')
         
         # Verify successful execution
-        assert result.success == True
+        assert result.success is True
         assert result.output == "Mock tool executed on 192.168.1.1"
         assert result.data['target'] == '192.168.1.1'
         assert result.error is None
@@ -145,7 +144,7 @@ class TestToolExecutionProperties:
         
         # Verify result structure
         assert isinstance(result, ToolResult)
-        assert result.success == True
+        assert result.success is True
         assert result.output == "Mock tool executed on example.com"
         assert result.data['target'] == 'example.com'
         assert result.error is None
@@ -175,7 +174,7 @@ class TestToolExecutionProperties:
         
         # Verify result structure
         assert isinstance(result, ToolResult)
-        assert result.success == True
+        assert result.success is True
         assert result.output == "dict result"
         # The data should contain the converted dict result
         assert result.data == {
@@ -213,7 +212,7 @@ class TestToolExecutionProperties:
         
         # Verify error result structure
         assert isinstance(result, ToolResult)
-        assert result.success == False
+        assert result.success is False
         assert result.output == ""
         assert result.error == "Mock tool failure"
         
@@ -247,7 +246,7 @@ class TestToolExecutionProperties:
         # Verify all results have consistent structure
         for i, result in enumerate(results):
             assert isinstance(result, ToolResult)
-            assert result.success == True
+            assert result.success is True
             assert result.output == f"Mock tool executed on target_{i}"
             assert result.data['target'] == f'target_{i}'
             assert result.error is None
@@ -282,7 +281,7 @@ class TestToolExecutionProperties:
             
             # Verify result structure
             assert isinstance(result, ToolResult)
-            assert result.success == True
+            assert result.success is True
             assert isinstance(result.output, str)
             assert isinstance(result.data, dict)
             assert result.error is None

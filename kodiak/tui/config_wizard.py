@@ -10,17 +10,14 @@ from typing import Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, Horizontal
+from textual.containers import Container, Horizontal
 from textual.screen import Screen
 from textual.widgets import (
-    Header, Footer, Static, Button, Input, 
-    RadioButton, RadioSet, Label, ProgressBar, LoadingIndicator
+    Static, Button, Input, RadioButton, RadioSet, LoadingIndicator
 )
 import asyncio
 from kodiak.database.engine import init_db
 from loguru import logger
-from rich.panel import Panel
-from rich.text import Text
 
 
 # OpenRouter model configuration for the current MVP runtime.
@@ -295,6 +292,9 @@ class DatabaseScreen(Screen):
             self.app.save_configuration()
             self.app.push_screen(SuccessScreen())
 
+
+class SuccessScreen(Screen):
+    """Final screen for initialization and launch actions."""
 
     async def _do_initialize(self) -> None:
         """Background worker for initialization"""

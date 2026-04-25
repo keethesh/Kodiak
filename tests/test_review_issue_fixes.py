@@ -154,6 +154,32 @@ def test_kernel_result_exposes_extended_token_accounting_defaults():
     assert result.total_cached_tokens == 0
 
 
+def test_cli_exposes_documented_setup_commands():
+    from kodiak.cli import main
+
+    assert "config" in main.commands
+    assert "init" in main.commands
+
+
+def test_migrate_without_reset_returns_guidance():
+    from click.testing import CliRunner
+
+    from kodiak.cli import main
+
+    result = CliRunner().invoke(main, ["migrate"])
+
+    assert result.exit_code == 0
+    assert "kodiak migrate --reset" in result.output
+
+
+def test_config_wizard_database_and_success_screens_are_separate():
+    from kodiak.tui.config_wizard import DatabaseScreen, SuccessScreen
+
+    assert "_do_initialize" not in DatabaseScreen.__dict__
+    assert "_do_initialize" in SuccessScreen.__dict__
+    assert DatabaseScreen.compose is not SuccessScreen.compose
+
+
 @pytest.mark.asyncio
 async def test_litellm_client_awaits_async_completion():
     class FakeLiteLLM:
