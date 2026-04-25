@@ -57,6 +57,7 @@ class ScanRunner:
         self.event_manager = event_manager
         self._cancel_requested = False
         self._manager_task: Optional[asyncio.Task] = None
+        self._orchestrator = None
         self._finding_event_count = 0
         self._finding_keys: set[str] = set()
         self._finding_counts_by_severity: Dict[str, int] = {}
@@ -84,7 +85,8 @@ class ScanRunner:
         if not project_name:
             project_name = f"Scan_{target}_{start_time.strftime('%Y%m%d_%H%M%S')}"
         self._cancel_requested = False
-        self._manager_task = None
+        self._manager_task = asyncio.current_task()
+        self._orchestrator = None
         self._finding_event_count = 0
         self._finding_keys = set()
         self._finding_counts_by_severity = {}
@@ -160,6 +162,7 @@ class ScanRunner:
                     num_workers=effective_workers,
                     max_scan_duration=float(settings.multi_agent_max_duration),
                 )
+                self._orchestrator = orchestrator
                 logger.info(f"Starting Multi-Agent Pipeline with {effective_workers} workers")
                 kernel_result = await orchestrator.run(
                     target=target,
@@ -275,6 +278,9 @@ class ScanRunner:
                         self.event_manager.unsubscribe_scan(scan_id_str, _capture_scan_event)
                     except Exception as unsubscribe_error:
                         logger.warning(f"Failed to unsubscribe finding capture: {unsubscribe_error}")
+                self._orchestrator = None
+                if self._manager_task is asyncio.current_task():
+                    self._manager_task = None
     
     async def _get_or_create_project(
         self,
@@ -338,7 +344,10 @@ class ScanRunner:
         """Cancel the scan"""
         logger.info("🛑 Scan cancellation requested")
         self._cancel_requested = True
-        if self._manager_task and not self._manager_task.done():
+        if self._orchestrator is not None:
+            await self._orchestrator.shutdown()
+        current_task = asyncio.current_task()
+        if self._manager_task and self._manager_task is not current_task and not self._manager_task.done():
             self._manager_task.cancel()
             await asyncio.gather(self._manager_task, return_exceptions=True)
 

@@ -343,11 +343,9 @@ class SharedScanStore:
                 auto_commit=False,
             )
             await session.commit()
-            refresh_stmt = select(WorkUnit).where(WorkUnit.id == claimed_id)
-            refreshed = await session.execute(refresh_stmt)
-            unit = refreshed.scalar_one_or_none()
-            if unit is None:
-                return None
+            unit.status = WorkUnitStatus.CLAIMED
+            unit.claimed_by = worker_id
+            unit.started_at = claim_started_at
             return unit
         except SQLAlchemyError as e:
             await session.rollback()

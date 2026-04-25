@@ -181,6 +181,42 @@ def test_config_wizard_database_and_success_screens_are_separate():
 
 
 @pytest.mark.asyncio
+async def test_core_interface_stop_scan_calls_runner_cancel_before_task_cancel(monkeypatch):
+    from kodiak.core.interface import CoreInterface, _RunState
+
+    called = {"cancel": 0}
+
+    async def fake_cancel():
+        called["cancel"] += 1
+
+    async def sleeper():
+        await asyncio.sleep(10)
+
+    import asyncio
+
+    interface = CoreInterface()
+    monkeypatch.setattr(interface._runner, "cancel", fake_cancel)
+    task = asyncio.create_task(sleeper())
+    state = _RunState(
+        run_id="run-1",
+        target="https://example.com",
+        instructions="",
+        model=None,
+        worker_count=None,
+        report_format="json+md",
+        report_path=None,
+        task=task,
+    )
+    interface._runs["run-1"] = state
+
+    stopped = await interface.stop_scan("run-1")
+
+    assert stopped is True
+    assert called["cancel"] == 1
+    assert task.cancelled() is True
+
+
+@pytest.mark.asyncio
 async def test_litellm_client_awaits_async_completion():
     class FakeLiteLLM:
         async def acompletion(self, **kwargs):

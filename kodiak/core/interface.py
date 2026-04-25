@@ -147,6 +147,7 @@ class CoreInterface:
         state = self._runs.get(run_id)
         if not state or not state.task:
             return False
+        await self._runner.cancel()
         state.task.cancel()
         try:
             await state.task
@@ -200,6 +201,7 @@ class CoreInterface:
                 settings.llm_model = original_model
         except asyncio.CancelledError:
             state.error = "Scan cancelled"
+            await self._runner.cancel()
             await self._push_event(state.run_id, "scan_failed", {"error": state.error, "status": "failed"})
             raise
         except Exception as e:

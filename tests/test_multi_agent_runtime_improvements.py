@@ -155,6 +155,36 @@ async def test_planner_updates_http_origins_and_parameterized_urls_from_complete
 
 
 @pytest.mark.asyncio
+async def test_planner_strips_ansi_sequences_before_extracting_parameterized_urls(monkeypatch):
+    store = SimpleNamespace(scan_id=uuid4())
+    planner = PlannerAgent(store=store, target="https://example.com")
+
+    noisy_unit = make_workunit(
+        scan_id=store.scan_id,
+        project_id=uuid4(),
+        technique="httpx_primary",
+        target="https://app.example.com",
+        status=WorkUnitStatus.COMPLETED,
+        command_template="httpx ...",
+        result_stdout="https://app.example.com/search?q=test\x1b[0m",
+        result_stderr="",
+    )
+
+    class FakeSession:
+        async def execute(self, statement):
+            return _FakeResult([noisy_unit])
+
+    async def fake_get_session():
+        yield FakeSession()
+
+    monkeypatch.setattr("kodiak.core.planner.get_session", fake_get_session)
+
+    await planner._update_state_from_results()
+
+    assert planner._parameterized_urls == ["https://app.example.com/search?q=test"]
+
+
+@pytest.mark.asyncio
 async def test_analyst_waits_for_planner_done_before_completing(monkeypatch):
     class IdleStore:
         scan_id = uuid4()
@@ -226,18 +256,6 @@ async def test_claim_work_unit_serializes_same_scope_heavy_tool_families():
         command_template="nuclei -u https://b.example.com -tags config",
         status=WorkUnitStatus.PENDING,
     )
-    claimed_allowed = make_workunit(
-        id=allowed.id,
-        scan_id=scan_id,
-        project_id=project_id,
-        technique="nuclei_config",
-        target="https://b.example.com",
-        scope_key="scope-b",
-        command_template="nuclei -u https://b.example.com -tags config",
-        status=WorkUnitStatus.CLAIMED,
-        claimed_by="worker-1",
-    )
-
     class FakeClaimResult:
         def __init__(self, rowcount):
             self.rowcount = rowcount
@@ -255,9 +273,6 @@ async def test_claim_work_unit_serializes_same_scope_heavy_tool_families():
                 return _FakeResult([blocked, allowed])
             if text.startswith("UPDATE workunit"):
                 return FakeClaimResult(1)
-            if "WHERE workunit.id =" in text:
-                self.refreshed = True
-                return _FakeResult([claimed_allowed])
             raise AssertionError(f"Unexpected statement: {text}")
 
         def add(self, obj):
@@ -276,10 +291,11 @@ async def test_claim_work_unit_serializes_same_scope_heavy_tool_families():
 
     claimed = await store.claim_work_unit(session, "worker-1")
 
-    assert claimed is claimed_allowed
+    assert claimed is allowed
     assert claimed.claimed_by == "worker-1"
+    assert claimed.status == WorkUnitStatus.CLAIMED
     assert session.committed is True
-    assert session.refreshed is True
+    assert session.refreshed is False
 
 
 @pytest.mark.asyncio

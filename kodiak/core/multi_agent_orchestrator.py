@@ -466,6 +466,9 @@ class MultiAgentOrchestrator:
                 except Exception:
                     pass
 
+        if self._running:
+            await self.shutdown()
+
         total_executed = sum(ws.get("executed", 0) for ws in worker_stats)
         total_failed = sum(ws.get("failed", 0) for ws in worker_stats)
 

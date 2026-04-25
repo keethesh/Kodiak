@@ -43,6 +43,9 @@ from kodiak.database.models import (
     WorkUnitStatus,
 )
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
 
 class PlannerAgent:
     """
@@ -624,7 +627,7 @@ class PlannerAgent:
     def _extract_live_hosts_from_httpx(self, stdout: str) -> None:
         """Extract live origins and hostnames from httpx output."""
         for line in stdout.splitlines():
-            line = line.strip()
+            line = self._clean_text(line).strip()
             if not line:
                 continue
             match = re.search(r'https?://[^\s\[\]]+', line)
@@ -657,9 +660,13 @@ class PlannerAgent:
     def _extract_parameterized_urls(self, output: str) -> None:
         """Persist discovered parameterized URLs in stable order."""
         urls: List[str] = []
-        for match in re.finditer(r'https?://[^\s"\'<>]+', output):
-            url = match.group(0).rstrip(").,;")
-            parsed = urlparse(url)
+        cleaned_output = self._clean_text(output)
+        for match in re.finditer(r'https?://[^\s"\'<>]+', cleaned_output):
+            url = self._clean_text(match.group(0)).rstrip(").,;")
+            try:
+                parsed = urlparse(url)
+            except ValueError:
+                continue
             if parsed.query and "=" in parsed.query:
                 urls.append(url)
 
@@ -1032,3 +1039,10 @@ class PlannerAgent:
         if any(token in sanitized for token in forbidden_tokens):
             raise ValueError(f"unsafe characters in {field_name}")
         return sanitized
+
+    @staticmethod
+    def _clean_text(value: str) -> str:
+        if not value:
+            return value
+        without_ansi = _ANSI_ESCAPE_RE.sub("", value)
+        return _CONTROL_CHAR_RE.sub("", without_ansi)
