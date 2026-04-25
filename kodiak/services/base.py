@@ -58,7 +58,7 @@ class LLMConfig:
         from kodiak.core.config import settings as kodiak_settings
         return cls(
             provider=kodiak_settings.llm_provider,
-            api_key=kodiak_settings.openrouter_api_key,
+            api_key=kodiak_settings.get_resolved_api_key(),
             base_url=kodiak_settings.openrouter_base_url,
             model=kodiak_settings.llm_model,
             temperature=kodiak_settings.llm_temperature,

@@ -224,7 +224,7 @@ async def test_litellm_client_awaits_async_completion():
 
         async def acompletion(self, **kwargs):
             self.kwargs = kwargs
-            assert kwargs["model"] == "test/model"
+            assert kwargs["model"] == "openrouter/test/model"
             return SimpleNamespace(
                 choices=[
                     SimpleNamespace(
@@ -255,6 +255,45 @@ async def test_litellm_client_awaits_async_completion():
         "HTTP-Referer": "https://kodiak.security",
         "X-Title": "Kodiak Security Scanner",
     }
+    assert response.model == "openrouter/test/model"
+
+
+@pytest.mark.asyncio
+async def test_litellm_client_keeps_prefixed_openrouter_model():
+    class FakeLiteLLM:
+        def __init__(self):
+            self.kwargs = None
+
+        async def acompletion(self, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="ok", tool_calls=[]),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+                _response_cost=0.0,
+            )
+
+    client = LiteLLMClient.__new__(LiteLLMClient)
+    client.config = LLMConfig(
+        provider="openrouter",
+        api_key="test-key",
+        base_url="https://openrouter.ai/api/v1",
+    )
+    fake_litellm = FakeLiteLLM()
+    client._litellm = fake_litellm
+
+    response = await client.generate(
+        model="openrouter/minimax/minimax-m2.7",
+        system_prompt="system",
+        messages=[{"role": "user", "content": "analyze"}],
+    )
+
+    assert fake_litellm.kwargs["model"] == "openrouter/minimax/minimax-m2.7"
+    assert response.model == "openrouter/minimax/minimax-m2.7"
 
 
 def test_worker_docker_network_args_require_explicit_mode():
@@ -265,3 +304,42 @@ def test_worker_docker_network_args_require_explicit_mode():
     assert _docker_network_args("host") == ["--network", "host"]
     assert _docker_network_args("bridge") == ["--network", "bridge"]
     assert _docker_network_args("invalid mode") == []
+
+
+def test_llm_config_from_settings_uses_resolved_api_key(monkeypatch):
+    from kodiak.services.base import LLMConfig
+
+    class FakeSettings:
+        llm_provider = "openrouter"
+        openrouter_base_url = "https://openrouter.ai/api/v1"
+        llm_model = "deepseek/deepseek-v4-flash"
+        llm_temperature = 0.2
+        llm_max_tokens = 2048
+
+        def get_resolved_api_key(self):
+            return "resolved-key"
+
+    monkeypatch.setattr("kodiak.core.config.settings", FakeSettings())
+
+    config = LLMConfig.from_settings(None)
+
+    assert config.api_key == "resolved-key"
+    assert config.base_url == "https://openrouter.ai/api/v1"
+
+
+def test_litellm_client_defaults_to_settings_config(monkeypatch):
+    from kodiak.services.base import LLMConfig
+
+    resolved_config = LLMConfig(
+        provider="openrouter",
+        api_key="resolved-key",
+        base_url="https://openrouter.ai/api/v1",
+        model="deepseek/deepseek-v4-flash",
+    )
+
+    monkeypatch.setattr(LLMConfig, "from_settings", classmethod(lambda cls, _settings: resolved_config))
+    monkeypatch.setattr(LiteLLMClient, "_ensure_library_available", lambda self: None)
+
+    client = LiteLLMClient()
+
+    assert client.config is resolved_config

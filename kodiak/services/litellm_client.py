@@ -17,7 +17,7 @@ class LiteLLMClient:
     """LiteLLM-based LLM client supporting OpenRouter and other providers."""
     
     def __init__(self, config: Optional[LLMConfig] = None):
-        self.config = config or LLMConfig()
+        self.config = config or LLMConfig.from_settings(None)
         self._ensure_library_available()
     
     def _ensure_library_available(self) -> None:
@@ -59,8 +59,10 @@ class LiteLLMClient:
         """
         messages = self._prepare_messages(system_prompt, messages)
         
+        resolved_model = self._resolve_model_name(model)
+
         completion_kwargs: Dict[str, Any] = {
-            "model": model,
+            "model": resolved_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -86,15 +88,22 @@ class LiteLLMClient:
         
         try:
             response = await self._litellm.acompletion(**completion_kwargs)
-            return self._parse_response(response, model)
+            return self._parse_response(response, resolved_model)
         except Exception as exc:
             logger.error(f"LiteLLM generation failed: {exc}")
             return LLMResponse(
                 content="",
                 tool_calls=[],
                 finish_reason="error",
-                model=model,
+                model=resolved_model,
             )
+
+    def _resolve_model_name(self, model: str) -> str:
+        """Normalize model names for the configured LiteLLM provider."""
+        resolved = model.strip()
+        if self.config.provider == "openrouter" and not resolved.startswith("openrouter/"):
+            return f"openrouter/{resolved}"
+        return resolved
     
     def _prepare_messages(
         self,
