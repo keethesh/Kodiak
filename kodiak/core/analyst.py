@@ -349,19 +349,17 @@ class AnalystAgent:
 
         # Parse response
         try:
-            parsed = AnalystResponse.model_validate_json(response.content)
-        except Exception:
-            try:
-                data = json.loads(response.content)
-                parsed = AnalystResponse.model_validate(data)
-            except Exception as exc:
-                logger.error(f"Analyst response parse failed: {exc}")
-                # Mark as analyzed to avoid infinite retry
-                async for session in get_session():
-                    await self.store.mark_analyzed(
-                        session, [u.id for u in work_units]
-                    )
-                return None
+            data = json.loads(response.content)
+            normalized = self._normalize_analyst_payload(data, work_units)
+            parsed = AnalystResponse.model_validate(normalized)
+        except Exception as exc:
+            logger.error(f"Analyst response parse failed: {exc}")
+            # Mark as analyzed to avoid infinite retry
+            async for session in get_session():
+                await self.store.mark_analyzed(
+                    session, [u.id for u in work_units]
+                )
+            return None
 
         logger.info(f"🧠 Analyst: {parsed.analysis[:200]}")
 
@@ -889,6 +887,93 @@ class AnalystAgent:
                     "context": "CLI probes were blocked; retry with a realistic browser user-agent and follow redirects for better surface visibility",
                 },
             )
+
+    def _normalize_analyst_payload(
+        self,
+        data: Dict[str, object],
+        work_units: List[WorkUnit],
+    ) -> Dict[str, object]:
+        """Tolerate near-schema analyst JSON by filling obvious defaults."""
+        payload = dict(data or {})
+        default_target = ""
+        for unit in work_units:
+            if unit.target:
+                default_target = self._normalize_target(unit.target)
+                break
+
+        analysis = str(
+            payload.get("analysis")
+            or payload.get("scan_summary")
+            or payload.get("summary")
+            or "Structured analyst output parsed without a top-level analysis summary."
+        )
+
+        normalized_findings: List[Dict[str, str]] = []
+        for entry in payload.get("findings") or []:
+            if not isinstance(entry, dict):
+                continue
+            finding = dict(entry)
+            finding["title"] = str(finding.get("title") or "Untitled finding")
+            finding["severity"] = str(finding.get("severity") or "info").lower()
+            finding["target"] = str(finding.get("target") or default_target)
+            finding["description"] = str(
+                finding.get("description")
+                or finding.get("content")
+                or finding.get("summary")
+                or finding.get("evidence")
+                or finding["title"]
+            )
+            finding["evidence"] = str(finding.get("evidence") or "")
+            finding["remediation"] = str(
+                finding.get("remediation")
+                or finding.get("fix")
+                or finding.get("recommendation")
+                or ""
+            )
+            normalized_findings.append(finding)
+
+        normalized_notes: List[Dict[str, str]] = []
+        for entry in payload.get("notes") or []:
+            if not isinstance(entry, dict):
+                continue
+            note = dict(entry)
+            note["category"] = str(note.get("category") or "general").lower()
+            note["target"] = str(note.get("target") or default_target)
+            note["content"] = str(
+                note.get("content")
+                or note.get("description")
+                or note.get("summary")
+                or ""
+            )
+            normalized_notes.append(note)
+
+        normalized_directives: List[Dict[str, str]] = []
+        for entry in payload.get("directives") or []:
+            if not isinstance(entry, dict):
+                continue
+            directive = dict(entry)
+            content = directive.get("content")
+            if content is None:
+                content = {
+                    key: value
+                    for key, value in directive.items()
+                    if key not in {"type", "id"}
+                } or {"raw": directive}
+            if not isinstance(content, str):
+                content = json.dumps(content)
+            normalized_directives.append({
+                "type": str(directive.get("type") or "attack_hint").lower(),
+                "content": content,
+            })
+
+        return {
+            "analysis": analysis,
+            "findings": normalized_findings,
+            "notes": normalized_notes,
+            "directives": normalized_directives,
+            "phase_recommendation": str(payload.get("phase_recommendation") or "continue").lower(),
+            "scan_summary": payload.get("scan_summary"),
+        }
 
     @staticmethod
     def _extract_urls(text: str) -> List[str]:

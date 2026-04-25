@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -555,6 +556,53 @@ async def test_analyst_persists_structured_state_from_urls_and_tech():
         HypothesisType.TECH_FOLLOWUP,
     }
     assert capability_types
+
+
+def test_analyst_normalizes_near_schema_payload():
+    analyst = AnalystAgent(store=SimpleNamespace(scan_id=uuid4()))
+    work_unit = make_workunit(
+        scan_id=uuid4(),
+        project_id=uuid4(),
+        technique="httpx_primary",
+        target="https://winners.mu",
+        command_template="httpx ...",
+        status=WorkUnitStatus.COMPLETED,
+    )
+
+    payload = {
+        "findings": [
+            {
+                "id": "F001",
+                "title": "Login surface worth review",
+                "severity": "HIGH",
+                "target": "https://winners.mu/login",
+                "summary": "Authentication surface exposed",
+            }
+        ],
+        "notes": [
+            {
+                "category": "TECHNOLOGY",
+                "content": "Uses Kendo UI templates.",
+            }
+        ],
+        "directives": [
+            {
+                "type": "attack_hint",
+                "technique": "auth_followup",
+                "targets": ["https://winners.mu/login"],
+                "context": "Review login flow",
+            }
+        ],
+    }
+
+    normalized = analyst._normalize_analyst_payload(payload, [work_unit])
+    parsed = AnalystResponse.model_validate(normalized)
+
+    assert parsed.analysis.startswith("Structured analyst output parsed")
+    assert parsed.findings[0].description == "Authentication surface exposed"
+    assert parsed.notes[0].target == "https://winners.mu"
+    assert parsed.notes[0].category == "technology"
+    assert json.loads(parsed.directives[0].content)["technique"] == "auth_followup"
 
 
 @pytest.mark.asyncio
