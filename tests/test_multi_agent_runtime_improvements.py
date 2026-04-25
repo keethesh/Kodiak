@@ -380,6 +380,77 @@ async def test_claim_work_unit_does_not_double_claim_same_unit():
 
 
 @pytest.mark.asyncio
+async def test_claim_work_unit_skips_raced_candidate_without_rollback():
+    scan_id = uuid4()
+    project_id = uuid4()
+    store = SharedScanStore(project_id=project_id, scan_id=scan_id)
+
+    raced = make_workunit(
+        scan_id=scan_id,
+        project_id=project_id,
+        technique="subfinder",
+        target="raced.example.com",
+        scope_key="scope-raced",
+        command_template="subfinder -d raced.example.com -silent",
+        status=WorkUnitStatus.PENDING,
+    )
+    claimable = make_workunit(
+        scan_id=scan_id,
+        project_id=project_id,
+        technique="httpx_primary",
+        target="claimable.example.com",
+        scope_key="scope-claimable",
+        command_template="echo claimable.example.com | httpx -silent",
+        status=WorkUnitStatus.PENDING,
+    )
+
+    class FakeClaimResult:
+        def __init__(self, rowcount):
+            self.rowcount = rowcount
+
+    class FakeSession:
+        def __init__(self):
+            self.update_calls = 0
+            self.rollback_calls = 0
+
+        async def execute(self, statement):
+            text = str(statement)
+            if "FROM workunit" in text and "status IN" in text:
+                return _FakeResult([])
+            if "FROM workunit" in text and "status =" in text and "LIMIT" in text:
+                return _FakeResult([raced, claimable])
+            if text.startswith("UPDATE workunit"):
+                self.update_calls += 1
+                return FakeClaimResult(0 if self.update_calls == 1 else 1)
+            raise AssertionError(f"Unexpected statement: {text}")
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            self.rollback_calls += 1
+
+        def add(self, obj):
+            return None
+
+        async def refresh(self, obj):
+            return None
+
+    async def fake_append_event(session, **kwargs):
+        return object()
+
+    store.append_event = fake_append_event
+    session = FakeSession()
+
+    claimed = await store.claim_work_unit(session, "worker-1")
+
+    assert claimed is claimable
+    assert claimed.claimed_by == "worker-1"
+    assert session.update_calls == 2
+    assert session.rollback_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_enqueue_work_unit_populates_single_scope_fields():
     scan_id = uuid4()
     project_id = uuid4()

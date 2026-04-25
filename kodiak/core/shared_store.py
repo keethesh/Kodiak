@@ -329,7 +329,6 @@ class SharedScanStore:
                     claimed_technique = candidate.technique
                     claimed_targets = _unit_targets(candidate)
                     break
-                await session.rollback()
             if unit is None:
                 return None
 
