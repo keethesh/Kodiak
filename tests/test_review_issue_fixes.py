@@ -219,7 +219,11 @@ async def test_core_interface_stop_scan_calls_runner_cancel_before_task_cancel(m
 @pytest.mark.asyncio
 async def test_litellm_client_awaits_async_completion():
     class FakeLiteLLM:
+        def __init__(self):
+            self.kwargs = None
+
         async def acompletion(self, **kwargs):
+            self.kwargs = kwargs
             assert kwargs["model"] == "test/model"
             return SimpleNamespace(
                 choices=[
@@ -234,7 +238,8 @@ async def test_litellm_client_awaits_async_completion():
 
     client = LiteLLMClient.__new__(LiteLLMClient)
     client.config = LLMConfig(api_key="test-key", base_url="https://openrouter.ai/api/v1")
-    client._litellm = FakeLiteLLM()
+    fake_litellm = FakeLiteLLM()
+    client._litellm = fake_litellm
 
     response = await client.generate(
         model="test/model",
@@ -246,3 +251,17 @@ async def test_litellm_client_awaits_async_completion():
     assert response.finish_reason == "stop"
     assert response.input_tokens == 3
     assert response.output_tokens == 4
+    assert fake_litellm.kwargs["extra_headers"] == {
+        "HTTP-Referer": "https://kodiak.security",
+        "X-Title": "Kodiak Security Scanner",
+    }
+
+
+def test_worker_docker_network_args_require_explicit_mode():
+    from kodiak.core.worker import _docker_network_args
+
+    assert _docker_network_args(None) == []
+    assert _docker_network_args("") == []
+    assert _docker_network_args("host") == ["--network", "host"]
+    assert _docker_network_args("bridge") == ["--network", "bridge"]
+    assert _docker_network_args("invalid mode") == []

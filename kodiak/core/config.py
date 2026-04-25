@@ -119,6 +119,7 @@ class KodiakSettings(BaseSettings):
     )
     docker_memory_limit: str = Field(default="2g", alias="KODIAK_DOCKER_MEMORY")
     docker_cpu_limit: float = Field(default=2.0, alias="KODIAK_DOCKER_CPUS")
+    docker_network_mode: Optional[str] = Field(default=None, alias="KODIAK_DOCKER_NETWORK")
 
     model_config = SettingsConfigDict(
         env_file=[

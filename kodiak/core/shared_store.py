@@ -322,6 +322,9 @@ class SharedScanStore:
                 claim_result = await session.execute(claim_stmt)
                 if (claim_result.rowcount or 0) == 1:
                     unit = candidate
+                    unit.status = WorkUnitStatus.CLAIMED
+                    unit.claimed_by = worker_id
+                    unit.started_at = claim_started_at
                     claimed_id = candidate.id
                     claimed_technique = candidate.technique
                     claimed_targets = _unit_targets(candidate)
@@ -343,9 +346,6 @@ class SharedScanStore:
                 auto_commit=False,
             )
             await session.commit()
-            unit.status = WorkUnitStatus.CLAIMED
-            unit.claimed_by = worker_id
-            unit.started_at = claim_started_at
             return unit
         except SQLAlchemyError as e:
             await session.rollback()

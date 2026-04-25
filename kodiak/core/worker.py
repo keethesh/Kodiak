@@ -77,6 +77,21 @@ class CommandResult:
 _cached_executor: Optional["DockerExecutor"] = None
 _executor_lock = asyncio.Lock()
 
+
+def _docker_network_args(network_mode: str | None) -> list[str]:
+    """Return Docker network flags for an explicitly configured network mode."""
+    mode = (network_mode or "").strip()
+    if not mode:
+        return []
+
+    normalized = mode.lower()
+    if normalized in {"bridge", "host", "none"} or normalized.startswith("container:"):
+        return ["--network", mode]
+
+    logger.warning(f"Ignoring unsupported Docker network mode: {mode}")
+    return []
+
+
 async def _get_cached_executor() -> "DockerExecutor":
     global _cached_executor
     if _cached_executor is not None:
@@ -119,11 +134,11 @@ async def execute_command(
             "docker", "run", "--rm",
             "--memory", settings.docker_memory_limit,
             "--cpus", str(settings.docker_cpu_limit),
-            "--network", "bridge",
             "--security-opt", "no-new-privileges",
             "-v", f"{work_dir}:/workspace",
             "-w", "/workspace",
         ]
+        docker_cmd.extend(_docker_network_args(settings.docker_network_mode))
         if task.container_label:
             docker_cmd.extend(["--label", f"kodiak.scan={task.container_label}"])
         if task.stdin is not None:

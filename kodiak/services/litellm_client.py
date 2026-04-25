@@ -75,7 +75,12 @@ class LiteLLMClient:
         
         if self.config.api_key:
             completion_kwargs["api_key"] = self.config.api_key
-        
+            if self.config.provider == "openrouter":
+                completion_kwargs["extra_headers"] = {
+                    "HTTP-Referer": "https://kodiak.security",
+                    "X-Title": "Kodiak Security Scanner",
+                }
+
         if self.config.base_url:
             completion_kwargs["base_url"] = self.config.base_url
         
